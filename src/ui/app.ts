@@ -404,7 +404,7 @@ export class CliSanGuoApp {
     }
     this.busy = true;
     try {
-      const logs = this.game.discardForCurrentPlayer(current.id, selected.handIndex);
+      const logs = await this.game.discardForCurrentPlayer(current.id, selected.handIndex);
       for (const line of logs) {
         this.logs.push(line);
         this.refresh();
@@ -423,7 +423,7 @@ export class CliSanGuoApp {
 
   private async resolveAiTurns(): Promise<void> {
     while (!this.game.getSnapshot().gameOver && this.game.getCurrentPlayer().isAI) {
-      const turnStateLogs = this.game.ensureTurnState();
+      const turnStateLogs = await this.game.ensureTurnState();
       if (turnStateLogs.length > 0) {
         for (const line of turnStateLogs) {
           this.logs.push(line);
@@ -1131,7 +1131,7 @@ export class CliSanGuoApp {
       return;
     }
     if (this.setupStage === "start" && picked === 0) {
-      this.startConfiguredGame();
+      void this.startConfiguredGame();
     }
   }
 
@@ -1244,7 +1244,7 @@ export class CliSanGuoApp {
     return "反贼3 忠臣1 内奸1";
   }
 
-  private startConfiguredGame(): void {
+  private async startConfiguredGame(): Promise<void> {
     this.aiLoop.stop();
     this.localAiEngine.reset();
     if (this.setupAiModel === "ollama" || this.setupAiModel === "qwen") {
@@ -1267,15 +1267,14 @@ export class CliSanGuoApp {
     this.displayPage = 0;
     this.actionPage = 0;
     this.statusPage = 0;
-    this.logs.push(
-      ...this.game.initDefaultGame({
-        ...this.options.initOptions,
-        playerCount: this.setupPlayerCount,
-        aiCount: this.setupPlayerCount - 1,
-        humanRole: this.setupRole,
-        humanGeneral: this.setupGeneralName,
-      }),
-    );
+    const initLogs = await this.game.initDefaultGame({
+      ...this.options.initOptions,
+      playerCount: this.setupPlayerCount,
+      aiCount: this.setupPlayerCount - 1,
+      humanRole: this.setupRole,
+      humanGeneral: this.setupGeneralName,
+    });
+    this.logs.push(...initLogs);
     const subAgentCount = this.aiLoop.start(this.game.getSnapshot());
     const providerText =
       this.setupAiModel === "ollama"
@@ -1314,7 +1313,7 @@ export class CliSanGuoApp {
   ): Promise<void> {
     this.busy = true;
     try {
-      const logs = this.game.playAction(playerId, action, targetId, selectedCardId);
+      const logs = await this.game.playAction(playerId, action, targetId, selectedCardId);
       const stepDelay = delayMs ?? (playerId === "human" ? 100 : 200);
       for (const line of logs) {
         this.logs.push(line);
@@ -1585,9 +1584,6 @@ export class CliSanGuoApp {
     }
     if (cardType === CardType.EightDiagram) {
       return "防具：受杀时有概率视为自动打出闪";
-    }
-    if (cardType === CardType.RenwangShield) {
-      return "防具：黑色杀对你无效";
     }
     if (cardType === CardType.VineArmor) {
       return "防具：普通杀、南蛮入侵、万箭齐发对你无效";

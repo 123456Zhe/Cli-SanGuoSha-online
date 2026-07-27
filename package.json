@@ -5,6 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "bun run src/index.ts",
+    "host": "tsx src/network/host.ts",
+    "join": "tsx src/network/client.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",

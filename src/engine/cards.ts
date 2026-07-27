@@ -1,5 +1,6 @@
 export enum CardType {
   Slash = "杀",
+  FireSlash = "火杀",
   Dodge = "闪",
   Peach = "桃",
   Dismantle = "过河拆桥",
@@ -23,7 +24,6 @@ export enum CardType {
   Halberd = "方天画戟",
   KylinBow = "麒麟弓",
   EightDiagram = "八卦阵",
-  RenwangShield = "仁王盾",
   VineArmor = "藤甲",
   SilverLion = "白银狮子",
   Dilu = "的卢",
@@ -33,14 +33,21 @@ export enum CardType {
   DaYuan = "大宛",
   ZiXing = "紫骍",
   WoodenOx = "木牛流马",
+  // 延时锦囊
+  Indulgence = "乐不思蜀",
+  SuppliesCut = "兵粮寸断",
+  Lightning = "闪电",
 }
 
 export type CardColor = "red" | "black" | "colorless";
+export type CardSuit = "heart" | "diamond" | "club" | "spade" | "none";
 
 export type Card = {
   id: string;
   type: CardType;
   color: CardColor;
+  suit: CardSuit;
+  rank: number;
 };
 
 const deckPattern: Array<{ type: CardType; color: CardColor }> = [];
@@ -51,8 +58,9 @@ const appendCards = (type: CardType, count: number, color: CardColor = "colorles
   }
 };
 
-appendCards(CardType.Slash, 12, "red");
+appendCards(CardType.Slash, 9, "red");
 appendCards(CardType.Slash, 12, "black");
+appendCards(CardType.FireSlash, 3, "red");
 appendCards(CardType.Dodge, 6, "red");
 appendCards(CardType.Dodge, 6, "black");
 appendCards(CardType.Peach, 8, "red");
@@ -77,7 +85,6 @@ appendCards(CardType.RockCleavingAxe, 1);
 appendCards(CardType.Halberd, 1);
 appendCards(CardType.KylinBow, 1);
 appendCards(CardType.EightDiagram, 1);
-appendCards(CardType.RenwangShield, 1);
 appendCards(CardType.VineArmor, 1);
 appendCards(CardType.SilverLion, 1);
 appendCards(CardType.Dilu, 1);
@@ -87,15 +94,28 @@ appendCards(CardType.ChiTu, 1);
 appendCards(CardType.DaYuan, 1);
 appendCards(CardType.ZiXing, 1);
 appendCards(CardType.WoodenOx, 1);
+appendCards(CardType.Indulgence, 3);
+appendCards(CardType.SuppliesCut, 2);
+appendCards(CardType.Lightning, 2);
 
-export const CARD_LIBRARY: Card[] = deckPattern.map((item, index) => ({
-  id: `${item.type}-${index + 1}`,
-  type: item.type,
-  color: item.color,
-}));
+export const CARD_LIBRARY: Card[] = deckPattern.map((item, index) => {
+  const suit: CardSuit = item.color === "red"
+    ? (index % 2 === 0 ? "heart" : "diamond")
+    : item.color === "black"
+      ? (index % 2 === 0 ? "club" : "spade")
+      : (["heart", "diamond", "club", "spade"] as const)[index % 4] ?? "spade";
+  return {
+    id: `${item.type}-${index + 1}`,
+    type: item.type,
+    color: suit === "heart" || suit === "diamond" ? "red" : "black",
+    suit,
+    rank: (index % 13) + 1,
+  };
+});
 
 export const CARD_LIBRARY_SUMMARY: Array<{ type: CardType; count: number }> = [
-  { type: CardType.Slash, count: 24 },
+  { type: CardType.Slash, count: 21 },
+  { type: CardType.FireSlash, count: 3 },
   { type: CardType.Dodge, count: 12 },
   { type: CardType.Peach, count: 8 },
   { type: CardType.Dismantle, count: 5 },
@@ -119,7 +139,6 @@ export const CARD_LIBRARY_SUMMARY: Array<{ type: CardType; count: number }> = [
   { type: CardType.Halberd, count: 1 },
   { type: CardType.KylinBow, count: 1 },
   { type: CardType.EightDiagram, count: 1 },
-  { type: CardType.RenwangShield, count: 1 },
   { type: CardType.VineArmor, count: 1 },
   { type: CardType.SilverLion, count: 1 },
   { type: CardType.Dilu, count: 1 },
@@ -129,6 +148,9 @@ export const CARD_LIBRARY_SUMMARY: Array<{ type: CardType; count: number }> = [
   { type: CardType.DaYuan, count: 1 },
   { type: CardType.ZiXing, count: 1 },
   { type: CardType.WoodenOx, count: 1 },
+  { type: CardType.Indulgence, count: 3 },
+  { type: CardType.SuppliesCut, count: 2 },
+  { type: CardType.Lightning, count: 2 },
 ];
 
 export const createDeck = (): Card[] => [...CARD_LIBRARY];

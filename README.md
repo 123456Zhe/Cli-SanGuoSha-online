@@ -1,4 +1,34 @@
+# CLI-SanGuoSha
+
+> 基于原仓库 [DonyLeno/CLI-SanGuoSha](https://github.com/DonyLeno/CLI-SanGuoSha) 的联机交互增强分支。
+
 # CliSanGuo 开发说明
+
+## 联机游玩
+
+联机模式采用“房主权威服务器”架构，支持 2 到 6 名玩家。房主只负责运行服务，所有玩家（包括房主本人）再各自启动一个客户端加入。
+
+```bash
+# 房主：创建一个 3 人房间，默认监听 0.0.0.0:9527
+npm run host -- --players=3
+
+# 每位玩家：通过房主 IP 加入
+npm run join -- --host=192.168.1.20 --port=9527 --name=玩家名
+```
+
+玩家在对局中断线或主动退出时，有 60 秒宽限期可重连恢复；超时未重连则房间关闭，避免牌局进入不可恢复状态。
+
+主动出牌、目标选择、指定目标牌、弃牌以及"闪""杀""无懈可击"等被动响应均通过统一的交互协议联机结算，不再由引擎策略自动代答。
+
+朋友电脑没有 Node.js/npm 时，可从 `tools/light-client/main.go` 交叉编译零依赖客户端。Windows 用户解压发布包后双击 `start-client.bat`，按提示输入房主 IP、端口和玩家名即可。Linux 用户解压后直接运行：
+
+```bash
+gzip -d clisanguo-lite-linux-x64.gz
+chmod +x clisanguo-lite-linux-x64
+./clisanguo-lite-linux-x64 -host=房主IP -port=9527 -name=玩家名
+```
+
+轻量客户端运行时不安装依赖，也不需要联网访问 npm。
 
 ## 1. 目录结构
 

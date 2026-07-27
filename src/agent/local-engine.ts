@@ -306,7 +306,7 @@ export class LocalAiEngine {
       baseScore = self.hp <= 2 ? 12 : self.hp < self.maxHp ? 6 : -2;
     } else if (cardType === CardType.ExNihilo) {
       baseScore = 9;
-    } else if (cardType === CardType.Slash) {
+    } else if (cardType === CardType.Slash || cardType === CardType.FireSlash) {
       baseScore = 8 + (1 - targetEval.cardPrediction.dodge) * 3;
     } else if (cardType === CardType.Duel) {
       baseScore = 7 + (1 - targetEval.cardPrediction.slash) * 2;
@@ -330,7 +330,6 @@ export class LocalAiEngine {
       cardType === CardType.Halberd ||
       cardType === CardType.KylinBow ||
       cardType === CardType.EightDiagram ||
-      cardType === CardType.RenwangShield ||
       cardType === CardType.VineArmor ||
       cardType === CardType.SilverLion ||
       cardType === CardType.Dilu ||
@@ -389,7 +388,7 @@ export class LocalAiEngine {
       let score = ally ? -14 : 8;
       score += (4 - Math.max(target.hp, 0)) * 1.8;
       score += target.hand.length * 0.35;
-      if (cardType === CardType.Slash || cardType === CardType.ArrowRain) {
+      if (cardType === CardType.Slash || cardType === CardType.FireSlash || cardType === CardType.ArrowRain) {
         score += (1 - prediction.dodge) * 3;
       }
       if (cardType === CardType.Duel || cardType === CardType.Barbarian) {

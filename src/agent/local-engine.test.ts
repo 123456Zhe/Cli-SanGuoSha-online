@@ -19,7 +19,7 @@ void test("本地AI记忆仅保留近三轮", () => {
 
 void test("本地AI会根据近三轮预判闪概率并优先攻击更易命中的敌方", () => {
   const game = new SanGuoGame(fixedRng);
-  game.initDefaultGame();
+  void game.initDefaultGame();
   const runtime = game as unknown as {
     currentPlayerIndex: number;
     phase: TurnPhase;

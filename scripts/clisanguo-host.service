@@ -1,0 +1,17 @@
+[Unit]
+Description=CLI SanGuoSha Online Game Server (5 Players)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/clisanguo-online
+ExecStart=/usr/local/bin/npx tsx src/network/host.ts --players=5 --host=0.0.0.0 --port=9527
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/opt/clisanguo-online/server.log
+StandardError=append:/opt/clisanguo-online/server.log
+
+[Install]
+WantedBy=multi-user.target

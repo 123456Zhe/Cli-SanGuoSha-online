@@ -132,8 +132,11 @@ export class GameServer {
       socket.end();
       return;
     }
-    const existingPlayer = this.game.getSnapshot().players.find((p) => p.name === trimmed);
-    const peerId = existingPlayer?.id ?? `online-${this.nextPlayerNumber++}`;
+    let peerId = `online-${this.nextPlayerNumber++}`;
+    try {
+      const existingPlayer = this.game.getSnapshot().players.find((p) => p.name === trimmed);
+      if (existingPlayer) peerId = existingPlayer.id;
+    } catch {}
     const peer: Peer = { id: peerId, name: trimmed, socket, parser };
     this.peers.set(socket, peer);
     this.send(socket, { type: "welcome", playerId: peer.id, roomSize: this.options.playerCount });

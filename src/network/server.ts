@@ -273,6 +273,10 @@ export class GameServer {
     this.logs.push(...logs);
     this.broadcastState();
     await this.advanceIfCurrentPlayerDead();
+    if (!this.game.getCurrentPlayer().alive) return;
+    if (this.game.getPendingDiscardCount(peer.id) === 0) {
+      await this.resolveTurnEnd(peer.id);
+    }
   }
 
   private async handleDiscard(peer: Peer, handIndex: number): Promise<void> {

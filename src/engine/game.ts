@@ -413,7 +413,7 @@ export class SanGuoGame {
   getSnapshot(): GameSnapshot {
     return {
       turn: this.turn,
-      currentPlayerId: this.currentPlayer.id,
+      currentPlayerId: this.players.length > 0 ? this.currentPlayer.id : "",
       phase: this.phase,
       players: this.players.map((player) => ({
         ...player,

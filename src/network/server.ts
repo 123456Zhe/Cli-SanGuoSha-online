@@ -73,6 +73,7 @@ export class GameServer {
   private accept(socket: Socket): void {
     const parser = new JsonLineParser<ClientMessage>();
     socket.setEncoding("utf8");
+    socket.setKeepAlive(true, 5000); // detect dead connections within ~10s
     socket.on("data", (chunk: string) => {
       try {
         for (const message of parser.push(chunk)) this.handle(socket, parser, message);
@@ -173,23 +174,34 @@ export class GameServer {
       socket.end();
       return;
     }
-    const info = this.disconnected.get(playerId);
-    if (!info) {
-      this.send(socket, { type: "error", message: "没有找到可重连的玩家" });
-      socket.end();
-      return;
+    const disconnectedInfo = this.disconnected.get(playerId);
+    let playerName: string;
+    if (disconnectedInfo) {
+      clearTimeout(disconnectedInfo.timer);
+      this.disconnected.delete(playerId);
+      this.disconnectedIds.delete(playerId);
+      playerName = disconnectedInfo.name;
+    } else {
+      // Player not in disconnected map — might be a stale peer (client crash,
+      // network partition where TCP close wasn't detected). Check if the player
+      // exists in the game and if so, force-kick the old peer.
+      const gamePlayer = this.game.getSnapshot().players.find((p) => p.id === playerId);
+      if (!gamePlayer) {
+        this.send(socket, { type: "error", message: "没有找到可重连的玩家" });
+        socket.end();
+        return;
+      }
+      playerName = gamePlayer.name;
     }
-    clearTimeout(info.timer);
-    this.disconnected.delete(playerId);
-    this.disconnectedIds.delete(playerId);
     // Remove any old peer entries for this playerId to prevent
     // the stale socket's close handler from interfering with reconnection.
     for (const [s, p] of this.peers) {
       if (p.id === playerId) {
         this.peers.delete(s);
+        s.end();
       }
     }
-    const peer: Peer = { id: playerId, name: info.name, socket, parser };
+    const peer: Peer = { id: playerId, name: playerName, socket, parser };
     this.peers.set(socket, peer);
     this.send(socket, { type: "reconnect_ok", playerId });
     this.sendStateToPeer(peer);
@@ -197,9 +209,9 @@ export class GameServer {
     if (this.pendingInteraction?.playerId === playerId) {
       this.send(socket, { type: "interaction", request: this.pendingInteraction.request });
     }
-    this.broadcast({ type: "player_reconnected", playerName: info.name });
-    this.logs.push(`${info.name} 已重连`);
-    console.log(`${info.name} 已重连`);
+    this.broadcast({ type: "player_reconnected", playerName });
+    this.logs.push(`${playerName} 已重连`);
+    console.log(`${playerName} 已重连`);
   }
 
   private startGame(): void {

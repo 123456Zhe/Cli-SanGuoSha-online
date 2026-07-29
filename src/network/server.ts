@@ -159,6 +159,13 @@ export class GameServer {
     clearTimeout(info.timer);
     this.disconnected.delete(playerId);
     this.disconnectedIds.delete(playerId);
+    // Remove any old peer entries for this playerId to prevent
+    // the stale socket's close handler from interfering with reconnection.
+    for (const [s, p] of this.peers) {
+      if (p.id === playerId) {
+        this.peers.delete(s);
+      }
+    }
     const peer: Peer = { id: playerId, name: info.name, socket, parser };
     this.peers.set(socket, peer);
     this.send(socket, { type: "reconnect_ok", playerId });
@@ -201,7 +208,13 @@ export class GameServer {
       const peer = Array.from(this.peers.values()).find((item) => item.id === playerId);
       if (peer) {
         this.send(peer.socket, { type: "interaction", request });
+      } else if (!this.disconnected.has(playerId)) {
+        // Player is not connected AND not in reconnect window — auto-pass
+        this.pendingInteraction = null;
+        resolve({ choice: "pass" });
       }
+      // If player is in disconnected map, the interaction stays pending
+      // and will be re-sent to them on reconnect
     });
   }
 

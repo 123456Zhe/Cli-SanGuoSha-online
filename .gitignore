@@ -3,3 +3,9 @@ dist/
 .DS_Store
 .env
 devlog/*.md
+.tokensave
+
+# Build artifacts
+tools/light-client/clisanguo-lite*
+nohup.out
+.serena/

@@ -15,21 +15,21 @@ type card struct {
 	Type string `json:"type"`
 }
 type player struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Role         string `json:"role"`
-	General      string `json:"general"`
-	HP           int    `json:"hp"`
-	MaxHP        int    `json:"maxHp"`
-	Hand         []card `json:"hand"`
-	HandCount    int    `json:"handCount"`
-	Weapon       string `json:"weapon"`
-	Armor        string `json:"armor"`
-	AttackHorse  string `json:"attackHorse"`
-	DefenseHorse string `json:"defenseHorse"`
-	Treasure     string `json:"treasure"`
-	FaceDown     bool   `json:"faceDown"`
-	TreasureCards []card `json:"treasureCards"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Role            string `json:"role"`
+	General         string `json:"general"`
+	HP              int    `json:"hp"`
+	MaxHP           int    `json:"maxHp"`
+	Hand            []card `json:"hand"`
+	HandCount       int    `json:"handCount"`
+	Weapon          string `json:"weapon"`
+	Armor           string `json:"armor"`
+	AttackHorse     string `json:"attackHorse"`
+	DefenseHorse    string `json:"defenseHorse"`
+	Treasure        string `json:"treasure"`
+	FaceDown        bool   `json:"faceDown"`
+	TreasureCards   []card `json:"treasureCards"`
 	TreasureCardCount int `json:"treasureCardCount"`
 }
 type action struct {
@@ -68,6 +68,9 @@ type snapshot struct {
 	Players         []player    `json:"players"`
 }
 type serverMessage struct {
+	PlayerName          string                        `json:"playerName"`
+	WaitTimeSeconds     int                           `json:"waitTimeSeconds"`
+
 	Type                string                     `json:"type"`
 	PlayerID            string                     `json:"playerId"`
 	RoomSize            int                        `json:"roomSize"`
@@ -85,6 +88,9 @@ type serverMessage struct {
 
 var input = bufio.NewScanner(os.Stdin)
 var lastPlayers []player
+var myPlayerID string
+
+const reconnectMaxAttempts = 3
 
 func choose(prompt string, count int) int {
 	for {
@@ -233,60 +239,112 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 	return false
 }
 
-func main() {
-	host := flag.String("host", "127.0.0.1", "房主地址")
-	port := flag.Int("port", 9527, "房间端口")
-	name := flag.String("name", "玩家", "玩家名")
-	flag.Parse()
-	hostValue := strings.TrimSpace(*host)
-	address := net.JoinHostPort(hostValue, strconv.Itoa(*port))
-	var connection net.Conn
-	var err error
-	if ip := net.ParseIP(hostValue); ip != nil {
-		connection, err = net.DialTCP("tcp", nil, &net.TCPAddr{IP: ip, Port: *port})
-	} else {
-		connection, err = net.Dial("tcp", address)
+func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) bool {
+	if isReconnect {
+		_ = send(writer, map[string]interface{}{"type": "reconnect", "playerId": myPlayerID, "version": 4})
 	}
-	if err != nil {
-		fmt.Printf("连接失败（地址 %s）：%v\n", address, err)
-		return
-	}
-	defer connection.Close()
-	writer := bufio.NewWriter(connection)
-	if err = send(writer, map[string]interface{}{"type": "join", "name": *name, "version": 4}); err != nil {
-		fmt.Println(err)
-		return
-	}
-	scanner := bufio.NewScanner(connection)
 	for scanner.Scan() {
 		var message serverMessage
-		if err = json.Unmarshal(scanner.Bytes(), &message); err != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
 			fmt.Println("收到无效消息")
 			continue
 		}
 		switch message.Type {
 		case "welcome":
+			myPlayerID = message.PlayerID
 			fmt.Printf("已加入房间，你的 ID：%s\n", message.PlayerID)
+		case "reconnect_ok":
+			myPlayerID = message.PlayerID
+			fmt.Printf("已重连，你的 ID：%s\n", message.PlayerID)
 		case "lobby":
 			fmt.Printf("等待玩家（%d/%d）\n", len(message.Players), message.RoomSize)
 		case "error":
 			fmt.Printf("错误：%s\n", message.Message)
 		case "closed":
 			fmt.Println(message.Message)
-			return
+			return true
 		case "interaction":
 			handleInteraction(message.Request, writer)
 		case "effect":
 			fmt.Printf("\n%s\n1. 发动\n2. 不发动\n", message.Reason)
 			_ = send(writer, map[string]interface{}{"type": "effect", "enabled": choose("请选择: ", 2) == 0})
+		case "player_disconnected":
+			fmt.Printf("%s 已断线，%ds 内可重连\n", message.PlayerName, message.WaitTimeSeconds)
+		case "player_reconnected":
+			if message.PlayerName != "" {
+				fmt.Printf("%s 已重连\n", message.PlayerName)
+			}
 		case "state":
 			if renderState(message, writer) {
-				return
+				return true
 			}
 		}
 	}
-	if err = scanner.Err(); err != nil {
-		fmt.Printf("连接中断：%v\n", err)
+	return false
+}
+
+func dialServer(host string, port int) (net.Conn, error) {
+	hostValue := strings.TrimSpace(host)
+	address := net.JoinHostPort(hostValue, strconv.Itoa(port))
+	if ip := net.ParseIP(hostValue); ip != nil {
+		return net.DialTCP("tcp", nil, &net.TCPAddr{IP: ip, Port: port})
+	}
+	return net.Dial("tcp", address)
+}
+
+func main() {
+	host := flag.String("host", "127.0.0.1", "房主地址")
+	port := flag.Int("port", 9527, "房间端口")
+	name := flag.String("name", "玩家", "玩家名")
+	flag.Parse()
+
+	connection, err := dialServer(*host, *port)
+	if err != nil {
+		fmt.Printf("连接失败：%v\n", err)
+		return
+	}
+	defer connection.Close()
+
+	writer := bufio.NewWriter(connection)
+	if err = send(writer, map[string]interface{}{"type": "join", "name": *name, "version": 4}); err != nil {
+		fmt.Println(err)
+		return
+	}
+	scanner := bufio.NewScanner(connection)
+
+	// Main game loop with reconnection support
+	gameOver := false
+	for !gameOver {
+		gameOver = runGame(writer, scanner, myPlayerID != "")
+		if gameOver {
+			break
+		}
+		// Connection lost — attempt reconnect
+		if myPlayerID == "" {
+			fmt.Println("连接中断")
+			break
+		}
+		fmt.Println("连接中断，尝试重连...")
+		reconnected := false
+		for attempt := 1; attempt <= reconnectMaxAttempts; attempt++ {
+			fmt.Printf("重连尝试 %d/%d...\n", attempt, reconnectMaxAttempts)
+			connection.Close()
+			newConn, dialErr := dialServer(*host, *port)
+			if dialErr != nil {
+				fmt.Printf("重连失败：%v\n", dialErr)
+				continue
+			}
+			connection = newConn
+			writer = bufio.NewWriter(connection)
+			scanner = bufio.NewScanner(connection)
+			reconnected = true
+			fmt.Println("重连成功")
+			break
+		}
+		if !reconnected {
+			fmt.Println("重连失败次数过多，退出")
+			break
+		}
 	}
 }
 
@@ -295,6 +353,9 @@ func handleInteraction(request *interactionRequest, writer *bufio.Writer) {
 		return
 	}
 	switch request.Kind {
+	case "optional-effect":
+		fmt.Printf("\n%s\n1. 发动\n2. 不发动\n", request.Reason)
+		_ = send(writer, map[string]interface{}{"type": "interaction", "decision": map[string]interface{}{"choice": "effect", "enabled": choose("请选择: ", 2) == 0}})
 	case "respond":
 		fmt.Printf("\n%s\n", request.Reason)
 		for index, source := range request.Sources {

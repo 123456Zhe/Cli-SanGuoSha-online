@@ -17,6 +17,9 @@ let playerId: string | null = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
 let left = false;
+let _interacting = false;       // tracks if an interaction prompt is active
+let _msgQueue: ServerMessage[] = [];  // sequential message queue
+let _processingMsg = false;     // queue processing guard
 
 const send = (message: ClientMessage): void => {
   if (!socket.destroyed) socket.write(encodeMessage(message));
@@ -47,6 +50,8 @@ const chooseTargetCard = async (options: RemovableCardOption[] | undefined): Pro
 const playerName = (id: string): string => lastPlayers.find((player) => player.id === id)?.name ?? id;
 
 const handleInteraction = async (request: InteractionRequest): Promise<void> => {
+  _interacting = true;
+  try {
   if (request.kind === "respond") {
     console.log(`\n${request.reason}`);
     request.sources.forEach((source, index) => console.log(`${index + 1}. ${source.label}`));
@@ -106,6 +111,25 @@ const handleInteraction = async (request: InteractionRequest): Promise<void> => 
     return;
   }
   console.log("未处理的交互类型：%s", (request as { kind: string }).kind);
+  } finally {
+    _interacting = false;
+  }
+};
+
+// Sequential message queue: prevents concurrent message processing
+// so e.g. state updates never clear() over an interaction prompt.
+const enqueueMessage = (msg: ServerMessage): void => {
+  _msgQueue.push(msg);
+  if (!_processingMsg) processNextMessage();
+};
+
+const processNextMessage = async (): Promise<void> => {
+  if (_processingMsg || _msgQueue.length === 0) return;
+  _processingMsg = true;
+  const msg = _msgQueue.shift();
+  if (msg) await handle(msg);
+  _processingMsg = false;
+  processNextMessage();
 };
 
 const handle = async (message: ServerMessage): Promise<void> => {
@@ -133,7 +157,11 @@ const handle = async (message: ServerMessage): Promise<void> => {
   }
   else if (message.type === "state") {
     lastPlayers = message.snapshot.players.map((player) => ({ id: player.id, name: player.name }));
-    console.clear();
+    if (!_interacting) {
+      console.clear();
+    } else {
+      console.log("\n--- 状态更新 (技能询问中) ---");
+    }
     console.log(message.logs.map((line) => `- ${line}`).join("\n"));
     console.log("\n战场：");
     for (const player of message.snapshot.players) {
@@ -197,7 +225,7 @@ const bindSocket = (s: Socket, p: JsonLineParser<ServerMessage>): void => {
       send({ type: "join", name, version: NETWORK_PROTOCOL_VERSION });
     }
   });
-  s.on("data", (chunk: string) => { for (const message of p.push(chunk)) void handle(message); });
+  s.on("data", (chunk: string) => { for (const message of p.push(chunk)) enqueueMessage(message); });
   s.on("error", (error: Error) => { console.error(`连接失败：${error.message}`); void rl.close(); });
   s.on("close", () => { if (!left) void attemptReconnect(); });
 };

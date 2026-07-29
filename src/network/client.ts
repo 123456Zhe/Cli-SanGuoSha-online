@@ -126,10 +126,13 @@ const enqueueMessage = (msg: ServerMessage): void => {
 const processNextMessage = async (): Promise<void> => {
   if (_processingMsg || _msgQueue.length === 0) return;
   _processingMsg = true;
-  const msg = _msgQueue.shift();
-  if (msg) await handle(msg);
-  _processingMsg = false;
-  processNextMessage();
+  try {
+    const msg = _msgQueue.shift();
+    if (msg) await handle(msg);
+  } finally {
+    _processingMsg = false;
+    processNextMessage();
+  }
 };
 
 const handle = async (message: ServerMessage): Promise<void> => {

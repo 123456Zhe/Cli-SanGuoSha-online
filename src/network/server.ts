@@ -119,9 +119,32 @@ export class GameServer {
       return;
     }
     if (this.started) {
+      // Normal reconnection: player is in disconnected map (clean disconnect)
       const entry = Array.from(this.disconnected.entries()).find(([, info]) => info.name === trimmed);
       if (entry) {
         this.handleReconnect(socket, parser, entry[0], version);
+        return;
+      }
+      // Client crash / ungraceful disconnect: player exists in game but not in
+      // disconnected map. Force-kick the old peer and treat as reconnect.
+      const gamePlayer = this.game.getSnapshot().players.find((p) => p.name === trimmed);
+      if (gamePlayer) {
+        for (const [s, p] of this.peers) {
+          if (p.id === gamePlayer.id) {
+            this.peers.delete(s);
+            s.end();
+          }
+        }
+        const timer = setTimeout(() => {
+          for (const other of this.peers.values()) {
+            this.send(other.socket, { type: "closed", message: `${trimmed} 断线超时，房间关闭` });
+            other.socket.end();
+          }
+          this.disconnected.clear();
+        }, this.reconnectTimeoutMs);
+        this.disconnected.set(gamePlayer.id, { name: trimmed, timer });
+        this.disconnectedIds.add(gamePlayer.id);
+        this.handleReconnect(socket, parser, gamePlayer.id, version);
         return;
       }
       this.send(socket, { type: "error", message: "房间已开始" });

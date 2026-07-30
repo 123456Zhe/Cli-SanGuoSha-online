@@ -370,12 +370,26 @@ export class GameServer {
     if (!this.pendingAction) return;
     const { peer, action, targetId, selectedCardId } = this.pendingAction;
     this.pendingAction = null;
+
+    // Broadcast an interim state with empty actions before playAction.
+    // This gives all clients immediate feedback (log line visible) without
+    // prompting the attacker for a new action while the engine is resolving
+    // interactions (dodge, skill triggers, etc.).
+    const targetName = targetId
+      ? this.game.getSnapshot().players.find((p) => p.id === targetId)?.name ?? targetId
+      : undefined;
+    if (action.type !== "end") {
+      this.logs.push(`${peer.name} 正在使用 ${action.label}${targetName ? " 目标 " + targetName : ""}`);
+      this.broadcastInterimState();
+    }
+
     const logs: string[] = [];
     logs.push(...(await this.game.playAction(peer.id, action, targetId, selectedCardId)));
     logs.push(...(await this.game.ensureTurnState()));
     logs.push(...(await this.game.resolvePendingDeaths()));
     this.logs.push(...logs);
     this.broadcastState();
+
     await this.checkAndHandleGameOver();
     await this.advanceIfCurrentPlayerDead();
     if (!this.game.getCurrentPlayer().alive) return;
@@ -464,6 +478,25 @@ export class GameServer {
 
   private broadcastState(): void {
     for (const peer of this.peers.values()) this.sendStateToPeer(peer);
+  }
+
+  /**
+   * Broadcast a state snapshot with empty actions/removableCards/discard.
+   * Used to give clients immediate feedback before a blocking action
+   * resolution starts, without prompting them for new input.
+   */
+  private broadcastInterimState(): void {
+    for (const peer of this.peers.values()) {
+      const snapshot = this.game.getSnapshot();
+      this.send(peer.socket, {
+        type: "state",
+        snapshot: createClientSnapshot(snapshot, peer.id),
+        actions: [],
+        removableCards: {},
+        pendingDiscardCount: 0,
+        logs: this.logs.slice(-30),
+      });
+    }
   }
 
   private disconnect(socket: Socket, alreadyNotified = false): void {

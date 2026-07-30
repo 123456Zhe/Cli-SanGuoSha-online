@@ -15,7 +15,7 @@ let asking = false;
 let lastPlayers: Array<{ id: string; name: string }> = [];
 let playerId: string | null = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_RECONNECT_ATTEMPTS = 10;
 let left = false;
 let _interacting = false;       // tracks if an interaction prompt is active
 let _msgQueue: ServerMessage[] = [];  // sequential message queue
@@ -196,15 +196,20 @@ const handle = async (message: ServerMessage): Promise<void> => {
 };
 
 const attemptReconnect = async (): Promise<void> => {
-  if (left || !playerId || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+  if (left || !playerId) {
     console.log("连接已断开，你可以重新运行客户端尝试重连");
     return;
   }
   reconnectAttempts += 1;
-  console.log(`连接断开，尝试重连 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-  await new Promise<void>((resolve) => setTimeout(resolve, 500));
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    console.log(`重连失败 (${MAX_RECONNECT_ATTEMPTS} 次均失败)`);
+    return;
+  }
+  const delay = Math.min(500 * Math.pow(2, reconnectAttempts - 1), 15000);
+  console.log(`连接断开，尝试重连 (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})，${delay}ms 后...`);
+  await new Promise<void>((resolve) => setTimeout(resolve, delay));
   try {
-    socket = connect({ host, port });
+    socket = connect({ host, port, timeout: 5000 });
     parser = new JsonLineParser<ServerMessage>();
     bindSocket(socket, parser);
     await new Promise<void>((resolve, reject) => {

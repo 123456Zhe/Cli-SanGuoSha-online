@@ -1,6 +1,6 @@
 import { createServer, Socket, Server } from "node:net";
 import { randomInt } from "node:crypto";
-import { GameAction, InteractionDecision, InteractionRequest, SanGuoGame } from "../engine/game.js";
+import { GameAction, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame } from "../engine/game.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
 
@@ -12,14 +12,14 @@ type PendingInteraction = {
 };
 type DisconnectedInfo = { name: string; timer: ReturnType<typeof setTimeout> };
 
-export type GameServerOptions = { host: string; port: number; playerCount: number; openingHandCount: number; reconnectTimeoutMs?: number };
+export type GameServerOptions = { host: string; port: number; playerCount: number; openingHandCount: number; reconnectTimeoutMs?: number; autoRestartAfterGameOver?: boolean; autoRestartAfterClose?: boolean };
 
 const secureRng = (): number => randomInt(0, 0x1_0000_0000) / 0x1_0000_0000;
 
 export class GameServer {
-  private readonly game: SanGuoGame;
+  private game: SanGuoGame;
   private readonly peers = new Map<Socket, Peer>();
-  private readonly logs: string[] = [];
+  private logs: string[] = [];
   private started = false;
   private nextPlayerNumber = 1;
   private pendingAction: { peer: Peer; action: GameAction; targetId?: string; selectedCardId?: string } | null = null;
@@ -27,6 +27,7 @@ export class GameServer {
   private readonly disconnected = new Map<string, DisconnectedInfo>();
   private readonly disconnectedIds = new Set<string>();
   private server: Server | null = null;
+  private restarting = false;
 
   private get reconnectTimeoutMs(): number {
     return this.options.reconnectTimeoutMs ?? 60_000;
@@ -70,6 +71,47 @@ export class GameServer {
     this.disconnectedIds.clear();
   }
 
+  private async restartGame(): Promise<void> {
+    this.game = new SanGuoGame(secureRng);
+    this.game.setDeferDyingResolution(true);
+    this.logs.length = 0;
+    this.nextPlayerNumber = 1;
+    this.pendingAction = null;
+    this.pendingInteraction = null;
+    this.clearDisconnected();
+    const onlinePeers = Array.from(this.peers.values());
+    if (onlinePeers.length < 2) {
+      this.started = false;
+      return;
+    }
+    await this.game.initNetworkGame(
+      onlinePeers.map(({ id, name }) => ({ id, name })),
+      this.options.openingHandCount,
+      false,
+    );
+    for (const peer of onlinePeers) {
+      this.game.setDecisionHandler(peer.id, (request) => this.requestPeerDecision(peer.id, request));
+    }
+    this.logs = [];
+    this.started = true;
+    this.broadcast({ type: "game_restarting", message: "新一局即将开始" });
+    this.beginTurn();
+  }
+
+  private async checkAndHandleGameOver(): Promise<void> {
+    if (!this.game.isGameOver() || this.restarting) return;
+    if (!this.options.autoRestartAfterGameOver) return;
+    this.restarting = true;
+    const snapshot = this.game.getSnapshot();
+    const winner = snapshot.winner;
+    const msg = '游戏结束：' + (winner === 'draw' ? '平局！' : (winner === 'human' ? '人类玩家胜利！' : 'AI 玩家胜利！'));
+    this.broadcast({ type: "game_over", winner, message: msg });
+    this.logs.push(msg);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await this.restartGame();
+    this.restarting = false;
+  }
+
   private accept(socket: Socket): void {
     const parser = new JsonLineParser<ClientMessage>();
     socket.setEncoding("utf8");
@@ -110,10 +152,6 @@ export class GameServer {
   }
 
   private handleJoin(socket: Socket, parser: JsonLineParser<ClientMessage>, name: string, version: number): void {
-    if (this.peers.has(socket) || this.peers.size >= this.options.playerCount) {
-      this.send(socket, { type: "error", message: "房间已开始或已满" });
-      return;
-    }
     const trimmed = name.trim().slice(0, 20);
     if (!trimmed) {
       this.send(socket, { type: "error", message: "玩家名称不能为空" });
@@ -137,11 +175,23 @@ export class GameServer {
           }
         }
         const timer = setTimeout(() => {
+          const restartAfterClose = this.options.autoRestartAfterClose;
           for (const other of this.peers.values()) {
-            this.send(other.socket, { type: "closed", message: `${trimmed} 断线超时，房间关闭` });
+            this.send(other.socket, { type: "closed", message: `${trimmed} 断线超时，房间即将重启` });
             other.socket.end();
           }
           this.disconnected.clear();
+          if (restartAfterClose) {
+            this.game = new SanGuoGame(secureRng);
+            this.game.setDeferDyingResolution(true);
+            this.peers.clear();
+            this.logs.length = 0;
+            this.pendingAction = null;
+            this.pendingInteraction = null;
+            this.nextPlayerNumber = 1;
+            this.started = false;
+            console.log("房间超时关闭，已重置等待新玩家加入");
+          }
         }, this.reconnectTimeoutMs);
         this.disconnected.set(gamePlayer.id, { name: trimmed, timer });
         this.disconnectedIds.add(gamePlayer.id);
@@ -149,6 +199,10 @@ export class GameServer {
         return;
       }
       this.send(socket, { type: "error", message: "房间已开始" });
+      return;
+    }
+    if (this.peers.size >= this.options.playerCount) {
+      this.send(socket, { type: "error", message: "房间已满" });
       return;
     }
     if (version !== NETWORK_PROTOCOL_VERSION) {
@@ -286,6 +340,7 @@ export class GameServer {
     const logs = await this.game.startTurn();
     this.logs.push(...logs);
     this.broadcastState();
+    await this.checkAndHandleGameOver();
   }
 
   private async handleAction(peer: Peer, message: Extract<ClientMessage, { type: "action" }>): Promise<void> {
@@ -318,8 +373,10 @@ export class GameServer {
     const logs: string[] = [];
     logs.push(...(await this.game.playAction(peer.id, action, targetId, selectedCardId)));
     logs.push(...(await this.game.ensureTurnState()));
+    logs.push(...(await this.game.resolvePendingDeaths()));
     this.logs.push(...logs);
     this.broadcastState();
+    await this.checkAndHandleGameOver();
     await this.advanceIfCurrentPlayerDead();
     if (!this.game.getCurrentPlayer().alive) return;
     if (this.game.getPendingDiscardCount(peer.id) === 0) {
@@ -331,6 +388,7 @@ export class GameServer {
     const logs = await this.game.discardForCurrentPlayer(peer.id, handIndex);
     this.logs.push(...logs);
     this.broadcastState();
+    await this.checkAndHandleGameOver();
     if (this.game.getPendingDiscardCount(peer.id) === 0) {
       await this.resolveTurnEnd(peer.id);
     }
@@ -358,6 +416,7 @@ export class GameServer {
       const logs = await this.game.finishTurn(player as any);
       this.logs.push(...logs);
       this.broadcastState();
+    await this.checkAndHandleGameOver();
       if (this.game.consumePendingNextTurn()) {
         this.beginTurn();
       }
@@ -371,6 +430,7 @@ export class GameServer {
     logs.push(...(await this.game.resolvePendingDeaths()));
     this.logs.push(...logs);
     this.broadcastState();
+    await this.checkAndHandleGameOver();
     if (this.game.consumePendingNextTurn()) {
       this.beginTurn();
       return;
@@ -429,11 +489,23 @@ export class GameServer {
       this.broadcast({ type: "player_disconnected", playerName: peer.name, waitTimeSeconds: this.reconnectTimeoutMs / 1000 });
     }
     const timer = setTimeout(() => {
+      const restartAfterClose = this.options.autoRestartAfterClose;
       for (const other of this.peers.values()) {
-        this.send(other.socket, { type: "closed", message: `${peer.name} 断线超时，房间关闭` });
+        this.send(other.socket, { type: "closed", message: `${peer.name} 断线超时，房间即将重启` });
         other.socket.end();
       }
       this.disconnected.clear();
+      if (restartAfterClose) {
+        this.game = new SanGuoGame(secureRng);
+        this.game.setDeferDyingResolution(true);
+        this.peers.clear();
+        this.logs.length = 0;
+        this.pendingAction = null;
+        this.pendingInteraction = null;
+        this.nextPlayerNumber = 1;
+        this.started = false;
+        console.log("房间超时关闭，已重置等待新玩家加入");
+      }
     }, this.reconnectTimeoutMs);
     this.disconnected.set(peer.id, { name: peer.name, timer });
     this.disconnectedIds.add(peer.id);

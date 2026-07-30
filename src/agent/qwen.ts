@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -40,52 +41,94 @@ export type QwenCallResult = {
   totalTokens: number | null;
 };
 
-const DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const DEFAULT_STEP_PLAN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
+const DEFAULT_STEP_PLAN_MODEL = "step-3.7-flash";
 const execFileAsync = promisify(execFile);
 const isBunRuntime = Boolean(process.versions.bun);
 
-const loadDotEnv = (): void => {
-  const envFile = resolve(process.cwd(), ".env");
+const parseEnvFile = (filePath: string, targetKey?: string): void => {
   let content = "";
   try {
-    content = readFileSync(envFile, "utf-8");
+    content = readFileSync(filePath, "utf-8");
   } catch {
     return;
   }
-  const lines = content.split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim();
+
+  for (const raw of content.split(/\r?\n/)) {
+    let line = raw.trim();
     if (!line || line.startsWith("#")) {
       continue;
     }
-    const sep = line.indexOf("=");
-    if (sep <= 0) {
+
+    if (line.startsWith("export ")) {
+      line = line.slice("export ".length).trim();
+    }
+
+    const separator = line.indexOf("=");
+    if (separator <= 0) {
       continue;
     }
-    const key = line.slice(0, sep).trim();
-    const value = line.slice(sep + 1).trim().replace(/^"(.*)"$/, "$1");
-    if (!key || process.env[key] !== undefined) {
+
+    const key = line.slice(0, separator).trim();
+    if (!key || (targetKey && key !== targetKey) || process.env[key] !== undefined) {
       continue;
     }
+
+    let value = line.slice(separator + 1).trim();
+    const quoted =
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"));
+
+    if (quoted) {
+      value = value.slice(1, -1);
+    } else {
+      value = value.replace(/\s+#.*$/, "").trim();
+    }
+
     process.env[key] = value;
   }
 };
 
+const loadStepPlanEnv = (): void => {
+  parseEnvFile(resolve(process.cwd(), ".env"), "STEP_PLAN_API_KEY");
+
+  if (!process.env.STEP_PLAN_API_KEY) {
+    parseEnvFile(resolve(homedir(), ".zshrc"), "STEP_PLAN_API_KEY");
+  }
+};
+
 const getApiKey = (provided?: string): string => {
-  if (provided) {
-    return provided;
+  if (provided?.trim()) {
+    return provided.trim();
   }
-  loadDotEnv();
-  const envKey = process.env.QWEN_API_KEY;
+
+  loadStepPlanEnv();
+
+  const envKey = process.env.STEP_PLAN_API_KEY;
   if (!envKey) {
-    throw new Error("未配置 QWEN_API_KEY，请在 .env 中设置");
+    throw new Error(
+      "未配置 STEP_PLAN_API_KEY，请在项目 .env、环境变量或 ~/.zshrc 中设置",
+    );
   }
+
   return envKey;
 };
 
 const normalizeBaseUrl = (input?: string): string => {
-  const raw = (input ?? process.env.QWEN_BASE_URL ?? DEFAULT_QWEN_BASE_URL).trim().replace(/^"(.*)"$/, "$1");
-  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  parseEnvFile(resolve(process.cwd(), ".env"));
+
+  const raw = (
+    input ??
+    process.env.STEP_PLAN_BASE_URL ??
+    DEFAULT_STEP_PLAN_BASE_URL
+  )
+    .trim()
+    .replace(/^"(.*)"$/, "$1");
+
+  const withProtocol = /^https?:\/\//i.test(raw)
+    ? raw
+    : `https://${raw}`;
+
   return withProtocol.replace(/\/+$/, "");
 };
 
@@ -227,7 +270,12 @@ export const callQwen35PlusDetailed = async (
     throw new Error("messages 不能为空");
   }
   const apiKey = getApiKey(options.apiKey);
-  const model = options.model ?? process.env.QWEN_MODEL ?? "qwen-plus";
+  parseEnvFile(resolve(process.cwd(), ".env"));
+
+  const model =
+    options.model ??
+    process.env.STEP_PLAN_MODEL ??
+    DEFAULT_STEP_PLAN_MODEL;
   const baseUrl = normalizeBaseUrl(options.baseUrl);
   const timeoutMs = options.timeoutMs ?? 30_000;
   const url = `${baseUrl}/chat/completions`;

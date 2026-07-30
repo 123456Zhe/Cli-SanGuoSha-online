@@ -5,16 +5,7 @@ import { AiDriverLabel, AiModelProvider, GameAiLoop } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
 import { RoundPromptContext } from "../agent/prompt.js";
 import { CardType } from "../engine/cards.js";
-import {
-  GameAction,
-  GameInitOptions,
-  Player,
-  PlayerRole,
-  RemovableCardOption,
-  ResponseKind,
-  ResponseOption,
-  SanGuoGame,
-} from "../engine/game.js";
+import { GameAction, GameInitOptions, InteractionDecision, InteractionRequest, Player, PlayerRole, RemovableCardOption, SanGuoGame } from "../engine/game.js";
 
 type InputMode = "setup" | "action" | "target" | "target-card" | "response" | "discard" | "gameover";
 
@@ -31,16 +22,6 @@ type AppOptions = {
 };
 
 type TargetAction = Exclude<GameAction, { type: "end" }>;
-
-type PendingAiResponse = {
-  actorId: string;
-  action: GameAction;
-  targetId?: string;
-  responseKind: ResponseKind;
-  cardName: string;
-  options: ResponseOption[];
-  driverLabel: AiDriverLabel | "本地AI";
-};
 
 export class CliSanGuoApp {
   private readonly game: SanGuoGame;
@@ -69,7 +50,7 @@ export class CliSanGuoApp {
 
   private pendingAction: TargetAction | null;
 
-  private pendingAiResponse: PendingAiResponse | null;
+  private pendingInteraction: { request: InteractionRequest; resolve: (decision: InteractionDecision) => void } | null;
 
   private pendingTargetId: string | null;
 
@@ -133,7 +114,7 @@ export class CliSanGuoApp {
     this.actionOptions = [];
     this.targetOptions = [];
     this.pendingAction = null;
-    this.pendingAiResponse = null;
+    this.pendingInteraction = null;
     this.pendingTargetId = null;
     this.targetCardOptions = [];
     this.commandBuffer = null;
@@ -271,7 +252,7 @@ export class CliSanGuoApp {
       if (pickedResponse === null) {
         return;
       }
-      void this.handlePendingResponseChoice(pickedResponse);
+      void this.handleInteractionChoice(pickedResponse);
       return;
     }
     if (this.mode === "discard") {
@@ -465,24 +446,6 @@ export class CliSanGuoApp {
       this.logs.push(`[${driverLabel}] ${ai.name} 选择：${normalizedDecision.action.label}${targetText}${reasonText}`);
       this.refresh();
       await this.delay(actionDelayMs);
-      const response = this.buildPendingResponse(normalizedDecision, driverLabel);
-      if (response) {
-        if (response.targetId === "human" && response.options.length === 0) {
-          this.game.setPlayerResponsePolicy("human", { [response.responseKind]: false });
-          this.game.setPlayerResponseSelection("human", response.responseKind, null);
-          this.logs.push(`你没有可用于响应 ${response.cardName} 的手牌，自动继续结算`);
-          this.refresh();
-          await this.delay(120);
-          await this.playAndAppendLogs(ai.id, normalizedDecision.action, normalizedDecision.targetId, 200);
-          this.game.setPlayerResponseSelection("human", response.responseKind, null);
-          this.game.setPlayerResponsePolicy("human", null);
-          continue;
-        }
-        this.pendingAiResponse = response;
-        this.mode = "response";
-        this.refresh();
-        return;
-      }
       await this.playAndAppendLogs(ai.id, normalizedDecision.action, normalizedDecision.targetId, 200);
     }
     this.mode = this.game.getSnapshot().gameOver ? "gameover" : "action";
@@ -593,20 +556,24 @@ export class CliSanGuoApp {
       }
       actionLines.push("按 b 返回上一步");
     } else if (this.mode === "response") {
-      const responseInfo = this.pendingAiResponse;
-      actionLines.push("你受到牌效果影响，请选择应对：");
-      if (responseInfo) {
-        actionLines.push(
-          `来牌: ${responseInfo.cardName}（来自 ${this.labelPlayer(responseInfo.actorId)}，决策来源 ${responseInfo.driverLabel}）`,
-        );
-        if (responseInfo.options.length > 0) {
-          responseInfo.options.forEach((option, index) => {
-            actionLines.push(`${index + 1}. ${option.label}`);
-          });
-          actionLines.push(`${responseInfo.options.length + 1}. 不应对`);
-        } else {
-          actionLines.push("你当前没有可用应对牌。");
-          actionLines.push("1. 继续结算（不应对）");
+      const pending = this.pendingInteraction;
+      if (pending) {
+        const req = pending.request;
+        actionLines.push("交互请求：" + req.reason);
+        if (req.kind === "respond" || req.kind === "choose-discard") {
+          req.sources.forEach((s, i) => actionLines.push(`${i + 1}. ${s.label}`));
+          if (req.kind === "respond" || (req.kind === "choose-discard" && req.allowPass)) {
+            actionLines.push(`${req.sources.length + 1}. 放弃`);
+          }
+        } else if (req.kind === "collateral") {
+          req.victims.forEach((v, i) => actionLines.push(`${i + 1}. 对 ${this.labelPlayer(v)} 使用杀`));
+          actionLines.push(`${req.victims.length + 1}. 放弃`);
+        } else if (req.kind === "choose-suit") {
+          const suitLabels: Record<string, string> = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃" };
+          req.suits.forEach((s, i) => actionLines.push(`${i + 1}. 声明${suitLabels[s] ?? s}`));
+        } else if (req.kind === "optional-effect") {
+          actionLines.push("1. 发动");
+          actionLines.push("2. 不发动");
         }
       }
     } else if (this.mode === "discard") {
@@ -1256,7 +1223,7 @@ export class CliSanGuoApp {
     }
     this.logs = [];
     this.pendingAction = null;
-    this.pendingAiResponse = null;
+    this.pendingInteraction = null;
     this.pendingTargetId = null;
     this.targetCardOptions = [];
     this.targetOptions = [];
@@ -1288,6 +1255,13 @@ export class CliSanGuoApp {
     } else {
       void this.logAiLoopStatus();
     }
+    this.game.setDecisionHandler("human", (request) => {
+      return new Promise<InteractionDecision>((resolve) => {
+        this.pendingInteraction = { request, resolve };
+        this.mode = "response";
+        this.refresh();
+      });
+    });
     this.mode = "action";
     void this.resolveAiTurns();
     this.refresh();
@@ -1325,147 +1299,48 @@ export class CliSanGuoApp {
     }
   }
 
-  private async handlePendingResponseChoice(picked: number): Promise<void> {
-    const pending = this.pendingAiResponse;
+    private async handleInteractionChoice(picked: number): Promise<void> {
+    const pending = this.pendingInteraction;
     if (!pending) {
       this.mode = "action";
       this.refresh();
       return;
     }
-    const optionCount = pending.options.length;
-    if ((optionCount > 0 && picked > optionCount) || (optionCount === 0 && picked > 0)) {
-      return;
-    }
-    const chooseNoResponse = optionCount > 0 ? picked === optionCount : picked === 0;
-    if (chooseNoResponse) {
-      this.game.setPlayerResponsePolicy("human", { [pending.responseKind]: false });
-      this.game.setPlayerResponseSelection("human", pending.responseKind, null);
-      this.logs.push(`你选择不响应 ${pending.cardName}`);
-      this.refresh();
-      await this.delay(100);
-    } else {
-      const selected = pending.options[picked];
-      if (!selected) {
-        return;
-      }
-      this.game.setPlayerResponsePolicy("human", { [pending.responseKind]: true });
-      this.game.setPlayerResponseSelection("human", pending.responseKind, selected.id);
-      this.logs.push(`你选择：${selected.label}`);
-      this.refresh();
-      await this.delay(100);
-    }
-    this.pendingAiResponse = null;
+    const { request, resolve } = pending;
+    this.pendingInteraction = null;
+    const decision = this.buildInteractionDecision(request, picked);
     this.mode = "action";
-    await this.playAndAppendLogs(pending.actorId, pending.action, pending.targetId, 200);
-    this.game.setPlayerResponseSelection("human", pending.responseKind, null);
-    this.game.setPlayerResponsePolicy("human", null);
+    this.refresh();
+    await this.delay(50);
+    resolve(decision);
     await this.resolveAiTurns();
   }
 
-  private buildPendingResponse(
-    decision: { action: GameAction; targetId?: string },
-    driverLabel: AiDriverLabel | "本地AI",
-  ): PendingAiResponse | null {
-    if (decision.action.type !== "play") {
-      return null;
+  private buildInteractionDecision(request: InteractionRequest, picked: number): InteractionDecision {
+    if (request.kind === "respond") {
+      const source = request.sources[picked];
+      return source ? { choice: "card", sourceId: source.sourceId } : { choice: "pass" };
     }
-    const actorId = this.game.getCurrentPlayer().id;
-    const cardByIndex =
-      decision.action.cardIndex >= 0
-        ? this.game
-            .getSnapshot()
-            .players.find((player) => player.id === actorId)
-            ?.hand[decision.action.cardIndex]?.type
-        : null;
-    const cardName = cardByIndex ?? this.extractCardTypeFromAction(decision.action);
-    if (!cardName) {
-      return null;
-    }
-    const humanAlive = this.game.getSnapshot().players.some((player) => player.id === "human" && player.alive);
-    if (!humanAlive) {
-      return null;
-    }
-    const humanDirectTarget = decision.targetId === "human";
-    if (cardName === CardType.Slash) {
-      if (!humanDirectTarget) {
-        return null;
+    if (request.kind === "collateral") {
+      const victimId = request.victims[picked];
+      if (!victimId) {
+        return { choice: "pass" };
       }
-      const options = this.game.getPlayerResponseOptions("human", "dodge");
-      const targetId = decision.targetId;
-      if (!targetId) {
-        return null;
-      }
-      return {
-        actorId: this.game.getCurrentPlayer().id,
-        action: decision.action,
-        targetId,
-        responseKind: "dodge",
-        cardName,
-        options,
-        driverLabel,
-      };
+      const firstSlash = request.sources[0];
+      return { choice: "target", targetId: victimId, ...(firstSlash ? { sourceId: firstSlash.sourceId } : {}) };
     }
-    if (cardName === CardType.Duel) {
-      if (!humanDirectTarget) {
-        return null;
-      }
-      const options = this.game.getPlayerResponseOptions("human", "slash");
-      const targetId = decision.targetId;
-      if (!targetId) {
-        return null;
-      }
-      return {
-        actorId,
-        action: decision.action,
-        targetId,
-        responseKind: "slash",
-        cardName,
-        options,
-        driverLabel,
-      };
+    if (request.kind === "choose-discard") {
+      const source = request.sources[picked];
+      return source ? { choice: "card", sourceId: source.sourceId } : { choice: "pass" };
     }
-    if (cardName === CardType.Dismantle || cardName === CardType.Snatch || cardName === CardType.Collateral) {
-      if (!humanDirectTarget) {
-        return null;
-      }
-      const options = this.game.getPlayerResponseOptions("human", "negate");
-      const targetId = decision.targetId;
-      if (!targetId) {
-        return null;
-      }
-      return {
-        actorId,
-        action: decision.action,
-        targetId,
-        responseKind: "negate",
-        cardName,
-        options,
-        driverLabel,
-      };
+    if (request.kind === "choose-suit") {
+      const suit = request.suits[picked] ?? request.suits[0] ?? "heart";
+      return { choice: "suit", suit };
     }
-    if (cardName === CardType.Barbarian) {
-      const options = this.game.getPlayerResponseOptions("human", "slash");
-      return {
-        actorId,
-        action: decision.action,
-        responseKind: "slash",
-        cardName,
-        options,
-        driverLabel,
-      };
+    if (request.kind === "optional-effect") {
+      return { choice: "effect", enabled: picked === 0 };
     }
-    if (cardName === CardType.ArrowRain) {
-      const options = this.game.getPlayerResponseOptions("human", "dodge");
-      return {
-        actorId,
-        action: decision.action,
-        responseKind: "dodge",
-        cardName,
-        options,
-        driverLabel,
-      };
-    }
-    return null;
+    return { choice: "pass" };
   }
 
   private extractCardTypeFromAction(action: Extract<GameAction, { type: "play" }>): CardType | null {

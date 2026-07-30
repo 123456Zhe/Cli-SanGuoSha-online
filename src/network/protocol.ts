@@ -43,7 +43,9 @@ export type ServerMessage =
       logs: string[];
     }
   | { type: "error"; message: string }
-  | { type: "closed"; message: string };
+  | { type: "closed"; message: string }
+  | { type: "game_over"; winner: "human" | "ai" | "draw" | null; message: string }
+  | { type: "game_restarting"; message: string };
 
 export const encodeMessage = (message: ClientMessage | ServerMessage): string => `${JSON.stringify(message)}\n`;
 

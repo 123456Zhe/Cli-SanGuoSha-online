@@ -619,3 +619,29 @@ void test("反间：目标可声明花色并从周瑜手牌中匿名自选一张
   assert.equal(requests[2]?.kind, "optional-effect");
   assert.equal(ai1.hand.length, 1);
 });
+
+void test("反间：伤害造成阵亡时应正确触发濒死与阵亡判定", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [SkillName.FanJian];
+  human.hand = [{ id: "fj1", type: CardType.Slash, color: "red", suit: "diamond", rank: 8 }];
+  ai1.hand = [];
+  ai1.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "choose-suit") {
+      // 声明花色与 diamond 不同，保证反间必定造成 1 点伤害
+      return { choice: "suit", suit: "heart" };
+    }
+    if (request.kind === "choose-discard") {
+      const picked = request.sources.find((source) => source.sourceId === "hand:fj1");
+      return picked ? { choice: "card", sourceId: picked.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "skill" && item.skill === SkillName.FanJian);
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action, ai1.id);
+  assert.equal(ai1.hp, 0);
+  assert.equal(ai1.alive, false, "反间致死后应在结算内完成阵亡判定");
+  assert.ok(logs.some((line) => line.includes("阵亡")), "日志应包含阵亡记录");
+});

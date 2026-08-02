@@ -3382,7 +3382,7 @@ export class SanGuoGame {
         `${player.name} 发动${SkillName.FanJian}，${target.name} 声明${suitNames[declaredSuit]}并获得 ${card.type}`,
       ];
       if (card.suit !== declaredSuit) {
-        this.applyDamage(player, target, 1, SkillName.FanJian, logs);
+        await this.applyDamage(player, target, 1, SkillName.FanJian, logs);
         logs.push(...(await this.resolveDeaths()));
         logs.push(...this.resolveWinner());
         await this.advanceIfCurrentPlayerDead(logs);

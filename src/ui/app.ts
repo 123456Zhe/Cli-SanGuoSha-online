@@ -5,7 +5,7 @@ import { AiModelProvider, GameAiLoop } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
 import { RoundPromptContext } from "../agent/prompt.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
-import { pickAiTurnDecision } from "../agent/turn-decision.js";
+import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { CardType } from "../engine/cards.js";
 import { GameAction, GameInitOptions, InteractionDecision, InteractionRequest, Player, PlayerRole, RemovableCardOption, SanGuoGame } from "../engine/game.js";
 
@@ -416,6 +416,8 @@ export class CliSanGuoApp {
   }
 
   private async resolveAiTurns(): Promise<void> {
+    let actionsTaken = 0;
+    let actionsForPlayer: string | null = null;
     while (!this.game.getSnapshot().gameOver && this.game.getCurrentPlayer().isAI) {
       const turnStateLogs = await this.game.ensureTurnState();
       if (turnStateLogs.length > 0) {
@@ -427,6 +429,23 @@ export class CliSanGuoApp {
         continue;
       }
       const ai = this.game.getCurrentPlayer();
+      // 换人时重置动作计数（单个 AI 回合内累计）
+      if (actionsForPlayer !== ai.id) {
+        actionsForPlayer = ai.id;
+        actionsTaken = 0;
+      }
+      // 兜底：LLM 可能反复执行木牛流马「置入/取出」等无收益空转，动作数达上限强制收尾
+      const actionLimit = computeAiTurnActionLimit(ai.hand.length, ai.treasureCards.length);
+      if (actionsTaken >= actionLimit) {
+        this.logs.push(`[AI] ${ai.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
+        this.refresh();
+        const forcedEndAction = this.game.getPlayableActions(ai.id).find((action) => action.type === "end");
+        if (!forcedEndAction) {
+          break;
+        }
+        await this.playAndAppendLogs(ai.id, forcedEndAction, undefined, 120);
+        continue;
+      }
       const snapshot = this.game.getSnapshot();
       const previousRounds = this.getPreviousRoundPromptContexts(snapshot.turn);
       this.aiLoop.setPreviousRoundContexts(previousRounds);
@@ -451,6 +470,7 @@ export class CliSanGuoApp {
       this.refresh();
       await this.delay(actionDelayMs);
       await this.playAndAppendLogs(ai.id, normalizedDecision.action, normalizedDecision.targetId, 200);
+      actionsTaken += 1;
       // AI 回合结束：以高推理等级做一次策略博弈，后台并行执行不阻塞后续出牌
       if (this.game.getCurrentPlayer().id !== ai.id || !this.game.getCurrentPlayer().alive) {
         if (this.setupAiModel !== "simple") {

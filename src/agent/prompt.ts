@@ -1,4 +1,5 @@
 import { GameAction, GameSnapshot, Player, PlayerRole } from "../engine/game.js";
+import { CardType } from "../engine/cards.js";
 import { InteractionRequest } from "../engine/interaction.js";
 
 export type ReasoningLevel = "fast" | "normal" | "deep";
@@ -155,6 +156,13 @@ export const buildAgentPrompt = (input: AgentPromptInput): AgentPromptPackage =>
   const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
   const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
   const actionText = input.actions.map((action, index) => toActionLine(action, index)).join("\n");
+  // 有木牛流马时可动作含存取/移动，提醒模型不要反复置入取出做无意义空转
+  const oxGuidance = input.actions.some((action) => action.label.includes(CardType.WoodenOx))
+    ? [
+        "",
+        "注意：木牛流马的「置入/取出/移动」动作仅在确有收益时使用（如寄存关键防御牌、交给队友）。反复置入再取出是无意义的空转，若没有其他有效动作请直接选择结束回合。",
+      ]
+    : [];
   const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
   const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [
     '输出JSON格式：{"actionIndex":数字,"targetId":"可选"}，例如 {"actionIndex":1} 或 {"actionIndex":2,"targetId":"human"}。',
@@ -172,6 +180,7 @@ export const buildAgentPrompt = (input: AgentPromptInput): AgentPromptPackage =>
     "",
     "本回合可选动作：",
     actionText,
+    ...oxGuidance,
     "",
     '请严格输出JSON，例如 {"actionIndex":1} 或 {"actionIndex":2,"targetId":"human"}。',
   ].join("\n");
@@ -179,8 +188,9 @@ export const buildAgentPrompt = (input: AgentPromptInput): AgentPromptPackage =>
 };
 
 const buildRequestDescription = (request: InteractionRequest): string => {
+  // 必须同时给出 label 与 sourceId，否则模型无法输出校验通过的来源ID（尤其木牛流马的 choose-discard）
   const sourceText = (sources: Array<{ sourceId: string; label: string }>): string =>
-    sources.length > 0 ? sources.map((item, index) => `${index + 1}. ${item.label}`).join("\n") : "无";
+    sources.length > 0 ? sources.map((item, index) => `${index + 1}. ${item.label}（来源ID:${item.sourceId}）`).join("\n") : "无";
   if (request.kind === "respond") {
     return [
       `你需要决定是否${request.reason}（响应类型：${request.responseKind}）。`,
@@ -217,13 +227,13 @@ const buildRequestDescription = (request: InteractionRequest): string => {
 
 const buildInteractionJsonContract = (request: InteractionRequest): string => {
   if (request.kind === "respond") {
-    return '输出JSON：{"choice":"card","sourceId":"<来源ID>"} 或 {"choice":"pass"}。';
+    return '输出JSON：{"choice":"card","sourceId":"<上面所列的来源ID>"} 或 {"choice":"pass"}。';
   }
   if (request.kind === "collateral") {
-    return '输出JSON：{"choice":"target","targetId":"<目标ID>","sourceId":"<可选杀来源ID>"} 或 {"choice":"pass"}。';
+    return '输出JSON：{"choice":"target","targetId":"<上面所列的目标ID>","sourceId":"<上面所列的杀来源ID，可选>"} 或 {"choice":"pass"}。';
   }
   if (request.kind === "choose-discard") {
-    return '输出JSON：{"choice":"card","sourceId":"<来源ID>"} 或 {"choice":"pass"}。';
+    return '输出JSON：{"choice":"card","sourceId":"<上面所列的来源ID>"} 或 {"choice":"pass"}。';
   }
   if (request.kind === "optional-effect") {
     return '输出JSON：{"choice":"effect","enabled":true} 或 {"choice":"effect","enabled":false}。';

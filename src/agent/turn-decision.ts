@@ -31,6 +31,14 @@ export const isSameAction = (left: GameAction, right: GameAction): boolean => {
   return false;
 };
 
+/**
+ * AI 单个出牌阶段的最大动作数：正常回合远小于此值；
+ * 主要用于兜底防止 LLM 反复执行木牛流马「置入/取出」等无收益空转导致回合永不结束。
+ * 上限随可用牌数放宽（乘 3），且下限设 20，避免误伤甄姬/黄月英等摸牌流的超长合法回合。
+ */
+export const computeAiTurnActionLimit = (handCount: number, treasureCount: number): number =>
+  Math.max(20, (handCount + treasureCount) * 3);
+
 const normalizeAiDecision = (
   game: SanGuoGame,
   playerId: string,

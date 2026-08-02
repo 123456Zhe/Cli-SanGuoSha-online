@@ -131,3 +131,66 @@ void test("身份遮蔽：他人身份对 AI 显示未知，自己/主公/阵亡
     }
   }
 });
+
+void test("buildInteractionPrompt：来源列表必须展示真实 sourceId（木牛流马 choose-discard 不再把模型绕住）", async () => {
+  const snapshot = await createSnapshot();
+  const agent = { playerId: "ai-1", name: "电脑", role: PlayerRole.Rebel, general: "孙策" };
+  const sources = [
+    { sourceId: "hand:card-aaa", origin: "hand" as const, card: { id: "card-aaa", type: CardType.Slash, color: "red" as const, suit: "spade" as const, rank: 7 }, label: "杀" },
+    { sourceId: "treasure:card-bbb", origin: "treasure" as const, card: { id: "card-bbb", type: CardType.Peach, color: "red" as const, suit: "heart" as const, rank: 3 }, label: "桃（木牛流马）" },
+  ];
+  const request = {
+    kind: "choose-discard" as const,
+    requestId: 1,
+    playerId: "ai-1",
+    reason: "木牛流马：选择1张手牌置于其下",
+    sources,
+    count: 1,
+    allowPass: true,
+  };
+  const prompt = buildInteractionPrompt({
+    rulesText: "规则",
+    snapshot,
+    agent,
+    request,
+    previousRoundContexts: [],
+    reasoningLevel: "normal",
+  });
+  // 模型必须能看到来源ID，才能输出通过校验的 {"choice":"card","sourceId":"hand:card-aaa"}
+  for (const source of sources) {
+    assert.ok(prompt.userPrompt.includes(source.sourceId), `提示词应包含来源ID ${source.sourceId}`);
+  }
+  assert.ok(prompt.userPrompt.includes(sourceTextFor(sources)), "提示词应按 序号.标签（来源ID:xxx） 格式展示来源");
+});
+
+const sourceTextFor = (sources: Array<{ sourceId: string; label: string }>): string =>
+  sources.map((item, index) => `${index + 1}. ${item.label}（来源ID:${item.sourceId}）`).join("\n");
+
+void test("buildAgentPrompt：有木牛流马动作时注入慎用引导，避免反复置入/取出空转", async () => {
+  const snapshot = await createSnapshot();
+  const agent = { playerId: "ai-1", name: "电脑", role: PlayerRole.Rebel, general: "孙策" };
+  const oxActions: GameAction[] = [
+    { type: "play", cardIndex: -11, label: `使用 ${CardType.WoodenOx}（置入1张手牌）`, requiresTarget: false, targets: [] },
+    { type: "play", cardIndex: -13, label: `使用 ${CardType.WoodenOx}（取出1张牌）`, requiresTarget: false, targets: [] },
+    { type: "end", label: "结束出牌阶段" },
+  ];
+  const withOx = buildAgentPrompt({
+    rulesText: "规则",
+    snapshot,
+    agent,
+    actions: oxActions,
+    previousRoundContexts: [],
+    reasoningLevel: "normal",
+  });
+  assert.ok(withOx.userPrompt.includes("反复置入再取出是无意义的空转"), "有木牛流马动作时应提示不要空转");
+
+  const withoutOx = buildAgentPrompt({
+    rulesText: "规则",
+    snapshot,
+    agent,
+    actions: gameActions(),
+    previousRoundContexts: [],
+    reasoningLevel: "normal",
+  });
+  assert.ok(!withoutOx.userPrompt.includes("反复置入再取出是无意义的空转"), "无木牛流马动作时不应注入该引导");
+});

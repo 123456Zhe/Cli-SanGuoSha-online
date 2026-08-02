@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
-import { pickAiTurnDecision } from "../agent/turn-decision.js";
+import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { GameAction, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
 import { CardType } from "../engine/cards.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
@@ -476,6 +476,7 @@ export class GameServer {
     if (!this.localAiEngine) {
       return;
     }
+    let actionsTaken = 0;
     while (true) {
       if (this.game.isGameOver()) {
         return;
@@ -488,6 +489,17 @@ export class GameServer {
       if (this.game.getPlayableActions(aiId).length === 0) {
         return;
       }
+      // 兜底：LLM 可能反复执行木牛流马「置入/取出」等无收益空转，动作数达上限强制收尾
+      const actionLimit = computeAiTurnActionLimit(current.hand.length, current.treasureCards.length);
+      if (actionsTaken >= actionLimit) {
+        this.logs.push(`[AI] ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
+        this.broadcastInterimState();
+        const ended = await this.forceEndAiTurn(aiId);
+        if (!ended) {
+          return;
+        }
+        continue;
+      }
       this.trackBattlefield();
       const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
       this.aiLoop?.setPreviousRoundContexts(previousRounds);
@@ -497,22 +509,10 @@ export class GameServer {
       const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
       const decision = picked.decision;
       if (!decision) {
-        const forcedEndAction = this.game.getPlayableActions(aiId).find((action) => action.type === "end");
-        if (!forcedEndAction) {
+        const ended = await this.forceEndAiTurn(aiId);
+        if (!ended) {
           return;
         }
-        const endLogs = await this.game.playAction(aiId, forcedEndAction);
-        this.logs.push(...endLogs);
-        this.broadcastState();
-        await this.checkAndHandleGameOver();
-        await this.advanceIfCurrentPlayerDead();
-        if (!this.game.getCurrentPlayer().alive) {
-          return;
-        }
-        if (this.game.getPendingDiscardCount(aiId) === 0) {
-          await this.resolveTurnEnd(aiId);
-        }
-        await this.delay(AI_ACTION_PACING_MS);
         continue;
       }
       const targetText = decision.targetId ? ` -> ${this.labelPlayer(decision.targetId)}` : "";
@@ -538,7 +538,29 @@ export class GameServer {
         await this.resolveTurnEnd(aiId);
       }
       await this.delay(AI_ACTION_PACING_MS);
+      actionsTaken += 1;
     }
+  }
+
+  /** 强制结束当前 AI 的出牌阶段；返回 false 表示回合已终止（无人存活或无结束动作）。 */
+  private async forceEndAiTurn(aiId: string): Promise<boolean> {
+    const forcedEndAction = this.game.getPlayableActions(aiId).find((action) => action.type === "end");
+    if (!forcedEndAction) {
+      return false;
+    }
+    const endLogs = await this.game.playAction(aiId, forcedEndAction);
+    this.logs.push(...endLogs);
+    this.broadcastState();
+    await this.checkAndHandleGameOver();
+    await this.advanceIfCurrentPlayerDead();
+    if (!this.game.getCurrentPlayer().alive) {
+      return false;
+    }
+    if (this.game.getPendingDiscardCount(aiId) === 0) {
+      await this.resolveTurnEnd(aiId);
+    }
+    await this.delay(AI_ACTION_PACING_MS);
+    return true;
   }
 
   private labelPlayer(playerId: string): string {

@@ -1199,10 +1199,12 @@ export class SanGuoGame {
       return { choice: "effect", enabled: false };
     }
     if (request.kind === "collateral") {
-      const firstSlash = request.sources[0];
       const victim = request.victims[0];
-      if (firstSlash && victim) {
-        return { choice: "target", targetId: victim, sourceId: firstSlash.sourceId };
+      if (victim) {
+        const firstSlash = request.sources[0];
+        return firstSlash
+          ? { choice: "target", targetId: victim, sourceId: firstSlash.sourceId }
+          : { choice: "target", targetId: victim };
       }
       return { choice: "pass" };
     }
@@ -1991,30 +1993,57 @@ export class SanGuoGame {
             )
             .sort((a, b) => a.hp - b.hp || a.hand.length - b.hand.length)
         : [];
-    if (victims.length > 0) {
-      const decision = await this.decide({
-        kind: "collateral",
-        requestId: this.nextInteractionId(),
-        targetId: target.id,
-        actorId: user.id,
-        victims: victims.map((victim) => victim.id),
-        sources: slashSources,
-        allowHandOverWeapon: target.weapon !== null,
-        reason: "借刀杀人：是否使用杀？否则交出武器",
-      });
-      if (decision.choice === "target") {
-        const victim = victims.find((item) => item.id === decision.targetId);
-        const sourceId = decision.sourceId ?? slashSources[0]?.sourceId;
-        const slash = sourceId ? this.removeUsableCardBySourceId(target, sourceId) : undefined;
-        if (victim && slash) {
-          this.discardPile.push(slash);
-          logs.push(`${target.name} 选择对 ${victim.name} 使用杀`);
-          logs.push(...(await this.resolveSlash(target, victim, false, slash.type === CardType.FireSlash, slash.color === "red")));
-          return logs;
-        }
+    if (victims.length === 0) {
+      if (target.weapon === null) {
+        logs.push(`${target.name} 无法出杀且没有攻击目标`);
+        return logs;
+      }
+      logs.push(...(await this.removeSelectedCardFromPlayer(target, "获得", "weapon", user)));
+      return logs;
+    }
+
+    // Phase 1: Card user (Player A) chooses the victim
+    const victimDecision = await this.decide({
+      kind: "collateral",
+      requestId: this.nextInteractionId(),
+      targetId: user.id,
+      actorId: user.id,
+      victims: victims.map((v) => v.id),
+      sources: [],
+      allowHandOverWeapon: false,
+      reason: "借刀杀人：请选择要被攻击的目标",
+    });
+    const chosenVictim =
+      victimDecision.choice === "target"
+        ? victims.find((v) => v.id === victimDecision.targetId)
+        : victims[0];
+    if (!chosenVictim) {
+      logs.push(`${target.name} 无法攻击指定目标`);
+      return logs;
+    }
+
+    // Phase 2: Target (Player B) decides: play slash on chosenVictim, or hand over weapon
+    const response = await this.decide({
+      kind: "collateral",
+      requestId: this.nextInteractionId(),
+      targetId: target.id,
+      actorId: user.id,
+      victims: [chosenVictim.id],
+      sources: slashSources,
+      allowHandOverWeapon: target.weapon !== null,
+      reason: `借刀杀人：对 ${chosenVictim.name} 使用杀？否则交出武器`,
+    });
+    if (response.choice === "target" && response.targetId === chosenVictim.id) {
+      const sourceId = response.sourceId ?? slashSources[0]?.sourceId;
+      const slash = sourceId ? this.removeUsableCardBySourceId(target, sourceId) : undefined;
+      if (slash) {
+        this.discardPile.push(slash);
+        logs.push(`${target.name} 对 ${chosenVictim.name} 使用杀`);
+        logs.push(...(await this.resolveSlash(target, chosenVictim, false, slash.type === CardType.FireSlash, slash.color === "red")));
+        return logs;
       }
     }
-    // 无法出杀、无目标可攻击或选择交出武器
+    // Target chose to hand over weapon (or couldn't slash)
     if (target.weapon === null) {
       logs.push(`${target.name} 无法出杀且没有武器`);
       return logs;

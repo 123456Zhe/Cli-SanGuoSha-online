@@ -645,3 +645,21 @@ void test("反间：伤害造成阵亡时应正确触发濒死与阵亡判定", 
   assert.equal(ai1.alive, false, "反间致死后应在结算内完成阵亡判定");
   assert.ok(logs.some((line) => line.includes("阵亡")), "日志应包含阵亡记录");
 });
+
+void test("initNetworkGame：支持 isAI 配置并正确标记玩家", async () => {
+  const game = new SanGuoGame(fixedRng);
+  await game.initNetworkGame(
+    [
+      { id: "p1", name: "甲" },
+      { id: "ai-1", name: "[AI]电脑-甲", isAI: true },
+    ],
+    1,
+    false,
+  );
+  const snapshot = game.getSnapshot();
+  const human = snapshot.players.find((player) => player.id === "p1")!;
+  const ai = snapshot.players.find((player) => player.id === "ai-1")!;
+  assert.equal(human.isAI, false);
+  assert.equal(ai.isAI, true);
+  assert.equal(snapshot.players.length, 2);
+});

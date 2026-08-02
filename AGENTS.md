@@ -5,7 +5,7 @@ CLI 三国杀 (SanGuoSha) — a TypeScript CLI card game with a host-authoritati
 ## Commands
 
 - `npm run dev` — run the local single-player game (**requires `bun`**).
-- `npm run host -- --players=3` — start an online room server (default `0.0.0.0:9527`, 2–6 players). All players, including the host, join with a separate client.
+- `npm run host -- --players=3` — start an online room server (default `0.0.0.0:9527`, 2–6 players). All players, including the host, join with a separate client. Online AI: `--ai=N` fills N server-side AI seats (LLM-driven, `--ai-driver=qwen|ollama|simple`, fallback to local strategy); see README §联机游玩.
 - `npm run join -- --host=IP --port=9527 --name=NAME` — join a room.
 - `npm run typecheck` — `tsc --noEmit`. Keep it clean (passes today).
 - `npm test` — `node --test --import tsx src/**/*.test.ts`. 51 tests, all pass.
@@ -16,7 +16,7 @@ CLI 三国杀 (SanGuoSha) — a TypeScript CLI card game with a host-authoritati
 
 - `src/engine/` — pure game logic, no I/O. `game.ts` = `SanGuoGame`; `cards.ts` = card/enum + deck; `interaction.ts` = request/decision types. `GameSnapshot` is the read-only view passed to UI/AI/network. All scripted responses (闪/杀/无懈可击/借刀杀人/弃牌/判定…) flow through `InteractionRequest` + `DecisionHandler` via `game.decide()` — never auto-answered by the engine (except dead-player defaults).
 - `src/ui/app.ts` — OpenTUI CLI layer; drives human input and the AI loop; UI modes: `setup/game/response/discard/command`.
-- `src/agent/` — `ai.ts` decision loop, `local-engine.ts` (Simple AI fallback), `prompt.ts` assembly, providers `qwen.ts`/`ollama.ts`. Debug via `devlog/ai-log.md` (gitignored, written by `src/devlog/ailog.ts`).
+- `src/agent/` — `ai.ts` decision loop (LLM; reasoning levels fast/normal/deep map to OpenAI-compatible `reasoning_effort`, per-turn thinking time, interaction decisions via `decideInteraction`, end-of-turn strategy review producing a free-text strategy note injected into later contexts), `local-engine.ts` (Simple AI fallback), `prompt.ts` assembly + `pickReasoningLevel`, `round-context.ts` (shared multi-round context builder, `SG_AI_CONTEXT_ROUNDS`), `turn-decision.ts` (shared LLM→local→heuristic picker). Providers `qwen.ts`/`ollama.ts`. Debug via `devlog/ai-log.md` (gitignored, written by `src/devlog/ailog.ts`; stages: probe/decision/decision-repair/interaction/strategy).
 - `src/network/` — host-authoritative TCP, newline-delimited JSON (`encodeMessage` in `protocol.ts`). `server.ts` = authoritative room host, `host.ts` = entry, `client.ts`, `protocol.ts` = wire types + `NETWORK_PROTOCOL_VERSION = 4`. `createClientSnapshot` hides other players' hands/roles (viewer-scoped).
 - `tools/light-client/` — zero-dependency Go client (`main.go`, go 1.21) with prebuilt binaries committed in `tools/light-client/` and `dist/`. Recompile and refresh binaries whenever the network protocol changes.
 

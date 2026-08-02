@@ -31,6 +31,8 @@ type QwenChatOptions = {
   baseUrl?: string;
   timeoutMs?: number;
   temperature?: number;
+  /** OpenAI 兼容推理等级参数（非推理模型会忽略该字段） */
+  reasoningEffort?: "low" | "medium" | "high";
 };
 
 export type QwenCallResult = {
@@ -161,6 +163,7 @@ const callQwenThroughNode = async (
   model: string,
   messages: QwenMessage[],
   temperature: number | undefined,
+  reasoningEffort: "low" | "medium" | "high" | undefined,
   timeoutMs: number,
 ): Promise<QwenCallResult> => {
   const script = `
@@ -177,6 +180,7 @@ fetch(payload.url, {
     model: payload.model,
     messages: payload.messages,
     temperature: payload.temperature,
+    ...(payload.reasoningEffort ? { reasoning_effort: payload.reasoningEffort } : {}),
   }),
   signal: controller.signal,
 }).then(async (response) => {
@@ -194,6 +198,7 @@ fetch(payload.url, {
       model,
       messages,
       temperature,
+      reasoningEffort,
       timeoutMs,
     },
     timeoutMs,
@@ -280,7 +285,7 @@ export const callQwen35PlusDetailed = async (
   const timeoutMs = options.timeoutMs ?? 30_000;
   const url = `${baseUrl}/chat/completions`;
   if (isBunRuntime) {
-    return callQwenThroughNode(url, apiKey, model, messages, options.temperature, timeoutMs);
+    return callQwenThroughNode(url, apiKey, model, messages, options.temperature, options.reasoningEffort, timeoutMs);
   }
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -297,6 +302,7 @@ export const callQwen35PlusDetailed = async (
           model,
           messages,
           temperature: options.temperature,
+          ...(options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
         }),
         signal: controller.signal,
       });

@@ -16,6 +16,33 @@ npm run host -- --players=3
 npm run join -- --host=192.168.1.20 --port=9527 --name=玩家名
 ```
 
+### 联机 AI（房主补位）
+
+`--ai=N` 让服务端自动填充 N 个 AI 玩家（AI 名带 `[AI]` 前缀），人类只需加入 `players-N` 名：
+
+```bash
+# 4 人局，其中 2 个是 AI，等 2 名人类加入即开局
+npm run host -- --players=4 --ai=2
+```
+
+host 的 AI 相关参数：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--ai=N` | 0 | AI 玩家数量（0 到 players-1，至少保留 1 个人类） |
+| `--ai-driver=qwen\|ollama\|simple` | qwen | AI 决策驱动；qwen 走 OpenAI 兼容接口，ollama 走本地模型，simple 仅用本地策略引擎 |
+| `--ai-thinking-ms` | 1200 | 每回合思考时间基数（毫秒），按推理等级乘以系数 |
+| `--ai-context-rounds` | 30 | 提示词保留的最近回合数（适配 256k 上下文模型，可调大） |
+| `--ai-reasoning=auto\|fast\|normal\|deep` | auto | 推理等级；auto 按局势自动选择 |
+| `--ai-strategy=own\|always` | own | 回合结束策略博弈的触发时机：own=AI 自己回合结束，always=每回合结束 |
+
+AI 决策逻辑（与离线模式一致）：
+
+- **推理等级**影响 OpenAI 兼容的 `reasoning_effort` 参数（fast→low / normal→medium / deep→high）、思考时间、上下文轮数与提示词指令。auto 模式下：**有人濒死或阵亡时用 deep，其余局面 normal**。
+- **出杀/闪/无懈可击等交互响应也是博弈的一部分**，由 LLM 决策；仅纯概率响应（如反间花色声明）走引擎自动决策。
+- **回合结束时 AI 以 deep 推理做一次策略博弈**，输出一段真人式自由文字策略笔记，注入下一回合的上下文，影响后续出牌与交互。
+- LLM 不可用或超时自动回退本地策略引擎（`simple` 驱动），无 API Key 也能正常对局。
+
 玩家在对局中断线或主动退出时，有 60 秒宽限期可重连恢复；超时未重连则房间关闭，避免牌局进入不可恢复状态。
 
 主动出牌、目标选择、指定目标牌、弃牌以及"闪""杀""无懈可击"等被动响应均通过统一的交互协议联机结算，不再由引擎策略自动代答。
@@ -94,8 +121,10 @@ chmod +x clisanguo-lite-linux-x64
 ## 6. AI 决策架构（agent/ai.ts）
 
 - 支持三类驱动：`simple`（本地策略）、`ollama`、`qwen`，可在设置阶段选择默认模型。
-- 子代理机制：每个 AI 玩家对应一个子代理，包含其身份、武将、角色名。
-- 决策协议：模型必须输出 JSON（`actionIndex` 与可选 `targetId`）。
+- 子代理机制：每个 AI 玩家对应一个子代理，包含其身份、武将、角色名，以及**策略笔记**（回合末深度博弈产出的自由文字，注入后续决策上下文）。
+- 决策协议：模型必须输出 JSON（`actionIndex` 与可选 `targetId`）；交互响应（出杀/闪/无懈/桃/弃牌/技能可选）同样由模型输出对应 JSON 契约，**仅纯概率响应（如反间花色）走引擎自动决策**。
+- **推理等级**（fast/normal/deep）：影响 OpenAI 兼容 `reasoning_effort` 参数、思考时间、上下文轮数与提示词指令；auto 模式下有人濒死/阵亡时用 deep，其余 normal。
+- **思考时间**：每次决策前按等级等待 `aiThinkingMs × 系数`，联机时广播「正在思考…」便于观战。
 - 决策容错：
   - 第一次输出无法解析时，发起一次“修正请求”。
   - 连续失败会记录失败原因，必要时回退到本地策略。
@@ -103,7 +132,7 @@ chmod +x clisanguo-lite-linux-x64
 - 节奏控制：
   - 本地 AI 每个动作会增加 0.5 秒延时，便于观察对局过程。
 - 日志记录：
-  - `probe`、`decision`、`decision-repair` 三个阶段都会写入 AI 日志。
+  - `probe`、`decision`、`decision-repair`、`interaction`、`strategy` 阶段都会写入 AI 日志。
   - 记录模型名、提示词、返回文本、token 统计。
 
 ## 7. Prompt 组装逻辑（agent/prompt.ts）
@@ -112,9 +141,10 @@ chmod +x clisanguo-lite-linux-x64
   - AI 角色定位：三国杀对局高手、以阵营胜利为目标。
   - 规则上下文：来自 `rules.md` 的规则文本。
 - 动态部分：
-  - 近三轮上下文（最多三轮）：
+  - 最近多轮上下文（默认 30 轮，`SG_AI_CONTEXT_ROUNDS` / `--ai-context-rounds` 可调，适配长上下文模型）：
     - 每轮显示区的出牌/结算内容。
     - 每轮对应的战场状态快照。
+  - 策略笔记（若有）：AI 上一回合末深度博弈产出的打法思路。
   - 本轮快照：当前行动者、阶段、玩家状态等。
   - 可行动作列表：含编号、目标要求、候选目标。
 - 设计目标：降低提示词长度波动，保证信息连贯，便于模型稳定输出可解析 JSON。

@@ -6,7 +6,7 @@ import { LocalAiEngine } from "./local-engine.js";
 
 const fixedRng = (): number => 0;
 
-void test("本地AI记忆仅保留近三轮", () => {
+void test("本地AI记忆默认保留最近多轮，且可通过 setMaxContextRounds 配置", () => {
   const engine = new LocalAiEngine("rules");
   engine.syncPreviousRounds([
     { round: 1, displayLines: ["第 1 回合：玩家A 的回合"], battlefieldLines: ["r1"] },
@@ -14,7 +14,16 @@ void test("本地AI记忆仅保留近三轮", () => {
     { round: 3, displayLines: ["第 3 回合：玩家C 的回合"], battlefieldLines: ["r3"] },
     { round: 4, displayLines: ["第 4 回合：玩家D 的回合"], battlefieldLines: ["r4"] },
   ]);
-  assert.equal(engine.getMemorySummary().includes("memoryRounds=2,3,4"), true);
+  assert.equal(engine.getMemorySummary().includes("memoryRounds=1,2,3,4"), true);
+
+  engine.setMaxContextRounds(2);
+  engine.syncPreviousRounds([
+    { round: 1, displayLines: ["第 1 回合：玩家A 的回合"], battlefieldLines: ["r1"] },
+    { round: 2, displayLines: ["第 2 回合：玩家B 的回合"], battlefieldLines: ["r2"] },
+    { round: 3, displayLines: ["第 3 回合：玩家C 的回合"], battlefieldLines: ["r3"] },
+    { round: 4, displayLines: ["第 4 回合：玩家D 的回合"], battlefieldLines: ["r4"] },
+  ]);
+  assert.equal(engine.getMemorySummary().includes("memoryRounds=3,4"), true);
 });
 
 void test("本地AI会根据近三轮预判闪概率并优先攻击更易命中的敌方", () => {

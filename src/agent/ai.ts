@@ -1,12 +1,24 @@
 import { callOllamaChatDetailed, listOllamaModels, OllamaCallResult, probeOllamaConnectivity } from "./ollama.js";
-import { buildAgentPrompt, RoundPromptContext } from "./prompt.js";
+import {
+  buildAgentPrompt,
+  buildInteractionPrompt,
+  buildStrategyPrompt,
+  pickReasoningLevel,
+  REASONING_EFFORT,
+  REASONING_THINKING_MULTIPLIER,
+  ReasoningLevel,
+  RoundPromptContext,
+} from "./prompt.js";
 import { callQwen35PlusDetailed, probeQwenConnectivity, QwenCallResult } from "./qwen.js";
 import { GameAction, GameSnapshot, SanGuoGame } from "../engine/game.js";
+import { CardSuit, InteractionDecision, InteractionRequest } from "../engine/interaction.js";
 import { writeAiLog } from "../devlog/ailog.js";
 
 export type AiModelProvider = "ollama" | "qwen";
 
 export type AiDriverLabel = "Ollama" | "Qwen";
+
+export type ReasoningMode = ReasoningLevel | "auto";
 
 type AgentMessage = {
   role: "system" | "user" | "assistant";
@@ -24,6 +36,7 @@ type SubAgent = {
   name: string;
   role: string;
   general: string;
+  strategyNote?: string;
 };
 
 type ModelDecision = {
@@ -50,6 +63,18 @@ type DecisionParseResult =
       reason: string;
     };
 
+const DEFAULT_MAX_CONTEXT_ROUNDS = 30;
+
+const DEFAULT_THINKING_MS = 1200;
+
+const STRATEGY_NOTE_MAX_LENGTH = 600;
+
+const delay = async (ms: number): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms);
+  });
+};
+
 const normalizeJson = (text: string): string => {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
@@ -58,22 +83,36 @@ const normalizeJson = (text: string): string => {
   return text.trim();
 };
 
-const parseModelDecision = (text: string): ModelDecision | null => {
+const parseJsonObject = (text: string): Record<string, unknown> | null => {
   const payload = normalizeJson(text);
   try {
-    const parsed = JSON.parse(payload) as ModelDecision;
-    return parsed;
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
     const objectMatch = payload.match(/\{[\s\S]*\}/);
     if (!objectMatch) {
       return null;
     }
     try {
-      return JSON.parse(objectMatch[0]) as ModelDecision;
+      const parsed = JSON.parse(objectMatch[0]) as Record<string, unknown>;
+      return parsed && typeof parsed === "object" ? parsed : null;
     } catch {
       return null;
     }
   }
+};
+
+const parseModelDecision = (text: string): ModelDecision | null => {
+  const parsed = parseJsonObject(text);
+  if (!parsed) {
+    return null;
+  }
+  const actionIndex = parsed.actionIndex;
+  const targetId = typeof parsed.targetId === "string" ? parsed.targetId : undefined;
+  if (typeof actionIndex === "number" || (typeof actionIndex === "string" && /^\d+$/.test(actionIndex.trim()))) {
+    return targetId ? { actionIndex, targetId } : { actionIndex };
+  }
+  return null;
 };
 
 const normalizeActionIndex = (value: number | string | undefined): number | null => {
@@ -105,6 +144,12 @@ export class GameAiLoop {
 
   private previousRoundContexts: RoundPromptContext[];
 
+  private maxContextRounds: number;
+
+  private thinkingMs: number;
+
+  private reasoningMode: ReasoningMode;
+
   constructor(rulesText: string, preferredProvider: AiModelProvider = "qwen") {
     this.rulesText = rulesText;
     this.started = false;
@@ -118,6 +163,9 @@ export class GameAiLoop {
     this.lastFailureReason = null;
     this.preferredOllamaModel = null;
     this.previousRoundContexts = [];
+    this.maxContextRounds = DEFAULT_MAX_CONTEXT_ROUNDS;
+    this.thinkingMs = DEFAULT_THINKING_MS;
+    this.reasoningMode = "auto";
   }
 
   setPreferredProvider(provider: AiModelProvider): void {
@@ -147,6 +195,30 @@ export class GameAiLoop {
 
   getPreferredDriverLabel(): AiDriverLabel {
     return this.preferredProvider === "ollama" ? "Ollama" : "Qwen";
+  }
+
+  setMaxContextRounds(rounds: number): void {
+    if (Number.isInteger(rounds) && rounds > 0) {
+      this.maxContextRounds = rounds;
+    }
+  }
+
+  getMaxContextRounds(): number {
+    return this.maxContextRounds;
+  }
+
+  setThinkingMs(ms: number): void {
+    if (Number.isFinite(ms) && ms >= 0) {
+      this.thinkingMs = ms;
+    }
+  }
+
+  setReasoningMode(mode: ReasoningMode): void {
+    this.reasoningMode = mode;
+  }
+
+  getReasoningMode(): ReasoningMode {
+    return this.reasoningMode;
   }
 
   start(snapshot: GameSnapshot): number {
@@ -183,11 +255,15 @@ export class GameAiLoop {
   }
 
   setPreviousRoundContexts(contexts: RoundPromptContext[]): void {
-    this.previousRoundContexts = contexts.slice(-3);
+    this.previousRoundContexts = contexts.slice(-this.maxContextRounds);
   }
 
   getLastFailureReason(): string | null {
     return this.lastFailureReason;
+  }
+
+  getStrategyNote(playerId: string): string | undefined {
+    return this.subAgents.get(playerId)?.strategyNote;
   }
 
   async probe(): Promise<{ available: boolean; detail: string; driverLabel: AiDriverLabel }> {
@@ -258,6 +334,17 @@ export class GameAiLoop {
     }
   }
 
+  private resolveLevel(snapshot: GameSnapshot, viewerId?: string): ReasoningLevel {
+    return this.reasoningMode === "auto" ? pickReasoningLevel(snapshot, viewerId) : this.reasoningMode;
+  }
+
+  private async think(level: ReasoningLevel): Promise<void> {
+    const ms = Math.round(this.thinkingMs * REASONING_THINKING_MULTIPLIER[level]);
+    if (ms > 0) {
+      await delay(ms);
+    }
+  }
+
   private parseDecision(text: string, actions: GameAction[]): DecisionParseResult {
     const parsed = parseModelDecision(text);
     const actionIndex = normalizeActionIndex(parsed?.actionIndex);
@@ -278,6 +365,61 @@ export class GameAiLoop {
     return { ok: true, action, targetId: preferredTargetId };
   }
 
+  private parseInteractionDecision(text: string, request: InteractionRequest): InteractionDecision | null {
+    const parsed = parseJsonObject(text);
+    if (!parsed) {
+      return null;
+    }
+    const choice = parsed.choice;
+    if (request.kind === "respond" || request.kind === "choose-discard") {
+      if (choice === "pass") {
+        return { choice: "pass" };
+      }
+      if (choice === "card") {
+        const sourceId = typeof parsed.sourceId === "string" ? parsed.sourceId : "";
+        if (!request.sources.some((source) => source.sourceId === sourceId)) {
+          return null;
+        }
+        return { choice: "card", sourceId };
+      }
+      return null;
+    }
+    if (request.kind === "collateral") {
+      if (choice === "pass") {
+        return { choice: "pass" };
+      }
+      if (choice === "target") {
+        const targetId = typeof parsed.targetId === "string" ? parsed.targetId : "";
+        if (!request.victims.includes(targetId)) {
+          return null;
+        }
+        const sourceId = typeof parsed.sourceId === "string" ? parsed.sourceId : undefined;
+        if (sourceId && !request.sources.some((source) => source.sourceId === sourceId)) {
+          return { choice: "target", targetId };
+        }
+        return sourceId ? { choice: "target", targetId, sourceId } : { choice: "target", targetId };
+      }
+      return null;
+    }
+    if (request.kind === "optional-effect") {
+      if (choice === "effect") {
+        return { choice: "effect", enabled: Boolean(parsed.enabled) };
+      }
+      return null;
+    }
+    if (request.kind === "choose-suit") {
+      if (choice === "suit") {
+        const suit = typeof parsed.suit === "string" ? parsed.suit : "";
+        if (!request.suits.includes(suit as CardSuit)) {
+          return null;
+        }
+        return { choice: "suit", suit: suit as CardSuit };
+      }
+      return null;
+    }
+    return null;
+  }
+
   private mapProviderResult(result: QwenCallResult | OllamaCallResult): DecisionCallResult {
     return {
       content: result.content,
@@ -288,7 +430,7 @@ export class GameAiLoop {
     };
   }
 
-  private async requestDecision(messages: AgentMessage[]): Promise<DecisionCallResult> {
+  private async requestDecision(messages: AgentMessage[], level: ReasoningLevel): Promise<DecisionCallResult> {
     if (this.preferredProvider === "ollama") {
       const options = this.preferredOllamaModel
         ? { model: this.preferredOllamaModel, temperature: 0, timeoutMs: 120_000 }
@@ -296,8 +438,74 @@ export class GameAiLoop {
       const result = await callOllamaChatDetailed(messages, options);
       return this.mapProviderResult(result);
     }
-    const result = await callQwen35PlusDetailed(messages, { temperature: 0, timeoutMs: 45_000 });
+    const result = await callQwen35PlusDetailed(messages, {
+      temperature: 0,
+      timeoutMs: 45_000,
+      reasoningEffort: REASONING_EFFORT[level],
+    });
     return this.mapProviderResult(result);
+  }
+
+  private async requestDecisionWithRetry(messages: AgentMessage[], level: ReasoningLevel): Promise<DecisionCallResult | null> {
+    const driverLabel = this.getPreferredDriverLabel();
+    try {
+      const result = await this.requestDecision(messages, level);
+      this.providerStatus[this.preferredProvider] = "ready";
+      this.failedAttempts = 0;
+      this.lastFailureReason = null;
+      return result;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const connectivity =
+        this.preferredProvider === "ollama"
+          ? await probeOllamaConnectivity(undefined, this.preferredOllamaModel ?? undefined)
+          : await probeQwenConnectivity();
+      if (connectivity.available) {
+        try {
+          const result = await this.requestDecision(messages, level);
+          this.providerStatus[this.preferredProvider] = "ready";
+          this.failedAttempts = 0;
+          this.lastFailureReason = null;
+          return result;
+        } catch (retryError) {
+          this.providerStatus[this.preferredProvider] = "failed";
+          this.failedAttempts += 1;
+          const retryReason = retryError instanceof Error ? retryError.message : String(retryError);
+          this.lastFailureReason = `${driverLabel} 决策请求失败：${retryReason}`;
+          return null;
+        }
+      }
+      this.providerStatus[this.preferredProvider] = "failed";
+      this.failedAttempts += 1;
+      this.lastFailureReason = `${driverLabel} 决策请求失败：${reason}`;
+      return null;
+    }
+  }
+
+  private writeDecisionLog(params: {
+    callResult: DecisionCallResult;
+    stage: string;
+    playerId: string;
+    playerName: string;
+    prompt: AgentMessage[];
+    responseText: string;
+  }): void {
+    writeAiLog({
+      provider: this.preferredProvider,
+      model: params.callResult.model ?? this.getPreferredDriverLabel(),
+      stage: params.stage,
+      playerId: params.playerId,
+      playerName: params.playerName,
+      prompt: params.prompt,
+      responseText: params.responseText,
+      promptTokens: params.callResult.promptTokens ?? null,
+      completionTokens: params.callResult.completionTokens ?? null,
+      totalTokens: params.callResult.totalTokens ?? null,
+    });
+  }
+
+  private buildRepairPrompt(kind: string): string {
+    return `你上一条回答无法被程序解析（${kind}）。请基于同一局面重新只输出符合要求的 JSON，禁止解释。`;
   }
 
   async decide(game: SanGuoGame, playerId: string): Promise<AiDecision | null> {
@@ -317,6 +525,8 @@ export class GameAiLoop {
     if (actions.length <= 0) {
       return null;
     }
+    const level = this.resolveLevel(snapshot, agent.playerId);
+    await this.think(level);
     const promptPackage = buildAgentPrompt({
       rulesText: this.rulesText,
       snapshot,
@@ -328,96 +538,47 @@ export class GameAiLoop {
       },
       actions,
       previousRoundContexts: this.previousRoundContexts,
+      reasoningLevel: level,
+      ...(agent.strategyNote ? { strategyNote: agent.strategyNote } : {}),
     });
     const messages: AgentMessage[] = [
       { role: "system", content: promptPackage.systemPrompt },
       { role: "user", content: promptPackage.userPrompt },
     ];
-    let callResult: DecisionCallResult | null = null;
-    let raw = "";
-    const driverLabel = this.getPreferredDriverLabel();
-    try {
-      callResult = await this.requestDecision(messages);
-      raw = callResult.content;
-      this.providerStatus[this.preferredProvider] = "ready";
-      this.failedAttempts = 0;
-      this.lastFailureReason = null;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const connectivity =
-        this.preferredProvider === "ollama"
-          ? await probeOllamaConnectivity(undefined, this.preferredOllamaModel ?? undefined)
-          : await probeQwenConnectivity();
-      if (connectivity.available) {
-        try {
-          callResult = await this.requestDecision(messages);
-          raw = callResult.content;
-          this.providerStatus[this.preferredProvider] = "ready";
-          this.failedAttempts = 0;
-          this.lastFailureReason = null;
-        } catch (retryError) {
-          this.providerStatus[this.preferredProvider] = "failed";
-          this.failedAttempts += 1;
-          const retryReason = retryError instanceof Error ? retryError.message : String(retryError);
-          this.lastFailureReason = `${driverLabel} 决策请求失败：${retryReason}`;
-          if (this.failedAttempts >= 3) {
-            return null;
-          }
-          return null;
-        }
-      } else {
-        this.providerStatus[this.preferredProvider] = "failed";
-        this.failedAttempts += 1;
-        this.lastFailureReason = `${driverLabel} 决策请求失败：${reason}`;
-        if (this.failedAttempts >= 3) {
-          return null;
-        }
-        return null;
-      }
+    const callResult = await this.requestDecisionWithRetry(messages, level);
+    if (!callResult) {
+      return null;
     }
-    const model = callResult?.model ?? this.getPreferredDriverLabel();
-    writeAiLog({
-      provider: this.preferredProvider,
-      model,
+    this.writeDecisionLog({
+      callResult,
       stage: "decision",
       playerId: current.id,
       playerName: current.name,
       prompt: messages,
-      responseText: raw,
-      promptTokens: callResult?.promptTokens ?? null,
-      completionTokens: callResult?.completionTokens ?? null,
-      totalTokens: callResult?.totalTokens ?? null,
+      responseText: callResult.content,
     });
-    let decisionResult = this.parseDecision(raw, actions);
+    let decisionResult = this.parseDecision(callResult.content, actions);
     if (!decisionResult.ok) {
-      const repairPrompt =
-        `你上一条回答无法被程序解析，原因：${decisionResult.reason}。\n` +
-        `请基于同一局面重新只输出 JSON，禁止解释。\n` +
-        `允许格式：{"actionIndex":1} 或 {"actionIndex":2,"targetId":"human"}。`;
+      const repairPrompt = this.buildRepairPrompt(decisionResult.reason);
       try {
         const repairMessages: AgentMessage[] = [
           ...messages,
-          { role: "assistant", content: raw },
+          { role: "assistant", content: callResult.content },
           { role: "user", content: repairPrompt },
         ];
-        const repairResult = await this.requestDecision(repairMessages);
-        raw = repairResult.content;
-        writeAiLog({
-          provider: this.preferredProvider,
-          model: repairResult.model,
+        const repairResult = await this.requestDecision(repairMessages, level);
+        this.writeDecisionLog({
+          callResult: repairResult,
           stage: "decision-repair",
           playerId: current.id,
           playerName: current.name,
           prompt: repairMessages,
-          responseText: raw,
-          promptTokens: repairResult.promptTokens ?? null,
-          completionTokens: repairResult.completionTokens ?? null,
-          totalTokens: repairResult.totalTokens ?? null,
+          responseText: repairResult.content,
         });
-        decisionResult = this.parseDecision(raw, actions);
+        decisionResult = this.parseDecision(repairResult.content, actions);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        this.lastFailureReason = `${driverLabel} 决策修正请求失败：${reason}`;
+        this.lastFailureReason = `${this.getPreferredDriverLabel()} 决策修正请求失败：${reason}`;
         return null;
       }
     }
@@ -426,8 +587,138 @@ export class GameAiLoop {
       return null;
     }
     const decision: AiDecision = decisionResult.targetId
-      ? { action: decisionResult.action, targetId: decisionResult.targetId, driverLabel }
-      : { action: decisionResult.action, driverLabel };
+      ? { action: decisionResult.action, targetId: decisionResult.targetId, driverLabel: this.getPreferredDriverLabel() }
+      : { action: decisionResult.action, driverLabel: this.getPreferredDriverLabel() };
     return decision;
+  }
+
+  async decideInteraction(game: SanGuoGame, playerId: string, request: InteractionRequest): Promise<InteractionDecision | null> {
+    if (!this.started) {
+      return null;
+    }
+    const agent = this.subAgents.get(playerId);
+    if (!agent) {
+      return null;
+    }
+    const snapshot = game.getSnapshot();
+    const current = snapshot.players.find((item) => item.id === playerId);
+    if (!current || !current.alive) {
+      return null;
+    }
+    const level = this.resolveLevel(snapshot, agent.playerId);
+    await this.think(level);
+    const promptPackage = buildInteractionPrompt({
+      rulesText: this.rulesText,
+      snapshot,
+      agent: {
+        playerId: agent.playerId,
+        name: agent.name,
+        role: agent.role,
+        general: agent.general,
+      },
+      request,
+      previousRoundContexts: this.previousRoundContexts,
+      reasoningLevel: level,
+      ...(agent.strategyNote ? { strategyNote: agent.strategyNote } : {}),
+    });
+    const messages: AgentMessage[] = [
+      { role: "system", content: promptPackage.systemPrompt },
+      { role: "user", content: promptPackage.userPrompt },
+    ];
+    const callResult = await this.requestDecisionWithRetry(messages, level);
+    if (!callResult) {
+      return null;
+    }
+    this.writeDecisionLog({
+      callResult,
+      stage: "interaction",
+      playerId: current.id,
+      playerName: current.name,
+      prompt: messages,
+      responseText: callResult.content,
+    });
+    let decision = this.parseInteractionDecision(callResult.content, request);
+    if (!decision) {
+      try {
+        const repairMessages: AgentMessage[] = [
+          ...messages,
+          { role: "assistant", content: callResult.content },
+          { role: "user", content: this.buildRepairPrompt("交互决策") },
+        ];
+        const repairResult = await this.requestDecision(repairMessages, level);
+        this.writeDecisionLog({
+          callResult: repairResult,
+          stage: "interaction-repair",
+          playerId: current.id,
+          playerName: current.name,
+          prompt: repairMessages,
+          responseText: repairResult.content,
+        });
+        decision = this.parseInteractionDecision(repairResult.content, request);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.lastFailureReason = `${this.getPreferredDriverLabel()} 交互决策修正请求失败：${reason}`;
+        return null;
+      }
+    }
+    if (!decision) {
+      this.lastFailureReason = "交互决策解析失败";
+      return null;
+    }
+    return decision;
+  }
+
+  /**
+   * 回合末策略博弈：输出一段真人式自由文字策略笔记并存储。
+   * 可在后台并行执行（传入调用时捕获的快照，避免与后续回合状态漂移）。
+   */
+  async reviewStrategy(game: SanGuoGame, playerId: string, snapshot?: GameSnapshot): Promise<boolean> {
+    if (!this.started) {
+      return false;
+    }
+    const agent = this.subAgents.get(playerId);
+    if (!agent) {
+      return false;
+    }
+    const state = snapshot ?? game.getSnapshot();
+    const current = state.players.find((item) => item.id === playerId);
+    if (!current || !current.alive) {
+      return false;
+    }
+    const level: ReasoningLevel = "deep";
+    await this.think(level);
+    const promptPackage = buildStrategyPrompt({
+      rulesText: this.rulesText,
+      snapshot: state,
+      agent: {
+        playerId: agent.playerId,
+        name: agent.name,
+        role: agent.role,
+        general: agent.general,
+      },
+      previousRoundContexts: this.previousRoundContexts,
+    });
+    const messages: AgentMessage[] = [
+      { role: "system", content: promptPackage.systemPrompt },
+      { role: "user", content: promptPackage.userPrompt },
+    ];
+    const callResult = await this.requestDecisionWithRetry(messages, level);
+    if (!callResult) {
+      return false;
+    }
+    this.writeDecisionLog({
+      callResult,
+      stage: "strategy",
+      playerId: current.id,
+      playerName: current.name,
+      prompt: messages,
+      responseText: callResult.content,
+    });
+    const note = callResult.content.trim();
+    if (!note) {
+      return false;
+    }
+    agent.strategyNote = note.slice(0, STRATEGY_NOTE_MAX_LENGTH);
+    return true;
   }
 }

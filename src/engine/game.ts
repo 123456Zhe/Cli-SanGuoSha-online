@@ -125,6 +125,7 @@ export type GameInitOptions = {
 export type NetworkPlayerConfig = {
   id: string;
   name: string;
+  isAI?: boolean;
 };
 
 export type GeneralDefinition = {
@@ -382,7 +383,7 @@ export class SanGuoGame {
     this.players = playerConfigs.map((config, index) => {
       const general = this.pickRandomUnusedGeneral(usedGeneralNames);
       usedGeneralNames.add(general.name);
-      return this.createPlayer(config.id, config.name, false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
+      return this.createPlayer(config.id, config.name, config.isAI ?? false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
     });
     this.deck = shuffle(createDeck(), this.rng);
     this.discardPile = [];

@@ -70,4 +70,4 @@ export type InteractionDecision =
   | { choice: "suit"; suit: CardSuit }
   | { choice: "effect"; enabled: boolean };
 
-export type DecisionHandler = (request: InteractionRequest) => InteractionDecision | Promise<InteractionDecision>;
+export type DecisionHandler = (request: InteractionRequest) => InteractionDecision | null | Promise<InteractionDecision | null>;

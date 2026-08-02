@@ -67,12 +67,21 @@ export class LocalAiEngine {
 
   private readonly roleScoreByName: Map<string, RoleScore>;
 
+  private maxContextRounds: number;
+
   constructor(rulesText: string) {
     this.rulesText = rulesText;
     this.memory = [];
     this.processedRounds = new Set();
     this.behaviorByName = new Map();
     this.roleScoreByName = new Map();
+    this.maxContextRounds = 30;
+  }
+
+  setMaxContextRounds(rounds: number): void {
+    if (Number.isInteger(rounds) && rounds > 0) {
+      this.maxContextRounds = rounds;
+    }
   }
 
   reset(): void {
@@ -83,7 +92,7 @@ export class LocalAiEngine {
   }
 
   syncPreviousRounds(contexts: RoundPromptContext[]): void {
-    this.memory = contexts.slice(-3);
+    this.memory = contexts.slice(-this.maxContextRounds);
     for (const round of this.memory) {
       if (this.processedRounds.has(round.round)) {
         continue;

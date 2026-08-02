@@ -9,3 +9,4 @@ devlog/*.md
 tools/light-client/clisanguo-lite*
 nohup.out
 .serena/
+.zcode/

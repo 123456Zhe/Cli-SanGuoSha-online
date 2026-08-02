@@ -1,9 +1,11 @@
 import { BoxRenderable, KeyEvent, TextRenderable, createCliRenderer } from "@opentui/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { AiDriverLabel, AiModelProvider, GameAiLoop } from "../agent/ai.js";
+import { AiModelProvider, GameAiLoop } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
 import { RoundPromptContext } from "../agent/prompt.js";
+import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
+import { pickAiTurnDecision } from "../agent/turn-decision.js";
 import { CardType } from "../engine/cards.js";
 import { GameAction, GameInitOptions, InteractionDecision, InteractionRequest, Player, PlayerRole, RemovableCardOption, SanGuoGame } from "../engine/game.js";
 
@@ -106,6 +108,8 @@ export class CliSanGuoApp {
 
   private roundBattlefieldHistory: Map<number, string[]>;
 
+  private readonly maxContextRounds: number;
+
   constructor(game: SanGuoGame, options: AppOptions) {
     this.game = game;
     this.options = options;
@@ -141,6 +145,15 @@ export class CliSanGuoApp {
     this.focusArea = "display";
     this.busy = false;
     this.roundBattlefieldHistory = new Map();
+    this.maxContextRounds = this.readContextRounds();
+    this.aiLoop.setMaxContextRounds(this.maxContextRounds);
+    this.localAiEngine.setMaxContextRounds(this.maxContextRounds);
+  }
+
+  private readContextRounds(): number {
+    const raw = process.env.SG_AI_CONTEXT_ROUNDS;
+    const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 30;
   }
 
   async start(): Promise<void> {
@@ -418,17 +431,8 @@ export class CliSanGuoApp {
       const previousRounds = this.getPreviousRoundPromptContexts(snapshot.turn);
       this.aiLoop.setPreviousRoundContexts(previousRounds);
       this.localAiEngine.syncPreviousRounds(previousRounds);
-      const modelDecision = this.setupAiModel === "simple" ? null : await this.aiLoop.decide(this.game, ai.id);
-      const localDecision = this.localAiEngine.decide(this.game, ai.id);
-      const fallbackDecision = localDecision
-        ? localDecision.targetId
-          ? { action: localDecision.action, targetId: localDecision.targetId }
-          : { action: localDecision.action }
-        : this.game.getBestAiDecision(ai.id);
-      const decision = modelDecision ?? fallbackDecision;
-      const driverLabel: AiDriverLabel | "本地AI" = modelDecision?.driverLabel ?? "本地AI";
-      const fallbackReason = !modelDecision && this.setupAiModel !== "simple" ? this.aiLoop.getLastFailureReason() : null;
-      const normalizedDecision = this.normalizeAiDecision(ai.id, decision);
+      const picked = await pickAiTurnDecision(this.game, ai.id, this.setupAiModel === "simple" ? null : this.aiLoop, this.localAiEngine);
+      const normalizedDecision = picked.decision;
       if (!normalizedDecision) {
         const forcedEndAction = this.game.getPlayableActions(ai.id).find((action) => action.type === "end");
         if (!forcedEndAction) {
@@ -437,66 +441,29 @@ export class CliSanGuoApp {
         await this.playAndAppendLogs(ai.id, forcedEndAction, undefined, 120);
         continue;
       }
-      if (!modelDecision && localDecision) {
-        this.logs.push(`[本地AI-预判] ${ai.name}：${localDecision.insight}`);
+      if (picked.localInsight) {
+        this.logs.push(`[本地AI-预判] ${ai.name}：${picked.localInsight}`);
       }
       const targetText = normalizedDecision.targetId ? ` -> ${this.labelPlayer(normalizedDecision.targetId)}` : "";
-      const reasonText = fallbackReason ? `（回退原因：${fallbackReason}）` : "";
-      const actionDelayMs = driverLabel === "本地AI" ? 1000 : 200;
-      this.logs.push(`[${driverLabel}] ${ai.name} 选择：${normalizedDecision.action.label}${targetText}${reasonText}`);
+      const reasonText = picked.fallbackReason ? `（回退原因：${picked.fallbackReason}）` : "";
+      const actionDelayMs = picked.driverLabel === "本地AI" ? 1000 : 200;
+      this.logs.push(`[${picked.driverLabel}] ${ai.name} 选择：${normalizedDecision.action.label}${targetText}${reasonText}`);
       this.refresh();
       await this.delay(actionDelayMs);
       await this.playAndAppendLogs(ai.id, normalizedDecision.action, normalizedDecision.targetId, 200);
+      // AI 回合结束：以高推理等级做一次策略博弈，后台并行执行不阻塞后续出牌
+      if (this.game.getCurrentPlayer().id !== ai.id || !this.game.getCurrentPlayer().alive) {
+        if (this.setupAiModel !== "simple") {
+          const reviewSnapshot = this.game.getSnapshot();
+          this.logs.push(`[AI] ${ai.name} 正在复盘局势...`);
+          void this.aiLoop.reviewStrategy(this.game, ai.id, reviewSnapshot).catch(() => {
+          // 后台复盘失败不影响对局
+        });
+        }
+      }
     }
     this.mode = this.game.getSnapshot().gameOver ? "gameover" : "action";
     this.refresh();
-  }
-
-  private normalizeAiDecision(
-    playerId: string,
-    decision: { action: GameAction; targetId?: string } | null | undefined,
-  ): { action: GameAction; targetId?: string } | null {
-    if (!decision) {
-      return null;
-    }
-    const actions = this.game.getPlayableActions(playerId);
-    const matchedAction = actions.find((action) => this.isSameAction(action, decision.action));
-    if (!matchedAction) {
-      return null;
-    }
-    if (matchedAction.type === "end") {
-      return { action: matchedAction };
-    }
-    if (matchedAction.type !== "play" && matchedAction.type !== "skill") {
-      return { action: matchedAction };
-    }
-    if (!matchedAction.requiresTarget) {
-      return { action: matchedAction };
-    }
-    const targetId =
-      decision.targetId && matchedAction.targets.includes(decision.targetId)
-        ? decision.targetId
-        : (matchedAction.targets[0] ?? null);
-    if (!targetId) {
-      return null;
-    }
-    return { action: matchedAction, targetId };
-  }
-
-  private isSameAction(left: GameAction, right: GameAction): boolean {
-    if (left.type !== right.type) {
-      return false;
-    }
-    if (left.type === "end" && right.type === "end") {
-      return true;
-    }
-    if (left.type === "skill" && right.type === "skill") {
-      return left.skill === right.skill && left.label === right.label;
-    }
-    if (left.type === "play" && right.type === "play") {
-      return left.cardIndex === right.cardIndex && left.label === right.label;
-    }
-    return false;
   }
 
   private refresh(): void {
@@ -688,49 +655,12 @@ export class CliSanGuoApp {
     return statusLines;
   }
 
-  private toPromptBattlefieldLine(player: Player): string {
-    const equipments = `${player.weapon ?? "无"}/${player.armor ?? "无"}/${player.attackHorse ?? "无"}/${player.defenseHorse ?? "无"}/${player.treasure ?? "无"}`;
-    return `${player.name}(${player.id})|身份:${player.role}|武将:${player.general}|体力:${Math.max(player.hp, 0)}/${player.maxHp}|手牌:${player.hand.length}|装备:${equipments}|状态:${player.alive ? "存活" : "阵亡"}`;
-  }
-
   private syncCurrentRoundBattlefield(snapshot: ReturnType<SanGuoGame["getSnapshot"]>): void {
-    const lines = snapshot.players.map((player) => this.toPromptBattlefieldLine(player));
-    this.roundBattlefieldHistory.set(snapshot.turn, lines);
-    if (this.roundBattlefieldHistory.size <= 20) {
-      return;
-    }
-    const rounds = Array.from(this.roundBattlefieldHistory.keys()).sort((a, b) => a - b);
-    const toDelete = rounds.slice(0, rounds.length - 20);
-    for (const round of toDelete) {
-      this.roundBattlefieldHistory.delete(round);
-    }
+    trackRoundBattlefield(this.roundBattlefieldHistory, snapshot.turn, buildBattlefieldLines(snapshot.players), this.maxContextRounds);
   }
 
   private getPreviousRoundPromptContexts(currentRound: number): RoundPromptContext[] {
-    const roundLogs = new Map<number, string[]>();
-    let activeRound: number | null = null;
-    for (const line of this.logs) {
-      const matched = line.match(/^第\s*(\d+)\s*(?:回合|轮)[:：]/);
-      if (matched?.[1]) {
-        activeRound = Number.parseInt(matched[1], 10);
-      }
-      if (activeRound === null || Number.isNaN(activeRound)) {
-        continue;
-      }
-      if (!roundLogs.has(activeRound)) {
-        roundLogs.set(activeRound, []);
-      }
-      roundLogs.get(activeRound)?.push(line);
-    }
-    const rounds = Array.from(roundLogs.keys())
-      .filter((round) => round < currentRound)
-      .sort((a, b) => a - b)
-      .slice(-3);
-    return rounds.map((round) => ({
-      round,
-      displayLines: roundLogs.get(round) ?? [],
-      battlefieldLines: this.roundBattlefieldHistory.get(round) ?? [],
-    }));
+    return buildRoundContexts(this.logs, this.roundBattlefieldHistory, currentRound, this.maxContextRounds);
   }
 
   private restart(): void {
@@ -1262,6 +1192,21 @@ export class CliSanGuoApp {
         this.refresh();
       });
     });
+    if (this.setupAiModel !== "simple") {
+      // AI 玩家自己处理交互响应（出杀/闪/无懈/桃等），仅纯概率响应走引擎自动决策
+      for (const player of this.game.getSnapshot().players) {
+        if (!player.isAI) {
+          continue;
+        }
+        const aiId = player.id;
+        this.game.setDecisionHandler(aiId, async (request) => {
+          if (request.kind === "choose-suit") {
+            return null;
+          }
+          return this.aiLoop.decideInteraction(this.game, aiId, request);
+        });
+      }
+    }
     this.mode = "action";
     void this.resolveAiTurns();
     this.refresh();

@@ -1,6 +1,13 @@
 import { createServer, Socket, Server } from "node:net";
 import { randomInt } from "node:crypto";
-import { GameAction, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame } from "../engine/game.js";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
+import { LocalAiEngine } from "../agent/local-engine.js";
+import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
+import { pickAiTurnDecision } from "../agent/turn-decision.js";
+import { GameAction, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
+import { CardType } from "../engine/cards.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
 
@@ -12,7 +19,26 @@ type PendingInteraction = {
 };
 type DisconnectedInfo = { name: string; timer: ReturnType<typeof setTimeout> };
 
-export type GameServerOptions = { host: string; port: number; playerCount: number; openingHandCount: number; reconnectTimeoutMs?: number; autoRestartAfterGameOver?: boolean; autoRestartAfterClose?: boolean };
+export type GameServerOptions = {
+  host: string;
+  port: number;
+  playerCount: number;
+  openingHandCount: number;
+  reconnectTimeoutMs?: number;
+  autoRestartAfterGameOver?: boolean;
+  autoRestartAfterClose?: boolean;
+  aiCount?: number;
+  aiDriver?: AiModelProvider | "simple";
+  aiThinkingMs?: number;
+  aiContextRounds?: number;
+  aiReasoning?: ReasoningMode;
+  aiStrategy?: "own" | "always";
+};
+
+const AI_NAME_PREFIX = "[AI]电脑-";
+const AI_NAME_SEQUENCE = ["甲", "乙", "丙", "丁", "戊"];
+const DEFAULT_CONTEXT_ROUNDS = 30;
+const AI_ACTION_PACING_MS = 800;
 
 const secureRng = (): number => randomInt(0, 0x1_0000_0000) / 0x1_0000_0000;
 
@@ -28,6 +54,11 @@ export class GameServer {
   private readonly disconnectedIds = new Set<string>();
   private server: Server | null = null;
   private restarting = false;
+  private readonly aiLoop: GameAiLoop | null;
+  private readonly localAiEngine: LocalAiEngine | null;
+  private aiPlayerIds: string[] = [];
+  private readonly roundBattlefieldHistory = new Map<number, string[]>();
+  private readonly contextRounds: number;
 
   private get reconnectTimeoutMs(): number {
     return this.options.reconnectTimeoutMs ?? 60_000;
@@ -36,6 +67,56 @@ export class GameServer {
   constructor(private readonly options: GameServerOptions, game = new SanGuoGame(secureRng)) {
     this.game = game;
     this.game.setDeferDyingResolution(true);
+    const aiCount = options.aiCount ?? 0;
+    this.contextRounds = options.aiContextRounds ?? DEFAULT_CONTEXT_ROUNDS;
+    if (aiCount > 0) {
+      const rulesText = this.loadRules();
+      this.localAiEngine = new LocalAiEngine(rulesText);
+      this.localAiEngine.setMaxContextRounds(this.contextRounds);
+      const driver = options.aiDriver ?? "qwen";
+      if (driver === "simple") {
+        this.aiLoop = null;
+      } else {
+        this.aiLoop = new GameAiLoop(rulesText, driver);
+        this.aiLoop.setMaxContextRounds(this.contextRounds);
+        this.aiLoop.setThinkingMs(options.aiThinkingMs ?? 1200);
+        if (options.aiReasoning) {
+          this.aiLoop.setReasoningMode(options.aiReasoning);
+        }
+      }
+    } else {
+      this.aiLoop = null;
+      this.localAiEngine = null;
+    }
+  }
+
+  private loadRules(): string {
+    try {
+      return readFileSync(resolve(process.cwd(), "rules.md"), "utf-8");
+    } catch {
+      return "";
+    }
+  }
+
+  private buildAiConfigs(): NetworkPlayerConfig[] {
+    return Array.from({ length: this.options.aiCount ?? 0 }, (_, index) => ({
+      id: `ai-${index + 1}`,
+      name: `${AI_NAME_PREFIX}${AI_NAME_SEQUENCE[index] ?? String(index + 1)}`,
+      isAI: true,
+    }));
+  }
+
+  private get humanSlots(): number {
+    return Math.max(1, this.options.playerCount - (this.options.aiCount ?? 0));
+  }
+
+  private isAiPlayer(playerId: string): boolean {
+    return this.aiPlayerIds.includes(playerId);
+  }
+
+  private trackBattlefield(): void {
+    const snapshot = this.game.getSnapshot();
+    trackRoundBattlefield(this.roundBattlefieldHistory, snapshot.turn, buildBattlefieldLines(snapshot.players), this.contextRounds);
   }
 
   listen(): Promise<number> {
@@ -79,19 +160,24 @@ export class GameServer {
     this.pendingAction = null;
     this.pendingInteraction = null;
     this.clearDisconnected();
+    this.roundBattlefieldHistory.clear();
     const onlinePeers = Array.from(this.peers.values());
-    if (onlinePeers.length < 2) {
+    if (onlinePeers.length < this.humanSlots) {
       this.started = false;
       return;
     }
+    const aiConfigs = this.buildAiConfigs();
+    this.aiPlayerIds = aiConfigs.map((config) => config.id);
     await this.game.initNetworkGame(
-      onlinePeers.map(({ id, name }) => ({ id, name })),
+      [...onlinePeers.map(({ id, name }) => ({ id, name })), ...aiConfigs],
       this.options.openingHandCount,
       false,
     );
     for (const peer of onlinePeers) {
       this.game.setDecisionHandler(peer.id, (request) => this.requestPeerDecision(peer.id, request));
     }
+    this.registerAiDecisionHandlers();
+    this.aiLoop?.start(this.game.getSnapshot());
     this.logs = [];
     this.started = true;
     this.broadcast({ type: "game_restarting", message: "新一局即将开始" });
@@ -157,6 +243,10 @@ export class GameServer {
       this.send(socket, { type: "error", message: "玩家名称不能为空" });
       return;
     }
+    if (this.buildAiConfigs().some((config) => config.name === trimmed)) {
+      this.send(socket, { type: "error", message: "该名称已被 AI 玩家占用，请换一个名字" });
+      return;
+    }
     if (this.started) {
       // Normal reconnection: player is in disconnected map (clean disconnect)
       const entry = Array.from(this.disconnected.entries()).find(([, info]) => info.name === trimmed);
@@ -201,7 +291,7 @@ export class GameServer {
       this.send(socket, { type: "error", message: "房间已开始" });
       return;
     }
-    if (this.peers.size >= this.options.playerCount) {
+    if (this.peers.size >= this.humanSlots) {
       this.send(socket, { type: "error", message: "房间已满" });
       return;
     }
@@ -219,7 +309,7 @@ export class GameServer {
     this.peers.set(socket, peer);
     this.send(socket, { type: "welcome", playerId: peer.id, roomSize: this.options.playerCount });
     this.broadcastLobby();
-    if (this.peers.size === this.options.playerCount) this.startGame();
+    if (this.peers.size === this.humanSlots) this.startGame();
   }
 
   private handleReconnect(socket: Socket, parser: JsonLineParser<ClientMessage>, playerId: string, version: number): void {
@@ -273,9 +363,11 @@ export class GameServer {
     void (async () => {
       const snapshot = this.game.getSnapshot();
       if (snapshot.players.length === 0) {
+        const aiConfigs = this.buildAiConfigs();
+        this.aiPlayerIds = aiConfigs.map((config) => config.id);
         this.logs.push(
           ...(await this.game.initNetworkGame(
-            Array.from(this.peers.values()).map(({ id, name }) => ({ id, name })),
+            [...Array.from(this.peers.values()).map(({ id, name }) => ({ id, name })), ...aiConfigs],
             this.options.openingHandCount,
             false,
           )),
@@ -284,8 +376,24 @@ export class GameServer {
       for (const peer of this.peers.values()) {
         this.game.setDecisionHandler(peer.id, (request) => this.requestPeerDecision(peer.id, request));
       }
+      this.registerAiDecisionHandlers();
+      this.aiLoop?.start(this.game.getSnapshot());
       this.beginTurn();
     })();
+  }
+
+  private registerAiDecisionHandlers(): void {
+    if (!this.aiLoop) {
+      return;
+    }
+    for (const aiId of this.aiPlayerIds) {
+      this.game.setDecisionHandler(aiId, async (request) => {
+        if (request.kind === "choose-suit") {
+          return null; // 纯概率响应走引擎自动决策
+        }
+        return this.aiLoop?.decideInteraction(this.game, aiId, request) ?? null;
+      });
+    }
   }
 
   private requestPeerDecision(playerId: string, request: InteractionRequest): Promise<InteractionDecision> {
@@ -322,25 +430,125 @@ export class GameServer {
     void this.runTurnStart(current.id);
   }
 
-  private async runTurnStart(playerId: string): Promise<void> {
-    const effects = this.game.getTurnStartOptionalEffects(playerId);
-    for (const effect of effects) {
-      this.game.setOptionalEffectDecision(playerId, effect, false);
-      const decision = await this.requestPeerDecision(playerId, {
+  private async askOptionalEffect(playerId: string, effect: SkillName | CardType, phase: "摸牌阶段" | "结束阶段"): Promise<void> {
+    const effectLabel = effect as string;
+    const reason = `${phase}是否发动${effectLabel}？`;
+    this.game.setOptionalEffectDecision(playerId, effect, false);
+    let decision: InteractionDecision | null;
+    if (this.isAiPlayer(playerId) && this.aiLoop) {
+      decision = await this.aiLoop.decideInteraction(this.game, playerId, {
         kind: "optional-effect",
         requestId: 0,
         playerId,
-        effect: effect as string,
-        reason: `摸牌阶段是否发动${effect}？`,
+        effect: effectLabel,
+        reason,
       });
-      if (decision.choice === "effect") {
-        this.game.setOptionalEffectDecision(playerId, effect, decision.enabled);
-      }
+    } else {
+      decision = await this.requestPeerDecision(playerId, {
+        kind: "optional-effect",
+        requestId: 0,
+        playerId,
+        effect: effectLabel,
+        reason,
+      });
+    }
+    if (decision?.choice === "effect") {
+      this.game.setOptionalEffectDecision(playerId, effect, decision.enabled);
+    }
+  }
+
+  private async runTurnStart(playerId: string): Promise<void> {
+    const effects = this.game.getTurnStartOptionalEffects(playerId);
+    for (const effect of effects) {
+      await this.askOptionalEffect(playerId, effect, "摸牌阶段");
     }
     const logs = await this.game.startTurn();
     this.logs.push(...logs);
+    this.trackBattlefield();
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    if (!this.game.isGameOver() && this.game.getCurrentPlayer().isAI) {
+      await this.driveAiTurn(this.game.getCurrentPlayer().id);
+    }
+  }
+
+  private async driveAiTurn(aiId: string): Promise<void> {
+    if (!this.localAiEngine) {
+      return;
+    }
+    while (true) {
+      if (this.game.isGameOver()) {
+        return;
+      }
+      const snapshot = this.game.getSnapshot();
+      const current = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
+      if (!current || !current.isAI || current.id !== aiId || !current.alive) {
+        return;
+      }
+      if (this.game.getPlayableActions(aiId).length === 0) {
+        return;
+      }
+      this.trackBattlefield();
+      const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
+      this.aiLoop?.setPreviousRoundContexts(previousRounds);
+      this.localAiEngine.syncPreviousRounds(previousRounds);
+      this.logs.push(`[AI] ${current.name} 正在思考...`);
+      this.broadcastInterimState();
+      const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
+      const decision = picked.decision;
+      if (!decision) {
+        const forcedEndAction = this.game.getPlayableActions(aiId).find((action) => action.type === "end");
+        if (!forcedEndAction) {
+          return;
+        }
+        const endLogs = await this.game.playAction(aiId, forcedEndAction);
+        this.logs.push(...endLogs);
+        this.broadcastState();
+        await this.checkAndHandleGameOver();
+        await this.advanceIfCurrentPlayerDead();
+        if (!this.game.getCurrentPlayer().alive) {
+          return;
+        }
+        if (this.game.getPendingDiscardCount(aiId) === 0) {
+          await this.resolveTurnEnd(aiId);
+        }
+        await this.delay(AI_ACTION_PACING_MS);
+        continue;
+      }
+      const targetText = decision.targetId ? ` -> ${this.labelPlayer(decision.targetId)}` : "";
+      const reasonText = picked.fallbackReason ? `（回退原因：${picked.fallbackReason}）` : "";
+      this.logs.push(`[${picked.driverLabel}] ${current.name} 选择：${decision.action.label}${targetText}${reasonText}`);
+      const targetName = decision.targetId
+        ? this.game.getSnapshot().players.find((player) => player.id === decision.targetId)?.name ?? decision.targetId
+        : undefined;
+      this.logs.push(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
+      this.broadcastInterimState();
+      const actionLogs = await this.game.playAction(aiId, decision.action, decision.targetId);
+      this.logs.push(...actionLogs);
+      this.logs.push(...(await this.game.ensureTurnState()));
+      this.logs.push(...(await this.game.resolvePendingDeaths()));
+      this.trackBattlefield();
+      this.broadcastState();
+      await this.checkAndHandleGameOver();
+      await this.advanceIfCurrentPlayerDead();
+      if (!this.game.getCurrentPlayer().alive) {
+        return;
+      }
+      if (this.game.getPendingDiscardCount(aiId) === 0) {
+        await this.resolveTurnEnd(aiId);
+      }
+      await this.delay(AI_ACTION_PACING_MS);
+    }
+  }
+
+  private labelPlayer(playerId: string): string {
+    return this.game.getSnapshot().players.find((player) => player.id === playerId)?.name ?? playerId;
+  }
+
+  private async delay(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), ms);
+    });
   }
 
   private async handleAction(peer: Peer, message: Extract<ClientMessage, { type: "action" }>): Promise<void> {
@@ -369,32 +577,34 @@ export class GameServer {
   private async resolveAfterPlay(): Promise<void> {
     if (!this.pendingAction) return;
     const { peer, action, targetId, selectedCardId } = this.pendingAction;
-    this.pendingAction = null;
+    try {
+      // Broadcast an interim state with empty actions before playAction.
+      // This gives all clients immediate feedback (log line visible) without
+      // prompting the attacker for a new action while the engine is resolving
+      // interactions (dodge, skill triggers, etc.).
+      const targetName = targetId
+        ? this.game.getSnapshot().players.find((p) => p.id === targetId)?.name ?? targetId
+        : undefined;
+      if (action.type !== "end") {
+        this.logs.push(`${peer.name} 正在使用 ${action.label}${targetName ? " 目标 " + targetName : ""}`);
+        this.broadcastInterimState();
+      }
 
-    // Broadcast an interim state with empty actions before playAction.
-    // This gives all clients immediate feedback (log line visible) without
-    // prompting the attacker for a new action while the engine is resolving
-    // interactions (dodge, skill triggers, etc.).
-    const targetName = targetId
-      ? this.game.getSnapshot().players.find((p) => p.id === targetId)?.name ?? targetId
-      : undefined;
-    if (action.type !== "end") {
-      this.logs.push(`${peer.name} 正在使用 ${action.label}${targetName ? " 目标 " + targetName : ""}`);
-      this.broadcastInterimState();
-    }
+      const logs: string[] = [];
+      logs.push(...(await this.game.playAction(peer.id, action, targetId, selectedCardId)));
+      logs.push(...(await this.game.ensureTurnState()));
+      logs.push(...(await this.game.resolvePendingDeaths()));
+      this.logs.push(...logs);
+      this.broadcastState();
 
-    const logs: string[] = [];
-    logs.push(...(await this.game.playAction(peer.id, action, targetId, selectedCardId)));
-    logs.push(...(await this.game.ensureTurnState()));
-    logs.push(...(await this.game.resolvePendingDeaths()));
-    this.logs.push(...logs);
-    this.broadcastState();
-
-    await this.checkAndHandleGameOver();
-    await this.advanceIfCurrentPlayerDead();
-    if (!this.game.getCurrentPlayer().alive) return;
-    if (this.game.getPendingDiscardCount(peer.id) === 0) {
-      await this.resolveTurnEnd(peer.id);
+      await this.checkAndHandleGameOver();
+      await this.advanceIfCurrentPlayerDead();
+      if (!this.game.getCurrentPlayer().alive) return;
+      if (this.game.getPendingDiscardCount(peer.id) === 0) {
+        await this.resolveTurnEnd(peer.id);
+      }
+    } finally {
+      this.pendingAction = null;
     }
   }
 
@@ -408,29 +618,43 @@ export class GameServer {
     }
   }
 
+  /**
+   * 回合末策略复盘：捕获当前快照后在后台并行执行，不阻塞下一玩家出牌。
+   */
+  private reviewStrategiesForTurnEnd(enderId: string): void {
+    if (!this.aiLoop || this.aiPlayerIds.length === 0) {
+      return;
+    }
+    const mode = this.options.aiStrategy ?? "own";
+    const targets = this.aiPlayerIds.filter((aiId) => (mode === "own" ? aiId === enderId : true));
+    if (targets.length === 0) {
+      return;
+    }
+    const snapshot = this.game.getSnapshot();
+    for (const aiId of targets) {
+      const name = snapshot.players.find((player) => player.id === aiId)?.name ?? aiId;
+      this.logs.push(`[AI] ${name} 正在复盘局势...`);
+      this.broadcastInterimState();
+      void this.aiLoop.reviewStrategy(this.game, aiId, snapshot).catch(() => {// 后台复盘失败不影响对局
+      });
+    }
+  }
+
   private async resolveTurnEnd(playerId: string): Promise<void> {
     const enderId = this.game.consumePendingTurnEnd();
     if (enderId !== playerId) return;
     const effects = this.game.getTurnEndOptionalEffects(playerId);
     for (const effect of effects) {
-      this.game.setOptionalEffectDecision(playerId, effect, false);
-      const decision = await this.requestPeerDecision(playerId, {
-        kind: "optional-effect",
-        requestId: 0,
-        playerId,
-        effect: effect as string,
-        reason: `结束阶段是否发动${effect}？`,
-      });
-      if (decision.choice === "effect") {
-        this.game.setOptionalEffectDecision(playerId, effect, decision.enabled);
-      }
+      await this.askOptionalEffect(playerId, effect, "结束阶段");
     }
     const player = this.game.getSnapshot().players.find((p) => p.id === playerId);
     if (player) {
       const logs = await this.game.finishTurn(player as any);
       this.logs.push(...logs);
+      this.trackBattlefield();
       this.broadcastState();
-    await this.checkAndHandleGameOver();
+      await this.checkAndHandleGameOver();
+      this.reviewStrategiesForTurnEnd(playerId);
       if (this.game.consumePendingNextTurn()) {
         this.beginTurn();
       }
@@ -445,6 +669,7 @@ export class GameServer {
     this.logs.push(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    this.reviewStrategiesForTurnEnd(current.id);
     if (this.game.consumePendingNextTurn()) {
       this.beginTurn();
       return;
@@ -472,11 +697,15 @@ export class GameServer {
   }
 
   private broadcastLobby(): void {
-    const players = Array.from(this.peers.values()).map(({ id, name }) => ({ id, name }));
+    const players = [
+      ...Array.from(this.peers.values()).map(({ id, name }) => ({ id, name })),
+      ...this.buildAiConfigs().map(({ id, name }) => ({ id, name })),
+    ];
     this.broadcast({ type: "lobby", players, roomSize: this.options.playerCount });
   }
 
   private broadcastState(): void {
+    this.trackBattlefield();
     for (const peer of this.peers.values()) this.sendStateToPeer(peer);
   }
 

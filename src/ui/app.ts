@@ -8,6 +8,8 @@ import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { CardType } from "../engine/cards.js";
 import { GameAction, GameInitOptions, InteractionDecision, InteractionRequest, Player, PlayerRole, RemovableCardOption, SanGuoGame } from "../engine/game.js";
+import { extractCardTypeFromAction, getActionHint } from "./action-hints.js";
+import { buildActionLines, buildDisplayLines, buildStatusLines } from "./render-lines.js";
 
 type InputMode = "setup" | "action" | "target" | "target-card" | "response" | "discard" | "gameover";
 
@@ -502,89 +504,31 @@ export class CliSanGuoApp {
     } else {
       this.actionOptions = [];
     }
-    const statusLines = this.buildStatusLines(snapshot);
+    const statusLines = buildStatusLines(snapshot, (playerId) => this.labelPlayer(playerId));
 
-    const actionLines: string[] = [];
-    actionLines.push("输入:");
-    if (this.commandBuffer !== null) {
-      actionLines.push(`命令模式: ${this.commandBuffer}`);
-      actionLines.push("回车执行，退格删除，Esc 取消");
-      actionLines.push("可用命令:");
-      actionLines.push(...this.getCommandListLines());
-    } else if (this.mode === "action") {
-      this.actionOptions.forEach((action, index) => {
-        actionLines.push(`${index + 1}. ${action.label}`);
-        const actionHint = this.getActionHint(action);
-        if (actionHint.length > 0) {
-          actionLines.push(`   功能：${actionHint}`);
-        }
-      });
-      if (this.actionOptions.length === 0) {
-        actionLines.push("等待 AI 执行...");
-      }
-    } else if (this.mode === "target") {
-      actionLines.push(`当前操作: ${this.pendingAction ? this.pendingAction.label : "选择目标"}`);
-      this.targetOptions.forEach((target, index) => {
-        actionLines.push(
-          `${index + 1}. 目标 ${target.name} | HP ${Math.max(target.hp, 0)}/${target.maxHp} | 手牌 ${target.hand.length} 张`,
-        );
-      });
-      actionLines.push("按 b 返回上一步");
-    } else if (this.mode === "target-card") {
-      const targetName = this.pendingTargetId ? this.labelPlayer(this.pendingTargetId) : "目标";
-      actionLines.push(`当前操作: ${this.pendingAction ? this.pendingAction.label : "选择牌"}`);
-      actionLines.push(`目标: ${targetName}，请选择要${this.isSnatchAction(this.pendingAction) ? "获取" : "弃置"}的牌`);
-      this.targetCardOptions.forEach((option, index) => {
-        actionLines.push(`${index + 1}. ${option.label}`);
-      });
-      if (this.targetCardOptions.length === 0) {
-        actionLines.push("目标没有可选牌，将按默认规则结算");
-        actionLines.push("1. 继续结算");
-      }
-      actionLines.push("按 b 返回上一步");
-    } else if (this.mode === "response") {
-      const pending = this.pendingInteraction;
-      if (pending) {
-        const req = pending.request;
-        actionLines.push("交互请求：" + req.reason);
-        if (req.kind === "respond" || req.kind === "choose-discard") {
-          req.sources.forEach((s, i) => actionLines.push(`${i + 1}. ${s.label}`));
-          if (req.kind === "respond" || (req.kind === "choose-discard" && req.allowPass)) {
-            actionLines.push(`${req.sources.length + 1}. 放弃`);
-          }
-        } else if (req.kind === "collateral") {
-          req.victims.forEach((v, i) => actionLines.push(`${i + 1}. 对 ${this.labelPlayer(v)} 使用杀`));
-          actionLines.push(`${req.victims.length + 1}. 放弃`);
-        } else if (req.kind === "choose-suit") {
-          const suitLabels: Record<string, string> = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃" };
-          req.suits.forEach((s, i) => actionLines.push(`${i + 1}. 声明${suitLabels[s] ?? s}`));
-        } else if (req.kind === "optional-effect") {
-          actionLines.push("1. 发动");
-          actionLines.push("2. 不发动");
-        }
-      }
-    } else if (this.mode === "discard") {
-      const current = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
-      if (current && current.id === "human") {
-        const needDiscard = Math.max(0, current.hand.length - current.hp);
-        actionLines.push(
-          `弃牌阶段：需弃置 ${needDiscard} 张（手牌 ${current.hand.length} / 体力 ${Math.max(current.hp, 0)}）`,
-        );
-        current.hand.forEach((card, index) => {
-          actionLines.push(`${index + 1}. 弃置 ${card.type}`);
-        });
-      } else {
-        actionLines.push("等待回合推进...");
-      }
-    } else {
-      actionLines.push("按 r 重开，或输入 /exit 退出");
-    }
-    actionLines.push("输入 / 进入命令模式");
+    const actionLines = buildActionLines({
+      commandBuffer: this.commandBuffer,
+      mode: this.mode,
+      actionOptions: this.actionOptions,
+      pendingAction: this.pendingAction,
+      targetOptions: this.targetOptions,
+      targetCardOptions: this.targetCardOptions,
+      pendingInteraction: this.pendingInteraction,
+      pendingTargetId: this.pendingTargetId,
+      snapshot,
+      labelPlayer: (playerId) => this.labelPlayer(playerId),
+      isSnatch: (action) => this.isSnatchAction(action),
+      getCommandListLines: () => this.getCommandListLines(),
+      getActionHint: (action) => getActionHint(action),
+    });
 
     const displayPageSize = this.getBodyPageSize("display");
     const actionPageSize = this.getBodyPageSize("action");
     const statusPageSize = this.getBodyPageSize("status");
-    const displayLines: string[] = this.buildDisplayLines();
+    const displayLines: string[] = buildDisplayLines(this.logs, {
+      title: this.displayOverlayTitle,
+      lines: this.displayOverlayLines,
+    });
     if (this.displayOverlayTitle === null && this.displayFollowLatest) {
       this.displayPage = this.getMaxPage(displayLines.length, displayPageSize);
     }
@@ -618,61 +562,6 @@ export class CliSanGuoApp {
     this.battlefieldView.content = displayViewLines.lines.join("\n");
     this.actionView.content = actionViewLines.lines.join("\n");
     this.logsView.content = statusViewLines.lines.join("\n");
-  }
-
-  private buildDisplayLines(): string[] {
-    if (this.displayOverlayTitle !== null) {
-      const lines: string[] = [];
-      lines.push(`【${this.displayOverlayTitle}】`);
-      lines.push("输入 /close 关闭当前文档");
-      lines.push("");
-      lines.push(...this.displayOverlayLines);
-      return lines;
-    }
-    const lines: string[] = [];
-    lines.push("输入“/”进入命令模式，建议先用 /help 查看帮助文档");
-    lines.push("");
-    lines.push("最近记录:");
-    const latest = this.logs.slice(-100);
-    for (const item of latest) {
-      lines.push(`- ${item}`);
-    }
-    return lines;
-  }
-
-  private buildStatusLines(snapshot: ReturnType<SanGuoGame["getSnapshot"]>): string[] {
-    const statusLines: string[] = [];
-    statusLines.push(`回合: ${snapshot.turn}`);
-    statusLines.push(`当前玩家: ${this.labelPlayer(snapshot.currentPlayerId)}`);
-    statusLines.push(`阶段: ${snapshot.phase}`);
-    statusLines.push(`牌堆: ${snapshot.deckCount}  弃牌堆: ${snapshot.discardCount}`);
-    statusLines.push("");
-    statusLines.push("玩家状态:");
-    for (const player of snapshot.players) {
-      const status = player.alive ? "存活" : "阵亡";
-      const identity = !player.alive ? player.role : player.role === PlayerRole.Lord ? PlayerRole.Lord : "未知";
-      const hand = player.isAI ? `${player.hand.length} 张` : this.describeHand(player.hand);
-      const skills = player.skills.length > 0 ? player.skills.join("、") : "无";
-      const weapon = player.weapon ?? "无";
-      const armor = player.armor ?? "无";
-      const attackHorse = player.attackHorse ?? "无";
-      const defenseHorse = player.defenseHorse ?? "无";
-      const treasure = player.treasure ?? "无";
-      statusLines.push(
-        `- ${player.name}[${player.general}] | 身份 ${identity} | HP ${Math.max(player.hp, 0)}/${player.maxHp} | 手牌 ${hand} | 装备 武器:${weapon} 防具:${armor} +1马:${defenseHorse} -1马:${attackHorse} 宝物:${treasure} | 技能 ${skills} | ${status}`,
-      );
-    }
-    if (snapshot.gameOver) {
-      statusLines.push("");
-      if (snapshot.winner === "human") {
-        statusLines.push("结果: 主公获胜");
-      } else if (snapshot.winner === "ai") {
-        statusLines.push("结果: 反贼获胜");
-      } else {
-        statusLines.push("结果: 平局");
-      }
-    }
-    return statusLines;
   }
 
   private syncCurrentRoundBattlefield(snapshot: ReturnType<SanGuoGame["getSnapshot"]>): void {
@@ -712,13 +601,6 @@ export class CliSanGuoApp {
   private labelPlayer(playerId: string): string {
     const player = this.game.getSnapshot().players.find((item) => item.id === playerId);
     return player ? player.name : playerId;
-  }
-
-  private describeHand(cards: Player["hand"]): string {
-    if (cards.length === 0) {
-      return "0 张";
-    }
-    return cards.map((card, index) => `${index + 1}:${card.type}`).join(" ");
   }
 
   private toOptionIndex(event: KeyEvent): number | null {
@@ -905,7 +787,9 @@ export class CliSanGuoApp {
     const displayPageSize = this.getBodyPageSize("display");
     const actionPageSize = this.getBodyPageSize("action");
     const statusPageSize = this.getBodyPageSize("status");
-    const displaySource = this.displayOverlayTitle ? this.buildDisplayLines() : leftLines;
+    const displaySource = this.displayOverlayTitle
+      ? buildDisplayLines(this.logs, { title: this.displayOverlayTitle, lines: this.displayOverlayLines })
+      : leftLines;
     const displayViewLines = this.renderPagedArea({
       title: "显示区",
       lines: displaySource,
@@ -1308,18 +1192,11 @@ export class CliSanGuoApp {
     return { choice: "pass" };
   }
 
-  private extractCardTypeFromAction(action: Extract<GameAction, { type: "play" }>): CardType | null {
-    const label = action.label;
-    const allCardTypes = Object.values(CardType);
-    const picked = allCardTypes.find((cardType) => label.includes(cardType));
-    return picked ?? null;
-  }
-
   private shouldSelectTargetCard(action: TargetAction): boolean {
     if (action.type !== "play") {
       return false;
     }
-    const cardType = this.extractCardTypeFromAction(action);
+    const cardType = extractCardTypeFromAction(action);
     return cardType === CardType.Dismantle || cardType === CardType.Snatch;
   }
 
@@ -1327,120 +1204,7 @@ export class CliSanGuoApp {
     if (!action || action.type !== "play") {
       return false;
     }
-    return this.extractCardTypeFromAction(action) === CardType.Snatch;
-  }
-
-  private getActionHint(action: GameAction): string {
-    if (action.type === "end") {
-      return "结束当前出牌阶段并进入弃牌/结算流程";
-    }
-    if (action.type === "skill") {
-      if (action.label.includes("强袭")) {
-        return "弃1张牌并对1名目标造成1点伤害（每回合限一次）";
-      }
-      if (action.label.includes("制衡")) {
-        return "弃任意张牌并摸等量牌（每回合限一次）";
-      }
-      if (action.label.includes("青囊")) {
-        return "弃1张手牌令1名角色回复1点体力（每回合限一次）";
-      }
-      if (action.label.includes("苦肉")) {
-        return "失去1点体力并摸2张牌";
-      }
-      return "发动武将技能获得额外收益";
-    }
-    if (action.label.includes("木牛流马下的")) {
-      return "从木牛流马中打出寄存牌，并按该牌原效果结算";
-    }
-    const cardType = this.extractCardTypeFromAction(action);
-    if (!cardType) {
-      return action.requiresTarget ? "使用此牌并选择目标" : "使用此牌立即生效";
-    }
-    if (cardType === CardType.Slash) {
-      return "对1名角色造成1点伤害（可被闪抵消）";
-    }
-    if (cardType === CardType.Peach) {
-      return "回复1点体力";
-    }
-    if (cardType === CardType.Duel) {
-      return "与你指定目标轮流打出杀，先断者受1点伤害";
-    }
-    if (cardType === CardType.Dismantle) {
-      return "弃置目标区域内1张牌";
-    }
-    if (cardType === CardType.Snatch) {
-      return "获得目标区域内1张牌";
-    }
-    if (cardType === CardType.ExNihilo) {
-      return "摸2张牌";
-    }
-    if (cardType === CardType.PeachGarden) {
-      return "所有存活角色各回复1点体力";
-    }
-    if (cardType === CardType.Harvest) {
-      return "所有存活角色各摸1张牌";
-    }
-    if (cardType === CardType.Barbarian) {
-      return "其他角色需打出杀，否则受到1点伤害";
-    }
-    if (cardType === CardType.ArrowRain) {
-      return "其他角色需打出闪，否则受到1点伤害";
-    }
-    if (cardType === CardType.Collateral) {
-      return "指定装备武器角色对其攻击范围内目标出杀，否则其武器被弃置";
-    }
-    if (cardType === CardType.Negate) {
-      return "抵消一张锦囊牌对单个目标的生效";
-    }
-    if (cardType === CardType.Crossbow) {
-      return "武器：攻击范围2，出牌阶段可无限次使用杀";
-    }
-    if (cardType === CardType.FemaleSword) {
-      return "武器：攻击范围2；异性目标响应杀后，随机弃其1手牌或你摸1张";
-    }
-    if (cardType === CardType.QinggangSword) {
-      return "武器：攻击范围2；你使用的杀无视目标防具";
-    }
-    if (cardType === CardType.IceSword) {
-      return "武器：攻击范围2；杀将造成伤害时可改为弃目标2张牌";
-    }
-    if (cardType === CardType.GudingBlade) {
-      return "武器：攻击范围2；目标无手牌时，你的杀伤害+1";
-    }
-    if (cardType === CardType.SerpentSpear) {
-      return "武器：攻击范围3；可弃2张手牌当1张杀使用";
-    }
-    if (cardType === CardType.GreenDragonBlade) {
-      return "武器：攻击范围3；杀被闪后可追加再出1张杀";
-    }
-    if (cardType === CardType.RockCleavingAxe) {
-      return "武器：攻击范围3；杀被闪后可弃2张牌令此杀仍命中";
-    }
-    if (cardType === CardType.Halberd) {
-      return "武器：攻击范围4；最后一张手牌为杀时可额外指定至多2个目标";
-    }
-    if (cardType === CardType.KylinBow) {
-      return "武器：攻击范围5；杀造成伤害后可弃置目标坐骑";
-    }
-    if (cardType === CardType.EightDiagram) {
-      return "防具：受杀时有概率视为自动打出闪";
-    }
-    if (cardType === CardType.VineArmor) {
-      return "防具：普通杀、南蛮入侵、万箭齐发对你无效";
-    }
-    if (cardType === CardType.SilverLion) {
-      return "防具：受到超过1点伤害时改为1点；失去此防具时回复1点体力";
-    }
-    if (cardType === CardType.Dilu || cardType === CardType.JueYing || cardType === CardType.ZhuaHuangFeiDian) {
-      return "防御马：其他角色计算到你的距离+1，更不容易被指定为目标";
-    }
-    if (cardType === CardType.ChiTu || cardType === CardType.DaYuan || cardType === CardType.ZiXing) {
-      return "进攻马：你计算到其他角色的距离-1，更容易命中远处目标";
-    }
-    if (cardType === CardType.WoodenOx) {
-      return "宝物：可寄存手牌并转移给其他角色，也可直接使用寄存牌";
-    }
-    return action.requiresTarget ? "使用装备或锦囊并选择目标" : "使用装备牌并立即生效";
+    return extractCardTypeFromAction(action) === CardType.Snatch;
   }
 
   private delay(ms: number): Promise<void> {
@@ -1535,7 +1299,10 @@ export class CliSanGuoApp {
 
   private changeFocusedPage(step: -1 | 1): void {
     if (this.focusArea === "display") {
-      const displayLines = this.buildDisplayLines();
+      const displayLines = buildDisplayLines(this.logs, {
+        title: this.displayOverlayTitle,
+        lines: this.displayOverlayLines,
+      });
       const displayPageSize = this.getBodyPageSize("display");
       const maxPage = this.getMaxPage(displayLines.length, displayPageSize);
       const nextPage = Math.min(Math.max(this.displayPage + step, 0), maxPage);

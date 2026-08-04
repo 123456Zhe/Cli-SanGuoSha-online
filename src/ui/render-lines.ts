@@ -1,4 +1,5 @@
 import { GameAction, GameSnapshot, InteractionRequest, Player, PlayerRole, RemovableCardOption } from "../engine/game.js";
+import { computeDistanceBetween, getAttackRange } from "../engine/resolve.js";
 
 type TargetAction = Exclude<GameAction, { type: "end" }>;
 
@@ -47,7 +48,11 @@ export function buildDisplayLines(logs: string[], overlay: { title: string | nul
   return lines;
 }
 
-export function buildStatusLines(snapshot: GameSnapshot, labelPlayer: (playerId: string) => string): string[] {
+export function buildStatusLines(
+  snapshot: GameSnapshot,
+  labelPlayer: (playerId: string) => string,
+  localPlayerId: string,
+): string[] {
   const statusLines: string[] = [];
   statusLines.push(`回合: ${snapshot.turn}`);
   statusLines.push(`当前玩家: ${labelPlayer(snapshot.currentPlayerId)}`);
@@ -65,8 +70,17 @@ export function buildStatusLines(snapshot: GameSnapshot, labelPlayer: (playerId:
     const attackHorse = player.attackHorse ?? "无";
     const defenseHorse = player.defenseHorse ?? "无";
     const treasure = player.treasure ?? "无";
+    let reachInfo = "";
+    if (player.id === localPlayerId) {
+      reachInfo = ` | 攻击范围 ${getAttackRange(player)}`;
+    } else if (player.alive) {
+      const local = snapshot.players.find((item) => item.id === localPlayerId);
+      if (local) {
+        reachInfo = ` | 距离 ${computeDistanceBetween(snapshot.players, local, player)}`;
+      }
+    }
     statusLines.push(
-      `- ${player.name}[${player.general}] | 身份 ${identity} | HP ${Math.max(player.hp, 0)}/${player.maxHp} | 手牌 ${hand} | 装备 武器:${weapon} 防具:${armor} +1马:${defenseHorse} -1马:${attackHorse} 宝物:${treasure} | 技能 ${skills} | ${status}`,
+      `- ${player.name}[${player.general}] | 身份 ${identity} | HP ${Math.max(player.hp, 0)}/${player.maxHp} | 手牌 ${hand} | 装备 武器:${weapon} 防具:${armor} +1马:${defenseHorse} -1马:${attackHorse} 宝物:${treasure} | 技能 ${skills}${reachInfo} | ${status}`,
     );
   }
   if (snapshot.gameOver) {
@@ -102,10 +116,15 @@ export function buildActionLines(state: ActionAreaState): string[] {
       actionLines.push("等待 AI 执行...");
     }
   } else if (state.mode === "target") {
+    const current = state.snapshot.players.find((player) => player.id === state.snapshot.currentPlayerId);
     actionLines.push(`当前操作: ${state.pendingAction ? state.pendingAction.label : "选择目标"}`);
     state.targetOptions.forEach((target, index) => {
+      const distance =
+        current && current.alive && target.alive
+          ? computeDistanceBetween(state.snapshot.players, current, target)
+          : null;
       actionLines.push(
-        `${index + 1}. 目标 ${target.name} | HP ${Math.max(target.hp, 0)}/${target.maxHp} | 手牌 ${target.hand.length} 张`,
+        `${index + 1}. 目标 ${target.name} | HP ${Math.max(target.hp, 0)}/${target.maxHp} | 手牌 ${target.hand.length} 张${distance !== null ? ` | 距离 ${distance}` : ""}`,
       );
     });
     actionLines.push("按 b 返回上一步");

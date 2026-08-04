@@ -504,7 +504,8 @@ export class CliSanGuoApp {
     } else {
       this.actionOptions = [];
     }
-    const statusLines = buildStatusLines(snapshot, (playerId) => this.labelPlayer(playerId));
+    const localPlayerId = snapshot.players.find((player) => !player.isAI)?.id ?? "human";
+    const statusLines = buildStatusLines(snapshot, (playerId) => this.labelPlayer(playerId), localPlayerId);
 
     const actionLines = buildActionLines({
       commandBuffer: this.commandBuffer,

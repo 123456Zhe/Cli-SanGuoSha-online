@@ -721,7 +721,6 @@ export function getAttackRange(player: Player): number {
     return 1;
   }
   if (
-    player.weapon === CardType.Crossbow ||
     player.weapon === CardType.FemaleSword ||
     player.weapon === CardType.QinggangSword ||
     player.weapon === CardType.IceSword ||
@@ -746,7 +745,12 @@ export function getAttackRange(player: Player): number {
 }
 
 export function computeDistance(ctx: ResolveContext, attacker: Player, target: Player): number {
-  const alivePlayers = ctx.players.filter((player) => player.alive);
+  return computeDistanceBetween(ctx.players, attacker, target);
+}
+
+// 纯快照版距离计算：仅依赖 players 数组（座位序）+ 攻防双方字段，供 UI/Go 客户端本地展示复用。
+export function computeDistanceBetween(players: Player[], attacker: Player, target: Player): number {
+  const alivePlayers = players.filter((player) => player.alive);
   const attackerIndex = alivePlayers.findIndex((item) => item.id === attacker.id);
   const targetIndex = alivePlayers.findIndex((item) => item.id === target.id);
   if (attackerIndex < 0 || targetIndex < 0) {
@@ -758,7 +762,7 @@ export function computeDistance(ctx: ResolveContext, attacker: Player, target: P
   if (attacker.attackHorse !== null) {
     distance -= 1;
   }
-  if (ctx.hasSkill(attacker, SkillName.MaShu)) {
+  if (attacker.skills.includes(SkillName.MaShu)) {
     distance -= 1;
   }
   if (target.defenseHorse !== null) {

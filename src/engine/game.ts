@@ -324,6 +324,7 @@ export class SanGuoGame {
     return GENERAL_LIBRARY.map((item) => ({
       kingdom: item.kingdom,
       name: item.name,
+      gender: item.gender,
       maxHp: item.maxHp,
       skills: [...item.skills],
     }));
@@ -1757,14 +1758,11 @@ export class SanGuoGame {
     general: GeneralDefinition,
     role: PlayerRole,
   ): Player {
-    const tail = id.split("-").pop() ?? "0";
-    const index = Number.parseInt(tail, 10);
-    const gender: "男" | "女" = !isAI ? "男" : Number.isNaN(index) || index % 2 === 0 ? "男" : "女";
     return {
       id,
       name,
       role,
-      gender,
+      gender: general.gender,
       general: general.name,
       skills: [...general.skills],
       isAI,

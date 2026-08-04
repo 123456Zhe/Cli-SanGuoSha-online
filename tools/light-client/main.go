@@ -15,22 +15,24 @@ type card struct {
 	Type string `json:"type"`
 }
 type player struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Role            string `json:"role"`
-	General         string `json:"general"`
-	HP              int    `json:"hp"`
-	MaxHP           int    `json:"maxHp"`
-	Hand            []card `json:"hand"`
-	HandCount       int    `json:"handCount"`
-	Weapon          string `json:"weapon"`
-	Armor           string `json:"armor"`
-	AttackHorse     string `json:"attackHorse"`
-	DefenseHorse    string `json:"defenseHorse"`
-	Treasure        string `json:"treasure"`
-	FaceDown        bool   `json:"faceDown"`
-	TreasureCards   []card `json:"treasureCards"`
-	TreasureCardCount int `json:"treasureCardCount"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Role              string   `json:"role"`
+	General           string   `json:"general"`
+	HP                int      `json:"hp"`
+	MaxHP             int      `json:"maxHp"`
+	Hand              []card   `json:"hand"`
+	HandCount         int      `json:"handCount"`
+	Weapon            string   `json:"weapon"`
+	Armor             string   `json:"armor"`
+	AttackHorse       string   `json:"attackHorse"`
+	DefenseHorse      string   `json:"defenseHorse"`
+	Treasure          string   `json:"treasure"`
+	FaceDown          bool     `json:"faceDown"`
+	Alive             bool     `json:"alive"`
+	Skills            []string `json:"skills"`
+	TreasureCards     []card   `json:"treasureCards"`
+	TreasureCardCount int      `json:"treasureCardCount"`
 }
 type action struct {
 	Type           string   `json:"type"`
@@ -68,8 +70,8 @@ type snapshot struct {
 	Players         []player    `json:"players"`
 }
 type serverMessage struct {
-	PlayerName          string                        `json:"playerName"`
-	WaitTimeSeconds     int                           `json:"waitTimeSeconds"`
+	PlayerName      string `json:"playerName"`
+	WaitTimeSeconds int    `json:"waitTimeSeconds"`
 
 	Type                string                     `json:"type"`
 	PlayerID            string                     `json:"playerId"`
@@ -133,6 +135,85 @@ func equipmentName(value string) string {
 	return value
 }
 
+func attackRange(weapon string) int {
+	switch weapon {
+	case "诸葛连弩":
+		return 1
+	case "雌雄双股剑", "青釭剑", "寒冰剑", "古锭刀":
+		return 2
+	case "丈八蛇矛", "青龙偃月刀", "贯石斧":
+		return 3
+	case "方天画戟":
+		return 4
+	case "麒麟弓":
+		return 5
+	}
+	return 1
+}
+
+func hasSkill(target player, skill string) bool {
+	for _, item := range target.Skills {
+		if item == skill {
+			return true
+		}
+	}
+	return false
+}
+
+func findPlayer(players []player, id string) player {
+	for _, item := range players {
+		if item.ID == id {
+			return item
+		}
+	}
+	return player{}
+}
+
+// ringDistance 与引擎 computeDistance 一致：仅存活玩家按座位环形距离，
+// 进攻方进攻马 -1、马术 -1，目标防御马 +1，下限 1。
+func ringDistance(players []player, from, to player) int {
+	alive := make([]player, 0, len(players))
+	for _, item := range players {
+		if item.Alive {
+			alive = append(alive, item)
+		}
+	}
+	fromIndex, toIndex := -1, -1
+	for index, item := range alive {
+		if item.ID == from.ID {
+			fromIndex = index
+		}
+		if item.ID == to.ID {
+			toIndex = index
+		}
+	}
+	if fromIndex < 0 || toIndex < 0 {
+		return 99
+	}
+	gap := toIndex - fromIndex
+	if gap < 0 {
+		gap = -gap
+	}
+	ring := gap
+	if n := len(alive) - gap; n < ring {
+		ring = n
+	}
+	distance := ring
+	if from.AttackHorse != "" {
+		distance--
+	}
+	if hasSkill(from, "马术") {
+		distance--
+	}
+	if to.DefenseHorse != "" {
+		distance++
+	}
+	if distance < 1 {
+		distance = 1
+	}
+	return distance
+}
+
 func renderState(message serverMessage, writer *bufio.Writer) bool {
 	lastPlayers = message.Snapshot.Players
 	fmt.Printf("\n第 %d 回合 | %s\n", message.Snapshot.Turn, message.Snapshot.Phase)
@@ -140,10 +221,17 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 		fmt.Printf("- %s\n", line)
 	}
 	fmt.Println("\n战场：")
+	me := findPlayer(message.Snapshot.Players, myPlayerID)
 	for _, item := range message.Snapshot.Players {
 		marker := " "
 		if item.ID == message.Snapshot.CurrentPlayerID {
 			marker = ">"
+		}
+		reachInfo := ""
+		if item.ID == myPlayerID {
+			reachInfo = fmt.Sprintf(" 攻击范围:%d", attackRange(item.Weapon))
+		} else if item.Alive {
+			reachInfo = fmt.Sprintf(" 距离:%d", ringDistance(message.Snapshot.Players, me, item))
 		}
 		hand := fmt.Sprintf("%d 张", item.HandCount)
 		if item.Hand != nil {
@@ -160,7 +248,7 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 		if item.FaceDown {
 			state = "翻面"
 		}
-		fmt.Printf("%s %s [%s]  身份:%s  体力:%d/%d  手牌:%s  状态:%s\n", marker, item.Name, item.General, item.Role, item.HP, item.MaxHP, hand, state)
+		fmt.Printf("%s %s [%s]  身份:%s  体力:%d/%d  手牌:%s  状态:%s%s\n", marker, item.Name, item.General, item.Role, item.HP, item.MaxHP, hand, state, reachInfo)
 		fmt.Printf("  装备 | 武器:%s | 防具:%s | 进攻马:%s | 防御马:%s | 宝物:%s\n",
 			equipmentName(item.Weapon), equipmentName(item.Armor), equipmentName(item.AttackHorse),
 			equipmentName(item.DefenseHorse), equipmentName(item.Treasure))
@@ -215,7 +303,8 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 	payload := map[string]interface{}{"type": "action", "actionIndex": actionIndex}
 	if selected.Type != "end" && selected.RequiresTarget {
 		for index, id := range selected.Targets {
-			fmt.Printf("%d. %s\n", index+1, playerName(message.Snapshot.Players, id))
+			dist := ringDistance(message.Snapshot.Players, me, findPlayer(message.Snapshot.Players, id))
+			fmt.Printf("%d. %s (距离%d)\n", index+1, playerName(message.Snapshot.Players, id), dist)
 		}
 		targetIndex := choose("选择目标: ", len(selected.Targets))
 		if targetIndex < 0 {

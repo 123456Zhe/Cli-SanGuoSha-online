@@ -131,6 +131,7 @@ export type NetworkPlayerConfig = {
 export type GeneralDefinition = {
   kingdom: "魏" | "蜀" | "吴" | "群雄";
   name: string;
+  gender: "男" | "女";
   maxHp: number;
   skills: SkillName[];
 };

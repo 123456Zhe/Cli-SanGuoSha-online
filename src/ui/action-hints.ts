@@ -71,7 +71,7 @@ export function getActionHint(action: GameAction): string {
     return "抵消一张锦囊牌对单个目标的生效";
   }
   if (cardType === CardType.Crossbow) {
-    return "武器：攻击范围2，出牌阶段可无限次使用杀";
+    return "武器：攻击范围1，出牌阶段可无限次使用杀";
   }
   if (cardType === CardType.FemaleSword) {
     return "武器：攻击范围2；异性目标响应杀后，随机弃其1手牌或你摸1张";

@@ -37,9 +37,10 @@ export type ResolveContext = {
   decide(request: InteractionRequest): Promise<InteractionDecision>;
   nextInteractionId(): number;
   buildUsableSources(player: Player): CardSource[];
-  removeUsableCardBySourceId(player: Player, sourceId: string): Card | undefined;
+  removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined>;
+  removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
-  drawJudgmentCard(reason: string, logs: string[]): Card | null;
+  drawJudgmentCard(reason: string, logs: string[], owner: Player): Promise<Card | null>;
   applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[]): Promise<void>;
   discardSelfCards(player: Player, count: number): Promise<string[]>;
   canPlayerRespond(playerId: string, kind: ResponseKind): boolean;
@@ -73,6 +74,50 @@ export function resolveSlash(
     if (fromSerpent) {
       logs.push("本次杀来自丈八蛇矛转化");
     }
+    // 流离：成为杀目标时，可弃1张牌将此杀转移给攻击范围内的其他角色
+    if (ctx.hasSkill(target, SkillName.LiuLi)) {
+      const redirectCandidates = ctx.players.filter(
+        (player) => player.alive && player.id !== target.id && player.id !== attacker.id && canReachForSlash(ctx, target, player),
+      );
+      const liuLiSources = ctx.buildUsableSources(target);
+      if (redirectCandidates.length > 0 && liuLiSources.length > 0) {
+        const discardDecision = await ctx.decide({
+          kind: "choose-discard",
+          requestId: ctx.nextInteractionId(),
+          playerId: target.id,
+          reason: `${target.name} 的${SkillName.LiuLi}：弃置1张牌以将此杀转移？`,
+          sources: liuLiSources,
+          count: 1,
+          allowPass: true,
+          passLabel: `不发动${SkillName.LiuLi}`,
+        });
+        if (discardDecision.choice === "card") {
+          const discarded = await ctx.removeUsableCardBySourceId(target, discardDecision.sourceId);
+          if (discarded) {
+            ctx.discardPile.push(discarded);
+            const redirectDecision = await ctx.decide({
+              kind: "collateral",
+              requestId: ctx.nextInteractionId(),
+              targetId: target.id,
+              actorId: attacker.id,
+              victims: redirectCandidates.map((player) => player.id),
+              sources: [],
+              allowHandOverWeapon: false,
+              reason: `${SkillName.LiuLi}：将此杀转移给攻击范围内的其他角色`,
+            });
+            const chosen =
+              redirectDecision.choice === "target"
+                ? redirectCandidates.find((player) => player.id === redirectDecision.targetId)
+                : undefined;
+            if (chosen) {
+              logs.push(`${target.name} 发动${SkillName.LiuLi}，弃置 ${discarded.type} 将杀转移给 ${chosen.name}`);
+              logs.push(...(await resolveSlash(ctx, attacker, chosen, fromSerpent, fire, redSlash)));
+              return logs;
+            }
+          }
+        }
+      }
+    }
     const ignoreArmor = attacker.weapon === CardType.QinggangSword && await ctx.shouldActivateOptionalEffect(attacker, CardType.QinggangSword);
     if (!fire && !ignoreArmor && target.armor === CardType.VineArmor) {
       logs.push(`${target.name} 的藤甲生效，抵消了杀`);
@@ -91,7 +136,7 @@ export function resolveSlash(
           passLabel: `令${attacker.name}摸1张牌`,
         });
         if (decision.choice === "card") {
-          const removed = ctx.removeUsableCardBySourceId(target, decision.sourceId);
+          const removed = await ctx.removeUsableCardBySourceId(target, decision.sourceId);
           if (removed) {
             ctx.discardPile.push(removed);
             logs.push(`${attacker.name} 的雌雄双股剑生效，${target.name} 弃置了 ${removed.type}`);
@@ -106,7 +151,7 @@ export function resolveSlash(
       }
     }
     if (!ignoreArmor && target.armor === CardType.EightDiagram) {
-      const judgment = ctx.drawJudgmentCard(`${target.name} 的八卦阵`, logs);
+      const judgment = await ctx.drawJudgmentCard(`${target.name} 的八卦阵`, logs, target);
       if (judgment?.color === "red") {
         logs.push(`${target.name} 的八卦阵判定为红色，视为打出闪`);
         return logs;
@@ -114,7 +159,7 @@ export function resolveSlash(
     }
     let requireDodgeCount = ctx.hasSkill(attacker, SkillName.WuShuang) ? 2 : 1;
     if (ctx.hasSkill(attacker, SkillName.TieQi) && await ctx.shouldActivateOptionalEffect(attacker, SkillName.TieQi)) {
-      const judgment = ctx.drawJudgmentCard(`${attacker.name} 的${SkillName.TieQi}`, logs);
+      const judgment = await ctx.drawJudgmentCard(`${attacker.name} 的${SkillName.TieQi}`, logs, attacker);
       if (judgment?.color === "red") {
         requireDodgeCount = 0;
         logs.push(`${attacker.name} 的${SkillName.TieQi}判定为红色，此杀不可被闪避`);
@@ -151,7 +196,7 @@ export function resolveSlash(
       } else if (attacker.weapon === CardType.GreenDragonBlade && await ctx.shouldActivateOptionalEffect(attacker, CardType.GreenDragonBlade)) {
         const nextSlash = attacker.hand.findIndex((card) => isSlashCard(card.type));
         if (nextSlash >= 0) {
-          const slash = attacker.hand.splice(nextSlash, 1)[0];
+          const slash = await ctx.removeHandCardAt(attacker, nextSlash, logs);
           if (slash) {
             ctx.discardPile.push(slash);
             logs.push(`${attacker.name} 的青龙偃月刀生效，追加一张杀`);
@@ -220,6 +265,10 @@ export function resolveDismantle(ctx: ResolveContext, user: Player, target: Play
 export function resolveSnatch(ctx: ResolveContext, user: Player, target: Player, selectedCardId?: string): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 对 ${target.name} 使用顺手牵羊`];
+    if (ctx.hasSkill(target, SkillName.QianXun)) {
+      logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为顺手牵羊的目标`);
+      return logs;
+    }
     if (await tryNegate(ctx, target, CardType.Snatch, logs, user.id)) {
       return logs;
     }
@@ -398,7 +447,7 @@ export function resolveCollateral(ctx: ResolveContext, user: Player, target: Pla
     });
     if (response.choice === "target" && response.targetId === chosenVictim.id) {
       const sourceId = response.sourceId ?? slashSources[0]?.sourceId;
-      const slash = sourceId ? ctx.removeUsableCardBySourceId(target, sourceId) : undefined;
+      const slash = sourceId ? await ctx.removeUsableCardBySourceId(target, sourceId) : undefined;
       if (slash) {
         ctx.discardPile.push(slash);
         logs.push(`${target.name} 对 ${chosenVictim.name} 使用杀`);
@@ -418,11 +467,15 @@ export function resolveCollateral(ctx: ResolveContext, user: Player, target: Pla
 
 export function resolveDelayedTrick(ctx: ResolveContext, user: Player, usedCard: Card, targetId: string): Promise<string[]> {
   return (async () => {
-    const logs = [`${user.name} 对 ${ctx.mustGetPlayer(targetId).name} 使用 ${usedCard.type}`];
-    if (usedCard.type !== CardType.Lightning && await tryNegate(ctx, ctx.mustGetPlayer(targetId), usedCard.type, logs, user.id)) {
+    const target = ctx.mustGetPlayer(targetId);
+    const logs = [`${user.name} 对 ${target.name} 使用 ${usedCard.type}`];
+    if (usedCard.type === CardType.Indulgence && ctx.hasSkill(target, SkillName.QianXun)) {
+      logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为乐不思蜀的目标`);
       return logs;
     }
-    const target = ctx.mustGetPlayer(targetId);
+    if (usedCard.type !== CardType.Lightning && await tryNegate(ctx, target, usedCard.type, logs, user.id)) {
+      return logs;
+    }
     target.delayedTricks.push({ cardType: usedCard.type, sourcePlayerId: user.id });
     logs.push(`${target.name} 的判定区增加了 ${usedCard.type}`);
     return logs;
@@ -458,7 +511,7 @@ export function resolveSingleDelayedJudgment(ctx: ResolveContext, player: Player
     if (!trick) return logs;
     player.delayedTricks.splice(index, 1);
 
-    const judgment = ctx.drawJudgmentCard(`${player.name} 的 ${trick.cardType}`, logs);
+    const judgment = await ctx.drawJudgmentCard(`${player.name} 的 ${trick.cardType}`, logs, player);
     if (!judgment) return logs;
 
     if (trick.cardType === CardType.Lightning) {
@@ -998,16 +1051,17 @@ export function removeSelectedCardFromPlayer(
         return [];
       }
       const index = ctx.randomIndex(player.hand.length);
-      const removed = player.hand.splice(index, 1)[0];
+      const extraLogs: string[] = [];
+      const removed = await ctx.removeHandCardAt(player, index, extraLogs);
       if (!removed) {
-        return [];
+        return extraLogs;
       }
       if (mode === "获得" && receiver) {
         receiver.hand.push(removed);
-        return [`${receiver.name} 获得了 ${player.name} 的 1 张手牌`];
+        return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的 1 张手牌`];
       }
       ctx.discardPile.push(removed);
-      return [`${player.name} 的 1 张手牌被弃置`];
+      return [...extraLogs, `${player.name} 的 1 张手牌被弃置`];
     }
     if (selectedCardId.startsWith("hand:")) {
       const handCardId = selectedCardId.slice(5);
@@ -1015,16 +1069,17 @@ export function removeSelectedCardFromPlayer(
       if (index < 0) {
         return [];
       }
-      const removed = player.hand.splice(index, 1)[0];
+      const extraLogs: string[] = [];
+      const removed = await ctx.removeHandCardAt(player, index, extraLogs);
       if (!removed) {
-        return [];
+        return extraLogs;
       }
       if (mode === "获得" && receiver) {
         receiver.hand.push(removed);
-        return [`${receiver.name} 获得了 ${player.name} 的手牌 ${removed.type}`];
+        return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的手牌 ${removed.type}`];
       }
       ctx.discardPile.push(removed);
-      return [`${player.name} 的手牌 ${removed.type} 被弃置`];
+      return [...extraLogs, `${player.name} 的手牌 ${removed.type} 被弃置`];
     }
     if (selectedCardId === "weapon") {
       const removedWeapon = player.weapon;

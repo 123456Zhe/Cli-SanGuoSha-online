@@ -11,32 +11,28 @@ const humanGeneral: GeneralDefinition = {
 const commonGeneralPool: GeneralDefinition[] = [
   { kingdom: "魏", name: "夏侯惇", gender: "男", maxHp: 4, skills: [SkillName.GangLie] },
   { kingdom: "魏", name: "许褚", gender: "男", maxHp: 4, skills: [SkillName.LuoYi] },
-  { kingdom: "蜀", name: "关羽", gender: "男", maxHp: 4, skills: [SkillName.WuSheng] },
-  { kingdom: "蜀", name: "张飞", gender: "男", maxHp: 4, skills: [SkillName.Roar] },
-  { kingdom: "蜀", name: "赵云", gender: "男", maxHp: 4, skills: [SkillName.LongDan] },
-  { kingdom: "蜀", name: "马超", gender: "男", maxHp: 4, skills: [SkillName.MaShu, SkillName.TieQi] },
-  { kingdom: "蜀", name: "黄月英", gender: "女", maxHp: 3, skills: [SkillName.JiZhi, SkillName.QiCai] },
-  { kingdom: "吴", name: "黄盖", gender: "男", maxHp: 4, skills: [SkillName.KuRou] },
-  { kingdom: "群雄", name: "吕布", gender: "男", maxHp: 4, skills: [SkillName.WuShuang] },
-  { kingdom: "魏", name: "曹仁", gender: "男", maxHp: 4, skills: [SkillName.JuShou, SkillName.JieWei] },
-  { kingdom: "魏", name: "甄姬", gender: "女", maxHp: 3, skills: [SkillName.QingGuo, SkillName.LuoShen] },
-  { kingdom: "吴", name: "孙权", gender: "男", maxHp: 4, skills: [SkillName.ZhiHeng, SkillName.JiuYuan] },
-  { kingdom: "吴", name: "周瑜", gender: "男", maxHp: 3, skills: [SkillName.Heroic, SkillName.FanJian] },
-  { kingdom: "吴", name: "孙尚香", gender: "女", maxHp: 3, skills: [SkillName.JieYin, SkillName.XiaoJi] },
-  { kingdom: "群雄", name: "貂蝉", gender: "女", maxHp: 3, skills: [SkillName.LiJian, SkillName.BiYue] },
-  { kingdom: "群雄", name: "华佗", gender: "男", maxHp: 3, skills: [SkillName.QingNang, SkillName.JiJiu] },
-];
-
-// Kept only for loading explicit legacy configurations; these generals are not selectable or randomly assigned.
-const disabledGeneralDefinitions: GeneralDefinition[] = [
   { kingdom: "魏", name: "曹操", gender: "男", maxHp: 4, skills: [SkillName.JianXiong, SkillName.HuJia] },
   { kingdom: "魏", name: "张辽", gender: "男", maxHp: 4, skills: [SkillName.TuXi] },
   { kingdom: "魏", name: "郭嘉", gender: "男", maxHp: 3, skills: [SkillName.TianDu, SkillName.YiJi] },
   { kingdom: "魏", name: "司马懿", gender: "男", maxHp: 3, skills: [SkillName.FanKui, SkillName.GuiCai] },
+  { kingdom: "魏", name: "曹仁", gender: "男", maxHp: 4, skills: [SkillName.JuShou, SkillName.JieWei] },
+  { kingdom: "魏", name: "甄姬", gender: "女", maxHp: 3, skills: [SkillName.QingGuo, SkillName.LuoShen] },
+  { kingdom: "蜀", name: "关羽", gender: "男", maxHp: 4, skills: [SkillName.WuSheng] },
+  { kingdom: "蜀", name: "张飞", gender: "男", maxHp: 4, skills: [SkillName.Roar] },
+  { kingdom: "蜀", name: "赵云", gender: "男", maxHp: 4, skills: [SkillName.LongDan] },
+  { kingdom: "蜀", name: "马超", gender: "男", maxHp: 4, skills: [SkillName.MaShu, SkillName.TieQi] },
   { kingdom: "蜀", name: "刘备", gender: "男", maxHp: 4, skills: [SkillName.RenDe, SkillName.JiJiang] },
   { kingdom: "蜀", name: "诸葛亮（标准版）", gender: "男", maxHp: 3, skills: [SkillName.GuanXing, SkillName.KongCheng] },
+  { kingdom: "蜀", name: "黄月英", gender: "女", maxHp: 3, skills: [SkillName.JiZhi, SkillName.QiCai] },
+  { kingdom: "吴", name: "黄盖", gender: "男", maxHp: 4, skills: [SkillName.KuRou] },
+  { kingdom: "吴", name: "孙权", gender: "男", maxHp: 4, skills: [SkillName.ZhiHeng, SkillName.JiuYuan] },
+  { kingdom: "吴", name: "周瑜", gender: "男", maxHp: 3, skills: [SkillName.Heroic, SkillName.FanJian] },
   { kingdom: "吴", name: "陆逊", gender: "男", maxHp: 3, skills: [SkillName.QianXun, SkillName.LianYing] },
   { kingdom: "吴", name: "大乔", gender: "女", maxHp: 3, skills: [SkillName.GuoSe, SkillName.LiuLi] },
+  { kingdom: "吴", name: "孙尚香", gender: "女", maxHp: 3, skills: [SkillName.JieYin, SkillName.XiaoJi] },
+  { kingdom: "群雄", name: "吕布", gender: "男", maxHp: 4, skills: [SkillName.WuShuang] },
+  { kingdom: "群雄", name: "貂蝉", gender: "女", maxHp: 3, skills: [SkillName.LiJian, SkillName.BiYue] },
+  { kingdom: "群雄", name: "华佗", gender: "男", maxHp: 3, skills: [SkillName.QingNang, SkillName.JiJiu] },
 ];
 
 export const GENERAL_LIBRARY: GeneralDefinition[] = [humanGeneral, ...commonGeneralPool];
@@ -84,7 +80,7 @@ export function getRoleDistribution(roles: PlayerRole[]): { rebel: number; loyal
 }
 
 export function resolveGeneralByName(generalName: string): GeneralDefinition {
-  const found = [...GENERAL_LIBRARY, ...disabledGeneralDefinitions].find((item) => item.name === generalName);
+  const found = GENERAL_LIBRARY.find((item) => item.name === generalName);
   if (found) {
     return found;
   }

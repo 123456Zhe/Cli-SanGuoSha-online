@@ -1,6 +1,6 @@
 import { Card, CardType } from "./cards.js";
 import { countRemovableSelfCards } from "./card-utils.js";
-import { Player, SkillHook, SkillName, SkillTrigger } from "./types.js";
+import { InteractionDecision, InteractionRequest, Player, SkillHook, SkillName, SkillTrigger } from "./types.js";
 
 export type SkillHooksContext = {
   players: Player[];
@@ -10,11 +10,17 @@ export type SkillHooksContext = {
   shouldActivateOptionalEffect(player: Player, effect: SkillName | CardType): Promise<boolean>;
   drawCard(): Card | null;
   drawCards(playerId: string, count: number): number;
-  discardFromPlayerHand(player: Player, count: number, logs: string[]): number;
+  discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number>;
+  takeRandomHandCard(player: Player, receiver: Player): Promise<Card | undefined>;
+  drawTopCards(count: number): Card[];
+  placeCardsOnTop(cards: Card[]): void;
+  placeCardsOnBottom(cards: Card[]): void;
+  decide(request: InteractionRequest): Promise<InteractionDecision>;
+  nextInteractionId(): number;
   markSkillUsed(playerId: string, skill: SkillName): void;
   hasRemovableCard(player: Player): boolean;
   removeRandomCardFromPlayer(player: Player, mode: "弃置" | "获得", receiver?: Player): Promise<string[]>;
-  drawJudgmentCard(reason: string, logs: string[]): Card | null;
+  drawJudgmentCard(reason: string, logs: string[], owner: Player): Promise<Card | null>;
   discardSelfCards(player: Player, count: number): Promise<string[]>;
   applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[]): Promise<void>;
 };
@@ -84,13 +90,62 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         const option = ctx.rng() < 0.5 ? "draw" : "discard";
         if (option === "draw") {
           const drawn = ctx.drawCards(target.id, x);
-          const discarded = ctx.discardFromPlayerHand(target, 1, logs);
+          const discarded = await ctx.discardFromPlayerHand(target, 1, logs);
           logs.push(`${actor.name} 的${SkillName.YingHun}生效，令 ${target.name} 摸 ${drawn} 张牌并弃置 ${discarded} 张牌`);
         } else {
           const drawn = ctx.drawCards(target.id, 1);
-          const discarded = ctx.discardFromPlayerHand(target, x, logs);
+          const discarded = await ctx.discardFromPlayerHand(target, x, logs);
           logs.push(`${actor.name} 的${SkillName.YingHun}生效，令 ${target.name} 摸 ${drawn} 张牌并弃置 ${discarded} 张牌`);
         }
+      },
+      async (payload, logs) => {
+        const actor = payload.actor;
+        if (!actor || !ctx.hasSkill(actor, SkillName.GuanXing) || !await ctx.shouldActivateOptionalEffect(actor, SkillName.GuanXing)) {
+          return;
+        }
+        const aliveCount = ctx.players.filter((player) => player.alive).length;
+        const count = Math.min(5, aliveCount);
+        if (count <= 0) {
+          return;
+        }
+        const drawn = ctx.drawTopCards(count);
+        if (drawn.length === 0) {
+          return;
+        }
+        const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无花色" } as const;
+        logs.push(`${actor.name} 的${SkillName.GuanXing}生效，查看了牌堆顶 ${drawn.length} 张牌`);
+        const kept: Card[] = [];
+        const remaining = [...drawn];
+        while (remaining.length > 0) {
+          const sources = remaining.map((card) => ({
+            sourceId: `guangxing:${card.id}`,
+            origin: "hand" as const,
+            card,
+            label: `${suitNames[card.suit]}${card.rank} ${card.type}`,
+          }));
+          const decision = await ctx.decide({
+            kind: "choose-discard",
+            requestId: ctx.nextInteractionId(),
+            playerId: actor.id,
+            reason: `${SkillName.GuanXing}：选择保留在牌堆顶的牌（其余置入牌堆底）`,
+            sources,
+            count: 1,
+            allowPass: true,
+            passLabel: "完成观星",
+          });
+          if (decision.choice !== "card") {
+            break;
+          }
+          const pickedCard = remaining.find((card) => card.id === decision.sourceId.slice("guangxing:".length));
+          if (!pickedCard) {
+            break;
+          }
+          remaining.splice(remaining.indexOf(pickedCard), 1);
+          kept.push(pickedCard);
+        }
+        ctx.placeCardsOnTop(kept);
+        ctx.placeCardsOnBottom(remaining);
+        logs.push(`${actor.name} 的${SkillName.GuanXing}结束：${kept.length} 张牌置于牌堆顶，${remaining.length} 张置于牌堆底`);
       },
     ],
     before_draw: [
@@ -117,6 +172,33 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         ctx.markSkillUsed(actor.id, SkillName.LuoYi);
         logs.push(`${actor.name} 的${SkillName.LuoYi}生效，本回合少摸 1 张牌且伤害+1`);
       },
+      async (payload, logs) => {
+        const actor = payload.actor;
+        if (!actor || payload.drawCount === undefined) {
+          return;
+        }
+        if (!ctx.hasSkill(actor, SkillName.TuXi) || !await ctx.shouldActivateOptionalEffect(actor, SkillName.TuXi)) {
+          return;
+        }
+        payload.drawCount = 0;
+        const targets = ctx.players
+          .filter((item) => item.alive && item.id !== actor.id && item.hand.length > 0)
+          .sort((a, b) => b.hand.length - a.hand.length || a.hp - b.hp)
+          .slice(0, 2);
+        if (targets.length === 0) {
+          logs.push(`${actor.name} 发动${SkillName.TuXi}，但没有可突袭的角色，本回合跳过摸牌`);
+          return;
+        }
+        let obtained = 0;
+        for (const target of targets) {
+          const card = await ctx.takeRandomHandCard(target, actor);
+          if (card) {
+            obtained += 1;
+            logs.push(`${actor.name} 发动${SkillName.TuXi}，从 ${target.name} 处获得 1 张手牌`);
+          }
+        }
+        logs.push(`${actor.name} 的${SkillName.TuXi}生效，本回合改为从 ${obtained} 名角色处各获得 1 张手牌`);
+      },
     ],
     before_damage: [],
     after_damage: [
@@ -138,7 +220,7 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
           logs.push(`${target.name} 的${SkillName.YiJi}生效，摸了 ${drawn} 张牌`);
         }
         if (ctx.hasSkill(target, SkillName.GangLie) && await ctx.shouldActivateOptionalEffect(target, SkillName.GangLie)) {
-          const judgment = ctx.drawJudgmentCard(`${target.name} 的${SkillName.GangLie}`, logs);
+          const judgment = await ctx.drawJudgmentCard(`${target.name} 的${SkillName.GangLie}`, logs, target);
           const succeeded = judgment !== null && judgment.suit !== "heart";
           logs.push(`${target.name} 发动${SkillName.GangLie}，判定${succeeded ? "成功" : "失败"}`);
           if (succeeded) {

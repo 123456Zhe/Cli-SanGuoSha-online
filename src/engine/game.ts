@@ -52,6 +52,7 @@ import {
   canUseKuRou as canUseKuRouImpl,
   canUseLiJian as canUseLiJianImpl,
   canUseQingNang as canUseQingNangImpl,
+  canUseRenDe as canUseRenDeImpl,
   canUseZhiBa as canUseZhiBaImpl,
   canUseZhiHeng as canUseZhiHengImpl,
   getLordWithZhiBa as getLordWithZhiBaImpl,
@@ -134,6 +135,10 @@ export class SanGuoGame {
 
   private skillUsedThisTurn: Map<string, Set<SkillName>>;
 
+  private skillCountsThisTurn: Map<string, Map<SkillName, number>>;
+
+  private skillFlagsThisTurn: Map<string, Set<SkillName>>;
+
   private readonly skillHooks: Record<SkillTrigger, SkillHook[]>;
 
   private responsePolicyByPlayer: Map<string, Partial<Record<ResponseKind, boolean>>>;
@@ -166,6 +171,8 @@ export class SanGuoGame {
     this.slashUsedThisTurn = false;
     this.winner = null;
     this.skillUsedThisTurn = new Map();
+    this.skillCountsThisTurn = new Map();
+    this.skillFlagsThisTurn = new Map();
     this.skillHooks = createSkillHooks(this as unknown as SkillHooksContext);
     this.responsePolicyByPlayer = new Map();
     this.responseSelectionByPlayer = new Map();
@@ -212,6 +219,8 @@ export class SanGuoGame {
     this.winner = null;
     this.slashUsedThisTurn = false;
     this.skillUsedThisTurn = new Map();
+    this.skillCountsThisTurn = new Map();
+    this.skillFlagsThisTurn = new Map();
     this.responsePolicyByPlayer.clear();
     this.responseSelectionByPlayer.clear();
     this.optionalEffectDecisions.clear();
@@ -257,6 +266,8 @@ export class SanGuoGame {
     this.winner = null;
     this.slashUsedThisTurn = false;
     this.skillUsedThisTurn = new Map();
+    this.skillCountsThisTurn = new Map();
+    this.skillFlagsThisTurn = new Map();
     this.responsePolicyByPlayer.clear();
     this.responseSelectionByPlayer.clear();
     this.optionalEffectDecisions.clear();
@@ -423,6 +434,24 @@ export class SanGuoGame {
         });
       });
     }
+    if (this.hasSkill(player, SkillName.GuoSe)) {
+      player.hand.forEach((card, cardIndex) => {
+        if (card.suit !== "diamond") {
+          return;
+        }
+        const targets = this.findTargetsByCard(player.id, CardType.Indulgence);
+        if (targets.length === 0) {
+          return;
+        }
+        actions.push({
+          type: "play",
+          cardIndex: -100 - cardIndex,
+          label: `使用 国色（将方块牌${card.type}当${CardType.Indulgence}）`,
+          requiresTarget: true,
+          targets,
+        });
+      });
+    }
     if (
       player.weapon === CardType.SerpentSpear &&
       player.hand.length >= 2 &&
@@ -526,6 +555,20 @@ export class SanGuoGame {
         requiresTarget: false,
         targets: [],
       });
+    }
+    if (this.canUseRenDe(player)) {
+      const renDeTargets = this.players
+        .filter((item) => item.alive && item.id !== player.id)
+        .map((item) => item.id);
+      if (renDeTargets.length > 0) {
+        actions.push({
+          type: "skill",
+          skill: SkillName.RenDe,
+          label: `发动${SkillName.RenDe}（将手牌交给1名角色，本回合累计给出2张回复1点）`,
+          requiresTarget: true,
+          targets: renDeTargets,
+        });
+      }
     }
     if (this.canUseFanJian(player)) {
       const targets = this.players.filter((item) => item.alive && item.id !== player.id).map((item) => item.id);
@@ -675,7 +718,7 @@ export class SanGuoGame {
     if (!Number.isInteger(handIndex) || handIndex < 0 || handIndex >= player.hand.length) {
       return ["弃牌选择无效"];
     }
-    const removed = player.hand.splice(handIndex, 1)[0];
+    const removed = await this.removeHandCardAt(player, handIndex);
     if (!removed) {
       return ["弃牌选择无效"];
     }
@@ -706,6 +749,35 @@ export class SanGuoGame {
     if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
       return [];
     }
+    if (action.cardIndex <= -100 && action.cardIndex > -200) {
+      const index = -100 - action.cardIndex;
+      const converted = player.hand[index];
+      if (!converted || converted.suit !== "diamond" || !this.hasSkill(player, SkillName.GuoSe)) {
+        return ["使用卡牌失败"];
+      }
+      if (!targetId) {
+        return ["需要选择目标"];
+      }
+      const target = this.mustGetPlayer(targetId);
+      if (!target.alive || target.id === player.id) {
+        return ["目标无效"];
+      }
+      if (target.delayedTricks.some((t) => t.cardType === CardType.Indulgence)) {
+        return ["目标判定区已有乐不思蜀"];
+      }
+      const used = await this.removeHandCardAt(player, index);
+      if (!used) {
+        return ["使用卡牌失败"];
+      }
+      this.discardPile.push(used);
+      const convertedCard = this.createCard(CardType.Indulgence, `guose-${this.turn}`);
+      const logs = [`${player.name} 发动${SkillName.GuoSe}，将方块牌 ${used.type} 当${CardType.Indulgence}使用`];
+      logs.push(...(await this.resolveDelayedTrick(player, convertedCard, target.id)));
+      logs.push(...(await this.resolveDeaths()));
+      logs.push(...this.resolveWinner());
+      await this.advanceIfCurrentPlayerDead(logs);
+      return logs;
+    }
     if (action.cardIndex <= -200 && action.cardIndex > -400) {
       const index = -200 - action.cardIndex;
       const converted = player.hand[index];
@@ -727,7 +799,7 @@ export class SanGuoGame {
       ) {
         return ["目标无效"];
       }
-      const used = player.hand.splice(index, 1)[0];
+      const used = await this.removeHandCardAt(player, index);
       if (!used) {
         return ["使用卡牌失败"];
       }
@@ -761,7 +833,7 @@ export class SanGuoGame {
       ) {
         return ["目标无效"];
       }
-      const used = player.hand.splice(index, 1)[0];
+      const used = await this.removeHandCardAt(player, index);
       if (!used) {
         return ["使用卡牌失败"];
       }
@@ -842,8 +914,8 @@ export class SanGuoGame {
       if (!target.alive || target.id === player.id || !this.canReachForSlash(player, target)) {
         return ["目标无效"];
       }
-      const first = player.hand.shift();
-      const second = player.hand.shift();
+      const first = await this.removeHandCardAt(player, 0);
+      const second = await this.removeHandCardAt(player, 0);
       if (!first || !second) {
         return [`${player.name} 手牌不足，无法发动丈八蛇矛`];
       }
@@ -892,7 +964,7 @@ export class SanGuoGame {
       }
     }
 
-    const usedCard = player.hand.splice(action.cardIndex, 1)[0];
+    const usedCard = await this.removeHandCardAt(player, action.cardIndex);
     if (!usedCard) {
       return ["使用卡牌失败"];
     }
@@ -1120,22 +1192,28 @@ export class SanGuoGame {
     return { sourceId, origin: origin as CardSource["origin"], card, label: card.type };
   }
 
-  private removeUsableCardBySourceId(player: Player, sourceId: string): Card | undefined {
+  private async removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined> {
     const separator = sourceId.indexOf(":");
     if (separator < 0) {
       return undefined;
     }
     const origin = sourceId.slice(0, separator);
     const cardId = sourceId.slice(separator + 1);
-    const pool = origin === "treasure" ? player.treasureCards : origin === "hand" ? player.hand : null;
-    if (!pool) {
-      return undefined;
+    if (origin === "treasure") {
+      const index = player.treasureCards.findIndex((item) => item.id === cardId);
+      if (index < 0) {
+        return undefined;
+      }
+      return player.treasureCards.splice(index, 1)[0];
     }
-    const index = pool.findIndex((item) => item.id === cardId);
-    if (index < 0) {
-      return undefined;
+    if (origin === "hand") {
+      const index = player.hand.findIndex((item) => item.id === cardId);
+      if (index < 0) {
+        return undefined;
+      }
+      return this.removeHandCardAt(player, index);
     }
-    return pool.splice(index, 1)[0];
+    return undefined;
   }
 
   private buildDodgeSources(player: Player): CardSource[] {
@@ -1219,7 +1297,7 @@ export class SanGuoGame {
     return this.buildPeachSources(player);
   }
 
-  private consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): boolean {
+  private async consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
     const source = this.peekUsableCard(player, sourceId);
     if (!source) {
       return false;
@@ -1251,7 +1329,7 @@ export class SanGuoGame {
       }
       logs.push(`${player.name} 发动${convertedLabel}（${card.type}）`);
     }
-    const removed = this.removeUsableCardBySourceId(player, sourceId);
+    const removed = await this.removeUsableCardBySourceId(player, sourceId);
     if (!removed) {
       return false;
     }
@@ -1272,7 +1350,7 @@ export class SanGuoGame {
     }
     const selection = this.takePlayerResponseSelection(player.id, kind);
     if (selection) {
-      return this.consumeSelectedResponse(player, kind, selection, logs);
+      return await this.consumeSelectedResponse(player, kind, selection, logs);
     }
     const sources = this.buildResponseSources(player, kind);
     if (sources.length === 0) {
@@ -1297,7 +1375,7 @@ export class SanGuoGame {
     if (decision.choice !== "card") {
       return false;
     }
-    return this.consumeResponseCard(player, kind, decision.sourceId, logs);
+    return await this.consumeResponseCard(player, kind, decision.sourceId, logs);
   }
 
   private async requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
@@ -1319,7 +1397,7 @@ export class SanGuoGame {
       if (decision.choice !== "card") {
         break;
       }
-      const card = this.removeUsableCardBySourceId(player, decision.sourceId);
+      const card = await this.removeUsableCardBySourceId(player, decision.sourceId);
       if (!card) {
         break;
       }
@@ -1337,18 +1415,18 @@ export class SanGuoGame {
     return allowed !== false;
   }
 
-  private consumeSelectedResponse(player: Player, kind: ResponseKind, optionId: string, logs: string[]): boolean {
+  private async consumeSelectedResponse(player: Player, kind: ResponseKind, optionId: string, logs: string[]): Promise<boolean> {
     let cardId = optionId;
     if (optionId.startsWith("qingguo:") || optionId.startsWith("wusheng:") || optionId.startsWith("longdan:")) {
       cardId = optionId.slice(optionId.indexOf(":") + 1);
     }
     const handSourceId = `hand:${cardId}`;
     if (this.peekUsableCard(player, handSourceId)) {
-      return this.consumeResponseCard(player, kind, handSourceId, logs);
+      return await this.consumeResponseCard(player, kind, handSourceId, logs);
     }
     const treasureSourceId = `treasure:${cardId}`;
     if (this.peekUsableCard(player, treasureSourceId)) {
-      return this.consumeResponseCard(player, kind, treasureSourceId, logs);
+      return await this.consumeResponseCard(player, kind, treasureSourceId, logs);
     }
     return false;
   }
@@ -1358,7 +1436,7 @@ export class SanGuoGame {
     if (targetedDecisions?.has(player.id)) {
       const optionId = targetedDecisions.get(player.id);
       if (optionId === null || optionId === undefined) return false;
-      return this.consumeSelectedResponse(player, "peach", optionId, logs);
+      return await this.consumeSelectedResponse(player, "peach", optionId, logs);
     }
     if (!this.canPlayerRespond(player.id, "peach")) return false;
     return this.requestCardResponse(player, "peach", { cardName: CardType.Peach, actorId: dyingPlayerId }, logs);
@@ -1481,6 +1559,7 @@ export class SanGuoGame {
       return this.hasSkill(player, SkillName.JieWei) ? [SkillName.JieWei] : [];
     }
     const effects: (SkillName | CardType)[] = [];
+    if (this.hasSkill(player, SkillName.GuanXing)) effects.push(SkillName.GuanXing);
     if (this.hasSkill(player, SkillName.LuoShen)) effects.push(SkillName.LuoShen);
     if (this.hasSkill(player, SkillName.YingHun) && Math.max(0, player.maxHp - player.hp) > 0) {
       const others = this.players.filter((item) => item.alive && item.id !== player.id);
@@ -1488,6 +1567,7 @@ export class SanGuoGame {
     }
     if (this.hasSkill(player, SkillName.Heroic)) effects.push(SkillName.Heroic);
     if (this.hasSkill(player, SkillName.LuoYi)) effects.push(SkillName.LuoYi);
+    if (this.hasSkill(player, SkillName.TuXi)) effects.push(SkillName.TuXi);
     return effects;
   }
 
@@ -1578,7 +1658,7 @@ export class SanGuoGame {
     }
     while (player.hand.length > player.hp) {
       const index = this.randomIndex(player.hand.length);
-      const removed = player.hand.splice(index, 1)[0];
+      const removed = await this.removeHandCardAt(player, index);
       if (removed) {
         this.discardPile.push(removed);
         logs.push(`${player.name} 弃置了 ${removed.type}`);
@@ -1635,8 +1715,17 @@ export class SanGuoGame {
     if (cardType === CardType.Duel) {
       return targets.filter((id) => !this.isKongChengProtected(this.mustGetPlayer(id), cardType));
     }
-    if (cardType === CardType.Dismantle || cardType === CardType.Snatch) {
+    if (cardType === CardType.Dismantle) {
       return targets.filter((id) => hasRemovableCard(this.mustGetPlayer(id)));
+    }
+    if (cardType === CardType.Snatch) {
+      return targets.filter((id) => {
+        const holder = this.mustGetPlayer(id);
+        if (this.hasSkill(holder, SkillName.QianXun)) {
+          return false;
+        }
+        return hasRemovableCard(holder);
+      });
     }
     if (cardType === CardType.Collateral) {
       return targets.filter((id) => {
@@ -1651,6 +1740,9 @@ export class SanGuoGame {
     if (cardType === CardType.Indulgence || cardType === CardType.SuppliesCut) {
       return targets.filter((id) => {
         const holder = this.mustGetPlayer(id);
+        if (cardType === CardType.Indulgence && this.hasSkill(holder, SkillName.QianXun)) {
+          return false;
+        }
         return !holder.delayedTricks.some((t) => t.cardType === cardType);
       });
     }
@@ -1683,8 +1775,8 @@ export class SanGuoGame {
     return card ?? null;
   }
 
-  private drawJudgmentCard(reason: string, logs: string[]): Card | null {
-    const card = this.drawCard();
+  private async drawJudgmentCard(reason: string, logs: string[], owner?: Player): Promise<Card | null> {
+    let card = this.drawCard();
     if (!card) {
       logs.push(`${reason}无法判定：牌堆为空`);
       return null;
@@ -1692,6 +1784,40 @@ export class SanGuoGame {
     this.discardPile.push(card);
     const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无花色" } as const;
     logs.push(`${reason}判定牌：${suitNames[card.suit]}${card.rank} ${card.type}`);
+    const guiCaiPlayer = this.players.find((item) => item.alive && this.hasSkill(item, SkillName.GuiCai));
+    if (guiCaiPlayer) {
+      const sources = this.buildUsableSources(guiCaiPlayer);
+      if (sources.length > 0) {
+        const decision = await this.decide({
+          kind: "choose-discard",
+          requestId: this.nextInteractionId(),
+          playerId: guiCaiPlayer.id,
+          reason: `${reason}：${guiCaiPlayer.name} 是否发动${SkillName.GuiCai}，用手牌替换判定牌？`,
+          sources,
+          count: 1,
+          allowPass: true,
+          passLabel: `不发动${SkillName.GuiCai}`,
+        });
+        if (decision.choice === "card") {
+          const replacement = await this.removeUsableCardBySourceId(guiCaiPlayer, decision.sourceId);
+          if (replacement) {
+            this.discardPile.push(replacement);
+            card = replacement;
+            logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${replacement.type} 替换判定牌`);
+          }
+        }
+      }
+    }
+    if (owner && this.hasSkill(owner, SkillName.TianDu) && await this.shouldActivateOptionalEffect(owner, SkillName.TianDu)) {
+      const index = this.discardPile.findIndex((item) => item.id === card.id);
+      if (index >= 0) {
+        const [obtained] = this.discardPile.splice(index, 1);
+        if (obtained) {
+          owner.hand.push(obtained);
+          logs.push(`${owner.name} 的${SkillName.TianDu}生效，获得判定牌`);
+        }
+      }
+    }
     return card;
   }
 
@@ -1793,11 +1919,11 @@ export class SanGuoGame {
     return Math.floor(this.rng() * length);
   }
 
-  private discardFromPlayerHand(player: Player, count: number, logs: string[]): number {
+  private async discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number> {
     let discarded = 0;
     for (let i = 0; i < count && player.hand.length > 0; i += 1) {
       const index = this.randomIndex(player.hand.length);
-      const removed = player.hand.splice(index, 1)[0];
+      const removed = await this.removeHandCardAt(player, index);
       if (removed) {
         this.discardPile.push(removed);
         discarded += 1;
@@ -1807,6 +1933,70 @@ export class SanGuoGame {
       logs.push(`${player.name} 弃置了 ${discarded} 张手牌`);
     }
     return discarded;
+  }
+
+  // 集中式手牌移除：所有“失去手牌”的路径统一走这里，便于触发连营。
+  private async removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined> {
+    const removed = player.hand.splice(index, 1)[0];
+    if (removed) {
+      await this.checkLianYing(player, logs);
+    }
+    return removed;
+  }
+
+  // 连营：失去最后一张手牌时可摸一张牌。
+  private async checkLianYing(player: Player, logs?: string[]): Promise<void> {
+    if (this.winner !== null || !player.alive || player.hand.length > 0) {
+      return;
+    }
+    if (!this.hasSkill(player, SkillName.LianYing)) {
+      return;
+    }
+    if (!await this.shouldActivateOptionalEffect(player, SkillName.LianYing)) {
+      return;
+    }
+    const drawn = this.drawCards(player.id, 1);
+    if (drawn > 0 && logs) {
+      logs.push(`${player.name} 的${SkillName.LianYing}生效，失去最后手牌后摸了 ${drawn} 张牌`);
+    }
+  }
+
+  // 突袭/其他技能用：从目标获得 1 张随机手牌（不取装备）。
+  private async takeRandomHandCard(player: Player, receiver: Player): Promise<Card | undefined> {
+    if (player.hand.length === 0) {
+      return undefined;
+    }
+    const index = this.randomIndex(player.hand.length);
+    const removed = await this.removeHandCardAt(player, index);
+    if (removed) {
+      receiver.hand.push(removed);
+    }
+    return removed;
+  }
+
+  private drawTopCards(count: number): Card[] {
+    const drawn: Card[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const card = this.drawCard();
+      if (!card) {
+        break;
+      }
+      drawn.push(card);
+    }
+    return drawn;
+  }
+
+  private placeCardsOnTop(cards: Card[]): void {
+    for (let i = cards.length - 1; i >= 0; i -= 1) {
+      const card = cards[i];
+      if (card) {
+        this.deck.unshift(card);
+      }
+    }
+  }
+
+  private placeCardsOnBottom(cards: Card[]): void {
+    this.deck.push(...cards);
   }
 
   private async emitSkillTrigger(trigger: SkillTrigger, payload: SkillEventPayload, logs: string[]): Promise<void> {
@@ -1926,6 +2116,10 @@ export class SanGuoGame {
 
   private canUseKuRou(player: Player): boolean {
     return canUseKuRouImpl(this as unknown as SkillUseContext, player);
+  }
+
+  private canUseRenDe(player: Player): boolean {
+    return canUseRenDeImpl(this as unknown as SkillUseContext, player);
   }
 
   private canUseLiJian(player: Player): boolean {

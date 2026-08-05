@@ -25,7 +25,13 @@ export function getActionHint(action: GameAction): string {
     if (action.label.includes("苦肉")) {
       return "失去1点体力并摸2张牌";
     }
+    if (action.label.includes("仁德")) {
+      return "将手牌交给1名角色，本回合累计给出2张后回复1点体力";
+    }
     return "发动武将技能获得额外收益";
+  }
+  if (action.label.includes("国色")) {
+    return "将方块手牌当乐不思蜀对1名角色使用";
   }
   if (action.label.includes("木牛流马下的")) {
     return "从木牛流马中打出寄存牌，并按该牌原效果结算";

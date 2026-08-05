@@ -18,13 +18,17 @@ export type SkillUseContext = {
   phase: TurnPhase;
   slashUsedThisTurn: boolean;
   skillUsedThisTurn: Map<string, Set<SkillName>>;
+  skillCountsThisTurn: Map<string, Map<SkillName, number>>;
+  skillFlagsThisTurn: Map<string, Set<SkillName>>;
   optionalEffectDecisions: Map<string, boolean>;
   mustGetPlayer(id: string): Player;
   randomIndex(length: number): number;
   decide(request: InteractionRequest): Promise<InteractionDecision>;
   nextInteractionId(): number;
+  buildUsableSources(player: Player): CardSource[];
   requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]>;
-  removeUsableCardBySourceId(player: Player, sourceId: string): Card | undefined;
+  removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined>;
+  removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
   applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[]): Promise<void>;
   resolveDuel(user: Player, target: Player): Promise<string[]>;
@@ -39,6 +43,8 @@ export function hasSkill(player: Player, skill: SkillName): boolean {
 
 export function resetTurnSkillState(ctx: SkillUseContext, playerId: string): void {
   ctx.skillUsedThisTurn.set(playerId, new Set<SkillName>());
+  ctx.skillCountsThisTurn.set(playerId, new Map<SkillName, number>());
+  ctx.skillFlagsThisTurn.set(playerId, new Set<SkillName>());
 }
 
 export function markSkillUsed(ctx: SkillUseContext, playerId: string, skill: SkillName): void {
@@ -53,6 +59,28 @@ export function isSkillUsed(ctx: SkillUseContext, playerId: string, skill: Skill
     return false;
   }
   return state.has(skill);
+}
+
+export function getTurnSkillCount(ctx: SkillUseContext, playerId: string, skill: SkillName): number {
+  return ctx.skillCountsThisTurn.get(playerId)?.get(skill) ?? 0;
+}
+
+export function incrementTurnSkillCount(ctx: SkillUseContext, playerId: string, skill: SkillName): number {
+  const counts = ctx.skillCountsThisTurn.get(playerId) ?? new Map<SkillName, number>();
+  const next = (counts.get(skill) ?? 0) + 1;
+  counts.set(skill, next);
+  ctx.skillCountsThisTurn.set(playerId, counts);
+  return next;
+}
+
+export function hasTurnSkillFlag(ctx: SkillUseContext, playerId: string, skill: SkillName): boolean {
+  return ctx.skillFlagsThisTurn.get(playerId)?.has(skill) ?? false;
+}
+
+export function setTurnSkillFlag(ctx: SkillUseContext, playerId: string, skill: SkillName): void {
+  const flags = ctx.skillFlagsThisTurn.get(playerId) ?? new Set<SkillName>();
+  flags.add(skill);
+  ctx.skillFlagsThisTurn.set(playerId, flags);
 }
 
 export function shouldActivateOptionalEffect(
@@ -154,6 +182,13 @@ export function canUseKuRou(ctx: SkillUseContext, player: Player): boolean {
   return player.hp > 0;
 }
 
+export function canUseRenDe(ctx: SkillUseContext, player: Player): boolean {
+  if (!hasSkill(player, SkillName.RenDe) || player.hand.length === 0) {
+    return false;
+  }
+  return ctx.players.some((item) => item.alive && item.id !== player.id);
+}
+
 export function canUseLiJian(ctx: SkillUseContext, player: Player): boolean {
   if (!hasSkill(player, SkillName.LiJian) || player.hand.length === 0) {
     return false;
@@ -220,7 +255,13 @@ export async function useSkillAction(
     if (discardCount <= 0) {
       return [`${player.name} 没有可弃置手牌`];
     }
-    const discarded = player.hand.splice(0, discardCount);
+    const discarded: Card[] = [];
+    while (discarded.length < discardCount && player.hand.length > 0) {
+      const card = await ctx.removeHandCardAt(player, 0);
+      if (card) {
+        discarded.push(card);
+      }
+    }
     ctx.discardPile.push(...discarded);
     const drawn = ctx.drawCards(player.id, discardCount);
     markSkillUsed(ctx, player.id, SkillName.ZhiHeng);
@@ -256,6 +297,61 @@ export async function useSkillAction(
     logs.push(...(await ctx.resolveDeaths()));
     logs.push(...ctx.resolveWinner());
     await ctx.advanceIfCurrentPlayerDead(logs);
+    return logs;
+  }
+  if (action.skill === SkillName.RenDe) {
+    if (!canUseRenDe(ctx, player)) {
+      return [`${player.name} 当前无法发动${SkillName.RenDe}`];
+    }
+    if (!targetId) {
+      return ["需要选择目标"];
+    }
+    const target = ctx.mustGetPlayer(targetId);
+    if (!target.alive || target.id === player.id) {
+      return ["目标无效"];
+    }
+    const logs: string[] = [];
+    let given = 0;
+    while (player.hand.length > 0) {
+      const sources = ctx.buildUsableSources(player);
+      if (sources.length === 0) {
+        break;
+      }
+      const decision = await ctx.decide({
+        kind: "choose-discard",
+        requestId: ctx.nextInteractionId(),
+        playerId: player.id,
+        reason: `${SkillName.RenDe}：将手牌交给 ${target.name}（每张一次，放弃则停止）`,
+        sources,
+        count: 1,
+        allowPass: true,
+        passLabel: `停止${SkillName.RenDe}`,
+      });
+      if (decision.choice !== "card") {
+        break;
+      }
+      const card =
+        (await ctx.removeUsableCardBySourceId(player, decision.sourceId)) ??
+        (await ctx.removeHandCardAt(player, ctx.randomIndex(player.hand.length)));
+      if (!card) {
+        break;
+      }
+      target.hand.push(card);
+      given += 1;
+      logs.push(`${player.name} 发动${SkillName.RenDe}，将 ${card.type} 交给 ${target.name}`);
+    }
+    if (given === 0) {
+      return ["未给出任何手牌"];
+    }
+    let total = getTurnSkillCount(ctx, player.id, SkillName.RenDe);
+    for (let i = 0; i < given; i += 1) {
+      total = incrementTurnSkillCount(ctx, player.id, SkillName.RenDe);
+    }
+    if (total >= 2 && !hasTurnSkillFlag(ctx, player.id, SkillName.RenDe)) {
+      setTurnSkillFlag(ctx, player.id, SkillName.RenDe);
+      player.hp = Math.min(player.maxHp, player.hp + 1);
+      logs.push(`${player.name} 发动${SkillName.RenDe}累计给出 ${total} 张，回复 1 点体力`);
+    }
     return logs;
   }
   if (action.skill === SkillName.FanJian) {
@@ -297,9 +393,9 @@ export async function useSkillAction(
     });
     const card =
       pickDecision.choice === "card"
-        ? ctx.removeUsableCardBySourceId(player, pickDecision.sourceId) ??
-          player.hand.splice(ctx.randomIndex(player.hand.length), 1)[0]
-        : player.hand.splice(ctx.randomIndex(player.hand.length), 1)[0];
+        ? (await ctx.removeUsableCardBySourceId(player, pickDecision.sourceId)) ??
+          (await ctx.removeHandCardAt(player, ctx.randomIndex(player.hand.length)))
+        : await ctx.removeHandCardAt(player, ctx.randomIndex(player.hand.length));
     if (!card) {
       return [`${player.name} 没有可交给目标的手牌`];
     }
@@ -329,9 +425,9 @@ export async function useSkillAction(
       return [`${lord.name} 已觉醒，拒绝${player.name} 的${SkillName.ZhiBa}拼点`];
     }
     const attackerIndex = ctx.randomIndex(player.hand.length);
-    const attackerCard = player.hand.splice(attackerIndex, 1)[0];
+    const attackerCard = await ctx.removeHandCardAt(player, attackerIndex);
     const lordIndex = ctx.randomIndex(lord.hand.length);
-    const lordCard = lord.hand.splice(lordIndex, 1)[0];
+    const lordCard = await ctx.removeHandCardAt(lord, lordIndex);
     markSkillUsed(ctx, player.id, SkillName.ZhiBa);
     const logs = [
       `${player.name} 发动${SkillName.ZhiBa}，与${lord.name}拼点`,

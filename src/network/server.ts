@@ -27,6 +27,8 @@ export type GameServerOptions = {
   autoRestartAfterGameOver?: boolean;
   /** 允许同一来源（机器）同时在线多个玩家。默认 false：一台机器同一时间只允许一个活跃座位。 */
   allowMultiConnectionsPerSource?: boolean;
+  /** rules.md 的显式路径（嵌入到其他进程/仓库时 cwd 不可靠），缺省回落 process.cwd()/rules.md。 */
+  rulesPath?: string;
   aiCount?: number;
   aiDriver?: AiModelProvider | "simple";
   aiThinkingMs?: number;
@@ -103,8 +105,9 @@ export class GameServer {
   }
 
   private loadRules(): string {
+    const path = this.options.rulesPath ?? resolve(process.cwd(), "rules.md");
     try {
-      return readFileSync(resolve(process.cwd(), "rules.md"), "utf-8");
+      return readFileSync(path, "utf-8");
     } catch {
       return "";
     }

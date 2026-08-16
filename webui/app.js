@@ -8,7 +8,9 @@
   const STORAGE_MACHINE = "sgsMachineId";
   const MAX_RECONNECT_ATTEMPTS = 10;
 
-  const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+  // 宿主嵌入模式（如 PolyChat 插件）：由宿主注入 WS 路径与账号名获取端点，否则维持原生直连 /ws。
+  const HOSTED = Boolean(window.__SG_WS_PATH__);
+  const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${window.__SG_WS_PATH__ || "/ws"}`;
 
   // 机器标识：浏览器持久化，同一浏览器/同台机器的多个标签页共享，供服务器做“同机单账号”校验
   let machineId = localStorage.getItem(STORAGE_MACHINE);
@@ -16,6 +18,33 @@
     machineId = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     localStorage.setItem(STORAGE_MACHINE, machineId);
   }
+
+  // 宿主模式：自动从宿主的会话端点取账号名，省去手动填名
+  let hostedName = null;
+  let autoJoining = false;
+  const autoJoinWithHostedName = () => {
+    if (autoJoining || !HOSTED) return;
+    autoJoining = true;
+    fetch("/api/sanguosha/me", { headers: { accept: "application/json" } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        hostedName = (data && data.username) || null;
+        if (hostedName) {
+          playerName = hostedName;
+          localStorage.setItem(STORAGE_NAME, hostedName);
+          playerId = null;
+          localStorage.removeItem(STORAGE_ID);
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            send({ type: "join", name: hostedName, version: PROTOCOL_VERSION });
+          } else {
+            connect();
+          }
+        } else {
+          showJoinOverlay();
+        }
+      })
+      .catch(() => showJoinOverlay());
+  };
 
   let ws = null;
   let playerId = localStorage.getItem(STORAGE_ID);
@@ -65,6 +94,8 @@
         send({ type: "reconnect", playerId, version: PROTOCOL_VERSION });
       } else if (playerName) {
         send({ type: "join", name: playerName, version: PROTOCOL_VERSION });
+      } else if (HOSTED) {
+        autoJoinWithHostedName();
       } else {
         showJoinOverlay();
       }

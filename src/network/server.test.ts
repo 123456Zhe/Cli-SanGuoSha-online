@@ -303,4 +303,86 @@ void test("无机器标识（旧客户端）不受同机校验限制，同 IP �
   }
 });
 
+void test("乐不思蜀跳过出牌阶段后回合自动推进，不卡死在弃牌阶段", async () => {
+  console.log = () => {};
+  const game = new SanGuoGame(() => 0.5);
+  await game.initNetworkGame(
+    [
+      { id: "p1", name: "甲" },
+      { id: "p2", name: "乙" },
+      { id: "p3", name: "丙" },
+    ],
+    1,
+    false,
+  );
+  const runtime = game as unknown as {
+    players: Array<{
+      id: string;
+      hand: Array<{ id: string; type: CardType; color: "red" | "black"; suit?: string; rank?: number }>;
+      delayedTricks: Array<{ cardType: CardType; sourcePlayerId: string }>;
+    }>;
+    deck: Array<{ id: string; type: CardType; color: "red" | "black"; suit?: string; rank?: number }>;
+    currentPlayerIndex: number;
+  };
+  for (const player of runtime.players) {
+    player.hand = [{ id: `${player.id}-card`, type: CardType.Slash, color: "red", suit: "heart", rank: 7 }];
+    player.delayedTricks = [];
+  }
+  // 判定牌为非红桃（梅花）：p1 的乐不思蜀判定失败 → 跳过出牌阶段 → 引擎把回合收尾挂起到
+  // pendingTurnEndPlayer，服务器必须自动消费推进，否则卡死在弃牌阶段（回归 #乐不思蜀卡死）。
+  runtime.deck = [
+    { id: "judge-club", type: CardType.Slash, color: "black", suit: "club", rank: 3 },
+    { id: "d1", type: CardType.Peach, color: "red", suit: "heart", rank: 7 },
+    { id: "d2", type: CardType.Peach, color: "red", suit: "heart", rank: 8 },
+    { id: "d3", type: CardType.Slash, color: "red", suit: "heart", rank: 9 },
+    { id: "d4", type: CardType.Slash, color: "red", suit: "heart", rank: 10 },
+  ];
+  runtime.players[0]!.delayedTricks = [{ cardType: CardType.Indulgence, sourcePlayerId: "p2" }];
+  runtime.currentPlayerIndex = runtime.players.findIndex((player) => player.id === "p1");
+
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple" },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port);
+  const c2 = await TestClient.connect(port);
+  const c3 = await TestClient.connect(port);
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    // p1（人类）被乐不思蜀跳过出牌阶段：没有出牌/弃牌消息可发，
+    // 服务器必须自动收尾并推进到下一玩家，而不是卡在"弃牌阶段 + 无动作"。
+    const deadline = Date.now() + 5_000;
+    let advanced = false;
+    let stuckAtDiscard = false;
+    while (Date.now() < deadline) {
+      const states = c2.messages.filter((m) => m.type === "state");
+      const last = states.at(-1);
+      if (last && last.type === "state") {
+        if (last.snapshot.currentPlayerId !== "p1") {
+          advanced = true;
+          break;
+        }
+        if (last.snapshot.phase === "弃牌阶段" && last.actions.length === 0 && last.pendingDiscardCount === 0) {
+          stuckAtDiscard = true;
+        }
+      }
+      await wait(100);
+    }
+    assert.equal(advanced, true, "乐不思蜀跳过出牌阶段后回合应自动推进到下一玩家");
+    if (stuckAtDiscard) {
+      assert.fail("回合曾卡死在弃牌阶段（无动作且无需弃牌）");
+    }
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
 

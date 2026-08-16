@@ -1,6 +1,6 @@
 import { createServer, Socket, Server } from "node:net";
 import { createHash, randomInt } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
@@ -33,6 +33,8 @@ export type GameServerOptions = {
   aiContextRounds?: number;
   aiReasoning?: ReasoningMode;
   aiStrategy?: "own" | "always";
+  /** 服务端日志等级：info=仅关键事件（默认）；debug=每一条对局日志实时回显并完整写入 devlog/server-log.md。 */
+  logLevel?: "info" | "debug";
 };
 
 const AI_NAME_PREFIX = "[AI]电脑-";
@@ -105,6 +107,24 @@ export class GameServer {
       return readFileSync(resolve(process.cwd(), "rules.md"), "utf-8");
     } catch {
       return "";
+    }
+  }
+
+  /** 追加对局日志；debug 等级下逐条回显到房主控制台并完整追加写入 devlog/server-log.md（跨局保留，不截断）。 */
+  private log(...lines: string[]): void {
+    this.logs.push(...lines);
+    if (this.options.logLevel !== "debug") {
+      return;
+    }
+    const timestamp = new Date().toISOString();
+    const text = lines.map((line) => `[${timestamp}] ${line}`).join("\n");
+    console.log(`[server] ${text}`);
+    try {
+      const dir = resolve(process.cwd(), "devlog");
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(resolve(dir, "server-log.md"), `${text}\n`, "utf-8");
+    } catch {
+      // 文件日志写入失败不影响对局
     }
   }
 
@@ -229,7 +249,7 @@ export class GameServer {
     const winner = snapshot.winner;
     const msg = '游戏结束：' + (winner === 'draw' ? '平局！' : (winner === 'human' ? '人类玩家胜利！' : 'AI 玩家胜利！'));
     this.broadcast({ type: "game_over", winner, message: msg });
-    this.logs.push(msg);
+    this.log(msg);
     await new Promise((resolve) => setTimeout(resolve, 3000));
     await this.restartGame();
     this.restarting = false;
@@ -417,7 +437,7 @@ export class GameServer {
       this.send(socket, { type: "interaction", request: this.pendingInteraction.request });
     }
     this.broadcast({ type: "player_reconnected", playerName });
-    this.logs.push(wasTakenOver ? `${playerName} 已重连，AI 控制权已交还` : `${playerName} 已重连`);
+    this.log(wasTakenOver ? `${playerName} 已重连，AI 控制权已交还` : `${playerName} 已重连`);
     console.log(wasTakenOver ? `${playerName} 已重连，AI 控制权已交还` : `${playerName} 已重连`);
     this.sendStateToPeer(peer);
     this.broadcastState();
@@ -430,7 +450,7 @@ export class GameServer {
       if (snapshot.players.length === 0) {
         const aiConfigs = this.buildAiConfigs();
         this.aiPlayerIds = aiConfigs.map((config) => config.id);
-        this.logs.push(
+        this.log(
           ...(await this.game.initNetworkGame(
             [...Array.from(this.peers.values()).map(({ id, name }) => ({ id, name })), ...aiConfigs],
             this.options.openingHandCount,
@@ -553,10 +573,15 @@ export class GameServer {
       await this.askOptionalEffect(playerId, effect, "摸牌阶段");
     }
     const logs = await this.game.startTurn();
-    this.logs.push(...logs);
+    this.log(...logs);
     this.trackBattlefield();
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    // startTurn 可能因「跳过出牌阶段」（乐不思蜀判定失败、翻面等）直接走完弃牌，
+    // 把回合收尾挂起到 pendingTurnEndPlayer——正常路径由出牌/弃牌消息触发 resolveTurnEnd 消费，
+    // 这里必须统一消费，否则真人/AI 回合都会卡死在弃牌阶段（pendingDiscardCount=0 且无动作可执行）。
+    // resolveTurnEnd 内部自带保护：pendingTurnEndPlayer 为空或不属于当前玩家时直接返回。
+    await this.resolveTurnEnd(playerId);
     if (!this.game.isGameOver() && this.isAiDriven(this.game.getCurrentPlayer().id)) {
       await this.driveAiTurn(this.game.getCurrentPlayer().id);
     }
@@ -592,7 +617,7 @@ export class GameServer {
         // 兜底：LLM 可能反复执行木牛流马「置入/取出」等无收益空转，动作数达上限强制收尾
         const actionLimit = computeAiTurnActionLimit(current.hand.length, current.treasureCards.length);
         if (actionsTaken >= actionLimit) {
-          this.logs.push(`${seatLabel} ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
+          this.log(`${seatLabel} ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
           this.broadcastInterimState();
           const ended = await this.forceEndAiTurn(aiId);
           if (!ended || this.isStaleDrive(aiId, driveEpoch)) {
@@ -604,7 +629,7 @@ export class GameServer {
         const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
         this.aiLoop?.setPreviousRoundContexts(previousRounds);
         this.localAiEngine.syncPreviousRounds(previousRounds);
-        this.logs.push(`${seatLabel} ${current.name} 正在思考...`);
+        this.log(`${seatLabel} ${current.name} 正在思考...`);
         this.broadcastInterimState();
         const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
         if (this.isStaleDrive(aiId, driveEpoch)) {
@@ -620,19 +645,19 @@ export class GameServer {
         }
         const targetText = decision.targetId ? ` -> ${this.labelPlayer(decision.targetId)}` : "";
         const reasonText = picked.fallbackReason ? `（回退原因：${picked.fallbackReason}）` : "";
-        this.logs.push(`[${picked.driverLabel}] ${current.name} 选择：${decision.action.label}${targetText}${reasonText}`);
+        this.log(`[${picked.driverLabel}] ${current.name} 选择：${decision.action.label}${targetText}${reasonText}`);
         const targetName = decision.targetId
           ? this.game.getSnapshot().players.find((player) => player.id === decision.targetId)?.name ?? decision.targetId
           : undefined;
-        this.logs.push(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
+        this.log(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
         this.broadcastInterimState();
         const actionLogs = await this.game.playAction(aiId, decision.action, decision.targetId);
         if (this.isStaleDrive(aiId, driveEpoch)) {
           return;
         }
-        this.logs.push(...actionLogs);
-        this.logs.push(...(await this.game.ensureTurnState()));
-        this.logs.push(...(await this.game.resolvePendingDeaths()));
+        this.log(...actionLogs);
+        this.log(...(await this.game.ensureTurnState()));
+        this.log(...(await this.game.resolvePendingDeaths()));
         this.trackBattlefield();
         this.broadcastState();
         await this.checkAndHandleGameOver();
@@ -658,7 +683,7 @@ export class GameServer {
       return false;
     }
     const endLogs = await this.game.playAction(aiId, forcedEndAction);
-    this.logs.push(...endLogs);
+    this.log(...endLogs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
     await this.advanceIfCurrentPlayerDead();
@@ -717,7 +742,7 @@ export class GameServer {
         ? this.game.getSnapshot().players.find((p) => p.id === targetId)?.name ?? targetId
         : undefined;
       if (action.type !== "end") {
-        this.logs.push(`${peer.name} 正在使用 ${action.label}${targetName ? " 目标 " + targetName : ""}`);
+        this.log(`${peer.name} 正在使用 ${action.label}${targetName ? " 目标 " + targetName : ""}`);
         this.broadcastInterimState();
       }
 
@@ -725,7 +750,7 @@ export class GameServer {
       logs.push(...(await this.game.playAction(peer.id, action, targetId, selectedCardId)));
       logs.push(...(await this.game.ensureTurnState()));
       logs.push(...(await this.game.resolvePendingDeaths()));
-      this.logs.push(...logs);
+      this.log(...logs);
       this.broadcastState();
 
       await this.checkAndHandleGameOver();
@@ -741,7 +766,7 @@ export class GameServer {
 
   private async handleDiscard(peer: Peer, handIndex: number): Promise<void> {
     const logs = await this.game.discardForCurrentPlayer(peer.id, handIndex);
-    this.logs.push(...logs);
+    this.log(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
     if (this.game.getPendingDiscardCount(peer.id) === 0) {
@@ -764,7 +789,7 @@ export class GameServer {
     const snapshot = this.game.getSnapshot();
     for (const aiId of targets) {
       const name = snapshot.players.find((player) => player.id === aiId)?.name ?? aiId;
-      this.logs.push(`[AI] ${name} 正在复盘局势...`);
+      this.log(`[AI] ${name} 正在复盘局势...`);
       this.broadcastInterimState();
       void this.aiLoop.reviewStrategy(this.game, aiId, snapshot).catch(() => {// 后台复盘失败不影响对局
       });
@@ -781,7 +806,7 @@ export class GameServer {
     const player = this.game.getSnapshot().players.find((p) => p.id === playerId);
     if (player) {
       const logs = await this.game.finishTurn(player as any);
-      this.logs.push(...logs);
+      this.log(...logs);
       this.trackBattlefield();
       this.broadcastState();
       await this.checkAndHandleGameOver();
@@ -797,7 +822,7 @@ export class GameServer {
     if (current.alive) return;
     const logs: string[] = [`${current.name} 已阵亡`];
     logs.push(...(await this.game.resolvePendingDeaths()));
-    this.logs.push(...logs);
+    this.log(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
     this.reviewStrategiesForTurnEnd(current.id);
@@ -873,7 +898,7 @@ export class GameServer {
       return;
     }
     if (player && !player.alive) {
-      this.logs.push(`${peer.name} 已阵亡退出`);
+      this.log(`${peer.name} 已阵亡退出`);
       console.log(`${peer.name} 阵亡退出，无需等待重连`);
       return;
     }
@@ -887,7 +912,7 @@ export class GameServer {
     if (!alreadyNotified) {
       this.broadcast({ type: "player_disconnected", playerName: peer.name, waitTimeSeconds: this.reconnectTimeoutMs / 1000 });
     }
-    this.logs.push(`${peer.name} 断线了，AI 已托管其座位，可随时重连取回控制权`);
+    this.log(`${peer.name} 断线了，AI 已托管其座位，可随时重连取回控制权`);
     console.log(`${peer.name} 断线，AI 托管中，可随时重连`);
     // 正在等待该玩家的交互请求改由 AI 应答（若等待期间玩家已重连则改为 pass）。
     if (this.pendingInteraction?.playerId === peer.id) {

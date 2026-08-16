@@ -10,6 +10,7 @@ const aiContextRounds = Number.parseInt(valueOf("ai-context-rounds", "30"), 10);
 const aiDriverValue = valueOf("ai-driver", "qwen");
 const aiReasoningValue = valueOf("ai-reasoning", "auto");
 const aiStrategyValue = valueOf("ai-strategy", "own");
+const logLevelValue = valueOf("log-level", "info");
 const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
 if (!Number.isInteger(playerCount) || playerCount < 2 || playerCount > 6) throw new Error("--players 必须为 2 到 6");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port 无效");
@@ -17,6 +18,7 @@ if (!Number.isInteger(aiCount) || aiCount < 0 || aiCount >= playerCount) throw n
 if (aiDriverValue !== "qwen" && aiDriverValue !== "ollama" && aiDriverValue !== "simple") throw new Error("--ai-driver 必须为 qwen/ollama/simple");
 if (aiReasoningValue !== "auto" && aiReasoningValue !== "fast" && aiReasoningValue !== "normal" && aiReasoningValue !== "deep") throw new Error("--ai-reasoning 必须为 auto/fast/normal/deep");
 if (aiStrategyValue !== "own" && aiStrategyValue !== "always") throw new Error("--ai-strategy 必须为 own/always");
+if (logLevelValue !== "info" && logLevelValue !== "debug") throw new Error("--log-level 必须为 info/debug");
 const options: GameServerOptions = {
   host: valueOf("host", "0.0.0.0"),
   port,
@@ -30,5 +32,6 @@ const options: GameServerOptions = {
   aiContextRounds,
   aiReasoning: aiReasoningValue,
   aiStrategy: aiStrategyValue,
+  logLevel: logLevelValue,
 };
 await new GameServer(options).listen();

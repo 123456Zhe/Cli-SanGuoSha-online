@@ -278,28 +278,34 @@ export const buildStrategyPrompt = (input: {
   snapshot: GameSnapshot;
   agent: PromptAgentIdentity;
   previousRoundContexts: RoundPromptContext[];
+  previousStrategyBlock?: string;
 }): AgentPromptPackage => {
   const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
   const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
+  const strategyBlock = input.previousStrategyBlock
+    ? `\n你上次复盘形成的策略记忆：\n${input.previousStrategyBlock}\n`
+    : "\n你还没有形成策略记忆（首次复盘）。\n";
   const systemPrompt = [
     "你是三国杀游戏高手。",
     `你在本局中负责角色 ${input.agent.name}，身份是${input.agent.role}，武将是${input.agent.general}。`,
     "你的目标是尽最大可能让自己的身份阵营获胜。",
     "现在请以真人复盘与筹划的口吻，深度推理当前局势，制定接下来几轮的打法思路。",
-    "要求：输出一段连贯的中文文字（不要输出JSON），像真人分析一样说明你对局势的判断、集火与防御的对象、需要保留的关键牌、出牌与技能的倾向、以及对对手身份的推断。",
-    "篇幅可以较长，把关键博弈点讲清楚。",
+    "要求：先评估上次策略的执行情况与得失（若为首次复盘则写 无）；再提炼一句经验教训（可为空字符串）；再制定下一回合的战术笔记；最后给出对跨回合战略方针的增量更新（新推断或修正，若无更新写 不变）。",
+    "输出必须是JSON对象，禁止输出其他文本，格式：",
+    '{"execution":"上轮计划执行情况一句话评价（首次写 无）","lesson":"一句话教训（可为空字符串）","tactical":"下回合战术：首动倾向、保留关键牌、主要防范点，300字内","doctrineUpdate":"战略方针增量更新（身份推断/阵营目标/资源纪律），若无更新写 不变"}',
     "",
     "三国杀游戏rules：",
     input.rulesText,
   ].join("\n");
   const userPrompt = [
-    `游戏之前轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
+    `最近轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
     previousRoundsText,
+    strategyBlock,
     "",
     "游戏当前战场状态：",
     battlefieldText,
     "",
-    "请输出你的策略思考文字（自由格式，非JSON）。",
+    "请输出你的复盘JSON。",
   ].join("\n");
   return { systemPrompt, userPrompt };
 };

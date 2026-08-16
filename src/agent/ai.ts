@@ -13,6 +13,7 @@ import { callQwen35PlusDetailed, probeQwenConnectivity, QwenCallResult } from ".
 import { GameAction, GameSnapshot, SanGuoGame } from "../engine/game.js";
 import { CardSuit, InteractionDecision, InteractionRequest } from "../engine/interaction.js";
 import { writeAiLog } from "../devlog/ailog.js";
+import { parseStrategyReview, StrategyMemory } from "./strategy-memory.js";
 
 export type AiModelProvider = "ollama" | "qwen";
 
@@ -36,7 +37,8 @@ type SubAgent = {
   name: string;
   role: string;
   general: string;
-  strategyNote?: string;
+  /** 分层策略记忆：战术笔记(L1) + 战略方针(L2) + 经验教训(L3) + 执行回看。 */
+  memory: StrategyMemory;
 };
 
 type ModelDecision = {
@@ -67,12 +69,19 @@ const DEFAULT_MAX_CONTEXT_ROUNDS = 30;
 
 const DEFAULT_THINKING_MS = 1200;
 
-const STRATEGY_NOTE_MAX_LENGTH = 600;
+/** 复盘时只回看最近 8 个轮次，避免把整段共享历史重复塞入复盘 prompt。 */
+const STRATEGY_REVIEW_MAX_ROUNDS = 8;
 
 const delay = async (ms: number): Promise<void> => {
   await new Promise<void>((resolve) => {
     setTimeout(() => resolve(), ms);
   });
+};
+
+/** 将子代理的分层策略记忆组装为 prompt 的 strategyNote 字段（空记忆不传）。 */
+const strategyNoteFor = (agent: SubAgent): { strategyNote: string } | Record<string, never> => {
+  const block = agent.memory.composePromptBlock();
+  return block ? { strategyNote: block } : {};
 };
 
 const normalizeJson = (text: string): string => {
@@ -231,7 +240,7 @@ export class GameAiLoop {
 
   /** 为断线托管的人类座位注册子代理，使 decide/decideInteraction 可为其工作。 */
   registerSeatForTakeover(playerId: string, name: string, role: string, general: string): void {
-    this.subAgents.set(playerId, { playerId, name, role, general });
+    this.subAgents.set(playerId, { playerId, name, role, general, memory: new StrategyMemory() });
   }
 
   start(snapshot: GameSnapshot): number {
@@ -250,6 +259,7 @@ export class GameAiLoop {
         name: player.name,
         role: player.role,
         general: player.general,
+        memory: new StrategyMemory(),
       });
     }
     this.previousRoundContexts = [];
@@ -276,7 +286,8 @@ export class GameAiLoop {
   }
 
   getStrategyNote(playerId: string): string | undefined {
-    return this.subAgents.get(playerId)?.strategyNote;
+    const block = this.subAgents.get(playerId)?.memory.composePromptBlock();
+    return block || undefined;
   }
 
   async probe(): Promise<{ available: boolean; detail: string; driverLabel: AiDriverLabel }> {
@@ -552,7 +563,7 @@ export class GameAiLoop {
       actions,
       previousRoundContexts: this.previousRoundContexts,
       reasoningLevel: level,
-      ...(agent.strategyNote ? { strategyNote: agent.strategyNote } : {}),
+      ...strategyNoteFor(agent),
     });
     const messages: AgentMessage[] = [
       { role: "system", content: promptPackage.systemPrompt },
@@ -632,7 +643,7 @@ export class GameAiLoop {
       request,
       previousRoundContexts: this.previousRoundContexts,
       reasoningLevel: level,
-      ...(agent.strategyNote ? { strategyNote: agent.strategyNote } : {}),
+      ...strategyNoteFor(agent),
     });
     const messages: AgentMessage[] = [
       { role: "system", content: promptPackage.systemPrompt },
@@ -682,7 +693,8 @@ export class GameAiLoop {
   }
 
   /**
-   * 回合末策略博弈：输出一段真人式自由文字策略笔记并存储。
+   * 回合末策略复盘：单次 deep 调用输出结构化复盘（执行回看 + 教训 + 新战术 + 方针更新），
+   * 解析后写入分层策略记忆（战术笔记/战略方针/经验教训）。
    * 可在后台并行执行（传入调用时捕获的快照，避免与后续回合状态漂移）。
    */
   async reviewStrategy(game: SanGuoGame, playerId: string, snapshot?: GameSnapshot): Promise<boolean> {
@@ -700,6 +712,11 @@ export class GameAiLoop {
     }
     const level: ReasoningLevel = "deep";
     await this.think(level);
+    // 只回看「自上次复盘以来」的轮次（首次复盘退化为最近 4 轮历史）
+    const roundsSinceLast = this.previousRoundContexts.filter((item) => item.round > agent.memory.lastReviewRound);
+    const reviewContexts =
+      roundsSinceLast.length > 0 ? roundsSinceLast.slice(-STRATEGY_REVIEW_MAX_ROUNDS) : this.previousRoundContexts.slice(-4);
+    const previousBlock = agent.memory.composePromptBlock();
     const promptPackage = buildStrategyPrompt({
       rulesText: this.rulesText,
       snapshot: state,
@@ -709,7 +726,8 @@ export class GameAiLoop {
         role: agent.role,
         general: agent.general,
       },
-      previousRoundContexts: this.previousRoundContexts,
+      previousRoundContexts: reviewContexts,
+      ...(previousBlock ? { previousStrategyBlock: previousBlock } : {}),
     });
     const messages: AgentMessage[] = [
       { role: "system", content: promptPackage.systemPrompt },
@@ -727,11 +745,12 @@ export class GameAiLoop {
       prompt: messages,
       responseText: callResult.content,
     });
-    const note = callResult.content.trim();
-    if (!note) {
+    const review = parseStrategyReview(callResult.content);
+    if (!review) {
+      this.lastFailureReason = `${this.getPreferredDriverLabel()} 策略复盘输出解析失败`;
       return false;
     }
-    agent.strategyNote = note.slice(0, STRATEGY_NOTE_MAX_LENGTH);
+    agent.memory.applyReviewResult(review, state.turn);
     return true;
   }
 }

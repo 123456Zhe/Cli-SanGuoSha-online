@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CardType } from "../engine/cards.js";
 import { GameAction, PlayerRole, SanGuoGame } from "../engine/game.js";
-import { buildAgentPrompt, buildInteractionPrompt, pickReasoningLevel, REASONING_EFFORT, REASONING_THINKING_MULTIPLIER } from "./prompt.js";
+import { buildAgentPrompt, buildInteractionPrompt, buildStrategyPrompt, pickReasoningLevel, REASONING_EFFORT, REASONING_THINKING_MULTIPLIER } from "./prompt.js";
 
 const createSnapshot = async (overrides?: Partial<ReturnType<SanGuoGame["getSnapshot"]>>) => {
   const game = new SanGuoGame(() => 0.5);
@@ -194,3 +194,31 @@ void test("buildAgentPrompt：有木牛流马动作时注入慎用引导，避�
   });
   assert.ok(!withoutOx.userPrompt.includes("反复置入再取出是无意义的空转"), "无木牛流马动作时不应注入该引导");
 });
+
+void test("buildStrategyPrompt：复盘契约要求结构化 JSON（execution/lesson/tactical/doctrineUpdate）并注入上次策略记忆", async () => {
+  const snapshot = await createSnapshot();
+  const agent = { playerId: "ai-1", name: "电脑", role: PlayerRole.Rebel, general: "孙策" };
+  const prompt = buildStrategyPrompt({
+    rulesText: "规则",
+    snapshot,
+    agent,
+    previousRoundContexts: [{ round: 1, displayLines: ["第 1 回合：甲 的回合"], battlefieldLines: ["r1"] }],
+    previousStrategyBlock: "【战略方针·跨回合】3号位是忠臣\n【上回合战术】保留无懈",
+  });
+  assert.ok(prompt.systemPrompt.includes("输出必须是JSON对象"), "复盘应要求结构化 JSON 输出");
+  assert.ok(prompt.systemPrompt.includes('"execution"'), "契约应包含 execution 字段");
+  assert.ok(prompt.systemPrompt.includes('"tactical"'), "契约应包含 tactical 字段");
+  assert.ok(prompt.systemPrompt.includes('"doctrineUpdate"'), "契约应包含 doctrineUpdate 字段");
+  assert.ok(prompt.userPrompt.includes("上次复盘形成的策略记忆"), "应注入上次策略记忆供执行回看");
+  assert.ok(prompt.userPrompt.includes("3号位是忠臣"));
+  assert.ok(prompt.userPrompt.includes("保留无懈"));
+
+  const firstReview = buildStrategyPrompt({
+    rulesText: "规则",
+    snapshot,
+    agent,
+    previousRoundContexts: [],
+  });
+  assert.ok(firstReview.userPrompt.includes("首次复盘"), "无历史记忆时应提示首次复盘");
+});
+

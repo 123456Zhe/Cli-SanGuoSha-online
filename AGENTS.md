@@ -24,7 +24,7 @@ CLI 三国杀 (SanGuoSha) — a TypeScript CLI card game with a host-authoritati
 
 - Adding a card/skill/effect must sync all of: `cards.ts` (definition + deck), `resolve.ts` (结算)/`skills.ts` (主动技能)/`game.ts` (可玩动作 + 分发)，以及 `rules.md`/`README.md` 对应章节。Documented rules follow the **current implementation**, not full tabletop rulings.
 - Protocol changes: bump `NETWORK_PROTOCOL_VERSION` and update **both** the TS client and the Go light client.
-- Server always calls `game.setDeferDyingResolution(true)` and sets one `DecisionHandler` per peer. Disconnects get a 60s reconnect window (`reconnectTimeoutMs`); server auto-restarts after game over / room close.
+- Server always calls `game.setDeferDyingResolution(true)` and sets one `DecisionHandler` per peer. A human peer's disconnect **immediately** switches their seat to AI-driven (断线托管：`takeoverIds` + `registerTakeoverSeat`；turn driving via `driveAiTurn` + `pickAiTurnDecision`, same `--ai-driver` chain as native AI seats; `ai.ts`/`local-engine.ts` expose `setAllowNonAiSeats` + `registerSeatForTakeover` for this). Reconnect hands control back (`handleReconnect`, `seatEpoch` stops in-flight AI decisions). There is no timeout-based room close anymore; `reconnectTimeoutMs` only feeds the `player_disconnected` broadcast. Server auto-restarts after game over.
 - `--seed=N` gives a deterministic RNG (also `SG_SEED` env) for reproducible tests/replays.
 
 ## TypeScript constraints

@@ -22,7 +22,6 @@ const options: GameServerOptions = {
   playerCount,
   openingHandCount,
   autoRestartAfterGameOver: true,
-  autoRestartAfterClose: true,
   aiCount,
   aiDriver: aiDriverValue,
   aiThinkingMs,

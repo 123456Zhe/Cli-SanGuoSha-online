@@ -150,6 +150,9 @@ export class GameAiLoop {
 
   private reasoningMode: ReasoningMode;
 
+  /** 联机断线托管：允许驱动 isAI=false 的人类座位（玩家掉线后由 AI 代打）。 */
+  private allowNonAiSeats = false;
+
   constructor(rulesText: string, preferredProvider: AiModelProvider = "qwen") {
     this.rulesText = rulesText;
     this.started = false;
@@ -219,6 +222,16 @@ export class GameAiLoop {
 
   getReasoningMode(): ReasoningMode {
     return this.reasoningMode;
+  }
+
+  /** 联机断线托管用：允许对 isAI=false 的人类座位做出牌/交互决策。 */
+  setAllowNonAiSeats(enabled: boolean): void {
+    this.allowNonAiSeats = enabled;
+  }
+
+  /** 为断线托管的人类座位注册子代理，使 decide/decideInteraction 可为其工作。 */
+  registerSeatForTakeover(playerId: string, name: string, role: string, general: string): void {
+    this.subAgents.set(playerId, { playerId, name, role, general });
   }
 
   start(snapshot: GameSnapshot): number {
@@ -518,7 +531,7 @@ export class GameAiLoop {
     }
     const snapshot = game.getSnapshot();
     const current = snapshot.players.find((item) => item.id === playerId);
-    if (!current || !current.alive || !current.isAI || snapshot.currentPlayerId !== playerId) {
+    if (!current || !current.alive || (!current.isAI && !this.allowNonAiSeats) || snapshot.currentPlayerId !== playerId) {
       return null;
     }
     const actions = game.getPlayableActions(playerId);

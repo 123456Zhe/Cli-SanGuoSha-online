@@ -148,7 +148,7 @@ const handle = async (message: ServerMessage): Promise<void> => {
     left = true;
     socket.end();
   }
-  else if (message.type === "player_disconnected") { console.log(`${message.playerName} 已断线，${message.waitTimeSeconds}s 内可重连`); }
+  else if (message.type === "player_disconnected") { console.log(`${message.playerName} 已断线，AI 已托管其座位，可随时重连取回控制权`); }
   else if (message.type === "player_reconnected") { console.log(`${message.playerName} 已重连`); }
   else if (message.type === "reconnect_ok") {
     console.log(`已重连，你的 ID：${message.playerId}`);

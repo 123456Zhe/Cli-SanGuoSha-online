@@ -69,6 +69,9 @@ export class LocalAiEngine {
 
   private maxContextRounds: number;
 
+  /** 联机断线托管：允许对 isAI=false 的人类座位做出牌决策。 */
+  private allowNonAiSeats = false;
+
   constructor(rulesText: string) {
     this.rulesText = rulesText;
     this.memory = [];
@@ -82,6 +85,11 @@ export class LocalAiEngine {
     if (Number.isInteger(rounds) && rounds > 0) {
       this.maxContextRounds = rounds;
     }
+  }
+
+  /** 联机断线托管用：允许对 isAI=false 的人类座位做决策。 */
+  setAllowNonAiSeats(enabled: boolean): void {
+    this.allowNonAiSeats = enabled;
   }
 
   reset(): void {
@@ -105,7 +113,7 @@ export class LocalAiEngine {
   decide(game: SanGuoGame, playerId: string): LocalAiDecision | null {
     const snapshot = game.getSnapshot();
     const self = snapshot.players.find((item) => item.id === playerId);
-    if (!self || !self.alive || !self.isAI || snapshot.currentPlayerId !== playerId) {
+    if (!self || !self.alive || (!self.isAI && !this.allowNonAiSeats) || snapshot.currentPlayerId !== playerId) {
       return null;
     }
     const actions = game.getPlayableActions(playerId);

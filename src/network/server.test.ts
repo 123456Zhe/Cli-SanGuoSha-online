@@ -56,7 +56,10 @@ const createConfiguredGame = async () => {
 void test("主动退出后可在超时内重连", async () => {
   console.log = () => {};
   const { game } = await createConfiguredGame();
-  const server = new GameServer({ host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 500 }, game);
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 500, aiDriver: "simple" },
+    game,
+  );
   const port = await server.listen();
   const client1 = await TestClient.connect(port);
   const client2 = await TestClient.connect(port);
@@ -94,7 +97,10 @@ void test("主动退出后可在超时内重连", async () => {
 void test("网络掉线后提示重连且房间不立即关闭", async () => {
   console.log = () => {};
   const { game } = await createConfiguredGame();
-  const server = new GameServer({ host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 500 }, game);
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 500, aiDriver: "simple" },
+    game,
+  );
   const port = await server.listen();
   const client1 = await TestClient.connect(port);
   const client2 = await TestClient.connect(port);
@@ -201,3 +207,5 @@ void test("AI 玩家：1 人类 + 1 AI 开局，AI 自动完成出牌回合", as
     console.log = originalConsoleLog;
   }
 });
+
+

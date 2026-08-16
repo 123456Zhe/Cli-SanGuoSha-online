@@ -53,8 +53,6 @@ const createConfiguredGame = async () => {
   return { game, runtime };
 };
 
-
-
 const create2PlayerGame = async () => {
   const game = new SanGuoGame(() => 0.5);
   await game.initNetworkGame(
@@ -92,12 +90,27 @@ const create2PlayerGame = async () => {
   return { game, runtime };
 };
 
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 模拟在线玩家：对收到的交互一律应答 pass，避免牌局等待人类输入。 */
+const autoPassInteractions = (client: TestClient): (() => void) => {
+  let handled = 0;
+  const timer = setInterval(() => {
+    const total = client.messages.filter((m) => m.type === "interaction").length;
+    while (handled < total) {
+      handled += 1;
+      client.send({ type: "interaction", decision: { choice: "pass" } });
+    }
+  }, 20);
+  return () => clearInterval(timer);
+};
+
 void test("autoRestartAfterGameOver triggers restart", async () => {
   console.log = () => {};
   const { game } = await create2PlayerGame();
   (game as any).winner = "human";
   const server = new GameServer(
-    { host: "127.0.0.1", port: 0, playerCount: 2, openingHandCount: 1, reconnectTimeoutMs: 500, autoRestartAfterGameOver: true, autoRestartAfterClose: false },
+    { host: "127.0.0.1", port: 0, playerCount: 2, openingHandCount: 1, reconnectTimeoutMs: 500, autoRestartAfterGameOver: true, aiDriver: "simple" },
     game,
   );
   const port = await server.listen();
@@ -110,7 +123,6 @@ void test("autoRestartAfterGameOver triggers restart", async () => {
     await new Promise((resolve) => setTimeout(resolve, 5000));
     const go = c1.messages.filter((m) => m.type === "game_over");
     const gr = c1.messages.filter((m) => m.type === "game_restarting");
-    // Log what happened for debugging
     assert.ok(go.length > 0, "c1 should receive game_over");
     assert.ok(gr.length > 0, "c1 should receive game_restarting");
   } finally {
@@ -119,37 +131,65 @@ void test("autoRestartAfterGameOver triggers restart", async () => {
     await server.close();
     console.log = originalConsoleLog;
   }
-});void test("autoRestartAfterClose resets room on timeout", async () => {
+});
+
+void test("断线托管：掉线玩家的回合由 AI 推进，超时不关房，重连后交还控制权", async () => {
   console.log = () => {};
   const { game } = await createConfiguredGame();
   const server = new GameServer(
-    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 200, autoRestartAfterGameOver: false, autoRestartAfterClose: true },
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, reconnectTimeoutMs: 200, aiDriver: "simple", autoRestartAfterGameOver: false },
     game,
   );
   const port = await server.listen();
   const c1 = await TestClient.connect(port);
   const c2 = await TestClient.connect(port);
   const c3 = await TestClient.connect(port);
+  const stopC2 = autoPassInteractions(c2);
+  const stopC3 = autoPassInteractions(c3);
   try {
     c1.send({ type: "join", name: "甲", version: 4 });
     c2.send({ type: "join", name: "乙", version: 4 });
     c3.send({ type: "join", name: "丙", version: 4 });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await wait(100);
+    const welcome = c1.messages.find((m) => m.type === "welcome");
+    assert.ok(welcome, "c1 should be welcomed");
+
+    // 甲（p1）为当前行动玩家，掉线后其回合应由 AI 托管推进并结束
     c1.destroy();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const c2Closed = c2.messages.filter((m) => m.type === "closed");
-    assert.ok(c2Closed.length > 0, "c2 should receive closed");
-    const nc = await TestClient.connect(port);
+    const deadline = Date.now() + 10_000;
+    let currentId = "";
+    let logs = "";
+    while (Date.now() < deadline) {
+      const lastState = [...c2.messages].reverse().find((m) => m.type === "state");
+      if (lastState && lastState.type === "state") {
+        currentId = lastState.snapshot.currentPlayerId;
+        logs = lastState.logs.join("\n");
+        if (currentId !== welcome.playerId && logs.includes("AI 已托管")) {
+          break;
+        }
+      }
+      await wait(100);
+    }
+    assert.notEqual(currentId, welcome.playerId, "掉线玩家的回合应由 AI 推进并结束");
+    assert.ok(logs.includes("AI 已托管"), "其他玩家应看到托管提示");
+    assert.ok(!c2.messages.some((m) => m.type === "closed"), "超过重连超时后房间不应关闭");
+
+    // 重连取回控制权
+    const rc = await TestClient.connect(port);
     try {
-      nc.send({ type: "join", name: "丁", version: 4 });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const welcome = nc.messages.find((m) => m.type === "welcome");
-      assert.ok(welcome, "new player should be welcomed");
-      assert.equal(welcome.roomSize, 3, "room should still expect 3 players");
+      rc.send({ type: "reconnect", playerId: welcome.playerId, version: 4 });
+      await wait(200);
+      assert.ok(rc.messages.some((m) => m.type === "reconnect_ok"), "重连应成功");
+      const rcState = [...rc.messages].reverse().find((m) => m.type === "state");
+      if (rcState && rcState.type === "state") {
+        assert.ok(rcState.logs.join("\n").includes("控制权已交还"), "重连后应提示交还控制权");
+      }
     } finally {
-      nc.destroy();
+      rc.destroy();
     }
   } finally {
+    stopC2();
+    stopC3();
     c1.destroy();
     c2.destroy();
     c3.destroy();
@@ -162,7 +202,7 @@ void test("autoRestartAfterGameOver false does nothing", async () => {
   console.log = () => {};
   const { game } = await create2PlayerGame();
   const server = new GameServer(
-    { host: "127.0.0.1", port: 0, playerCount: 2, openingHandCount: 1, reconnectTimeoutMs: 500, autoRestartAfterGameOver: false, autoRestartAfterClose: false },
+    { host: "127.0.0.1", port: 0, playerCount: 2, openingHandCount: 1, reconnectTimeoutMs: 500, aiDriver: "simple" },
     game,
   );
   const port = await server.listen();

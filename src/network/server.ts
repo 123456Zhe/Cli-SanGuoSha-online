@@ -6,7 +6,7 @@ import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
-import { GameAction, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
+import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
 import { CardType } from "../engine/cards.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
@@ -17,7 +17,6 @@ type PendingInteraction = {
   request: InteractionRequest;
   resolve: (decision: InteractionDecision) => void;
 };
-type DisconnectedInfo = { name: string; timer: ReturnType<typeof setTimeout> };
 
 export type GameServerOptions = {
   host: string;
@@ -26,7 +25,6 @@ export type GameServerOptions = {
   openingHandCount: number;
   reconnectTimeoutMs?: number;
   autoRestartAfterGameOver?: boolean;
-  autoRestartAfterClose?: boolean;
   aiCount?: number;
   aiDriver?: AiModelProvider | "simple";
   aiThinkingMs?: number;
@@ -50,10 +48,14 @@ export class GameServer {
   private nextPlayerNumber = 1;
   private pendingAction: { peer: Peer; action: GameAction; targetId?: string; selectedCardId?: string } | null = null;
   private pendingInteraction: PendingInteraction | null = null;
-  private readonly disconnected = new Map<string, DisconnectedInfo>();
+  private readonly disconnected = new Map<string, string>(); // playerId -> 玩家名（断线托管，可随时重连取回）
   private readonly disconnectedIds = new Set<string>();
+  private readonly takeoverIds = new Set<string>(); // 断线托管中的人类座位
+  private readonly seatEpoch = new Map<string, number>(); // 每次断线/重连递增，用于终止在途的 AI 代打
+  private readonly activeDrivers = new Set<string>(); // 正在驱动出牌的座位，防止并发双驱
   private server: Server | null = null;
   private restarting = false;
+  private closing = false;
   private readonly aiLoop: GameAiLoop | null;
   private readonly localAiEngine: LocalAiEngine | null;
   private aiPlayerIds: string[] = [];
@@ -67,26 +69,24 @@ export class GameServer {
   constructor(private readonly options: GameServerOptions, game = new SanGuoGame(secureRng)) {
     this.game = game;
     this.game.setDeferDyingResolution(true);
-    const aiCount = options.aiCount ?? 0;
     this.contextRounds = options.aiContextRounds ?? DEFAULT_CONTEXT_ROUNDS;
-    if (aiCount > 0) {
-      const rulesText = this.loadRules();
-      this.localAiEngine = new LocalAiEngine(rulesText);
-      this.localAiEngine.setMaxContextRounds(this.contextRounds);
-      const driver = options.aiDriver ?? "qwen";
-      if (driver === "simple") {
-        this.aiLoop = null;
-      } else {
-        this.aiLoop = new GameAiLoop(rulesText, driver);
-        this.aiLoop.setMaxContextRounds(this.contextRounds);
-        this.aiLoop.setThinkingMs(options.aiThinkingMs ?? 1200);
-        if (options.aiReasoning) {
-          this.aiLoop.setReasoningMode(options.aiReasoning);
-        }
-      }
-    } else {
+    // 无论是否配置 AI 座位都构建决策引擎：断线托管需要为掉线的人类玩家代打（
+    // 与 --ai-driver 一致：qwen/ollama 走 LLM，simple 走本地策略）。
+    const rulesText = this.loadRules();
+    this.localAiEngine = new LocalAiEngine(rulesText);
+    this.localAiEngine.setMaxContextRounds(this.contextRounds);
+    this.localAiEngine.setAllowNonAiSeats(true);
+    const driver = options.aiDriver ?? "qwen";
+    if (driver === "simple") {
       this.aiLoop = null;
-      this.localAiEngine = null;
+    } else {
+      this.aiLoop = new GameAiLoop(rulesText, driver);
+      this.aiLoop.setAllowNonAiSeats(true);
+      this.aiLoop.setMaxContextRounds(this.contextRounds);
+      this.aiLoop.setThinkingMs(options.aiThinkingMs ?? 1200);
+      if (options.aiReasoning) {
+        this.aiLoop.setReasoningMode(options.aiReasoning);
+      }
     }
   }
 
@@ -110,10 +110,6 @@ export class GameServer {
     return Math.max(1, this.options.playerCount - (this.options.aiCount ?? 0));
   }
 
-  private isAiPlayer(playerId: string): boolean {
-    return this.aiPlayerIds.includes(playerId);
-  }
-
   private trackBattlefield(): void {
     const snapshot = this.game.getSnapshot();
     trackRoundBattlefield(this.roundBattlefieldHistory, snapshot.turn, buildBattlefieldLines(snapshot.players), this.contextRounds);
@@ -133,10 +129,12 @@ export class GameServer {
 
   async close(): Promise<void> {
     if (!this.server) return;
+    this.closing = true;
+    this.clearDisconnected();
     await new Promise<void>((resolve) => {
       this.server!.close(() => {
-        for (const peer of this.peers.values()) peer.socket.end();
-        this.clearDisconnected();
+        for (const peer of this.peers.values()) peer.socket.destroy();
+        this.peers.clear();
         resolve();
       });
     });
@@ -147,9 +145,38 @@ export class GameServer {
   }
 
   clearDisconnected(): void {
-    for (const entry of this.disconnected.values()) clearTimeout(entry.timer);
     this.disconnected.clear();
     this.disconnectedIds.clear();
+    this.takeoverIds.clear();
+    this.activeDrivers.clear();
+    this.seatEpoch.clear();
+  }
+
+  private isAiPlayer(playerId: string): boolean {
+    return this.aiPlayerIds.includes(playerId);
+  }
+
+  /** 座位当前是否由 AI 驱动：原生 AI 座位 + 断线托管的人类座位。 */
+  private isAiDriven(playerId: string): boolean {
+    if (this.aiPlayerIds.includes(playerId) || this.takeoverIds.has(playerId)) {
+      return true;
+    }
+    // 兜底：游戏预初始化（测试/直接传入）时 aiPlayerIds 可能未赋值，以引擎的 isAI 为准。
+    const player = this.game.getSnapshot().players.find((item) => item.id === playerId);
+    return player?.isAI ?? false;
+  }
+
+  private bumpEpoch(playerId: string): void {
+    this.seatEpoch.set(playerId, this.getEpoch(playerId) + 1);
+  }
+
+  private getEpoch(playerId: string): number {
+    return this.seatEpoch.get(playerId) ?? 0;
+  }
+
+  /** 驱动循环每次 await 后校验：epoch 变化说明玩家已重连/再次掉线，或服务器正在关闭，应停止代打。 */
+  private isStaleDrive(playerId: string, driveEpoch: number): boolean {
+    return this.closing || this.getEpoch(playerId) !== driveEpoch;
   }
 
   private async restartGame(): Promise<void> {
@@ -249,7 +276,7 @@ export class GameServer {
     }
     if (this.started) {
       // Normal reconnection: player is in disconnected map (clean disconnect)
-      const entry = Array.from(this.disconnected.entries()).find(([, info]) => info.name === trimmed);
+      const entry = Array.from(this.disconnected.entries()).find(([, playerName]) => playerName === trimmed);
       if (entry) {
         this.handleReconnect(socket, parser, entry[0], version);
         return;
@@ -264,26 +291,7 @@ export class GameServer {
             s.end();
           }
         }
-        const timer = setTimeout(() => {
-          const restartAfterClose = this.options.autoRestartAfterClose;
-          for (const other of this.peers.values()) {
-            this.send(other.socket, { type: "closed", message: `${trimmed} 断线超时，房间即将重启` });
-            other.socket.end();
-          }
-          this.disconnected.clear();
-          if (restartAfterClose) {
-            this.game = new SanGuoGame(secureRng);
-            this.game.setDeferDyingResolution(true);
-            this.peers.clear();
-            this.logs.length = 0;
-            this.pendingAction = null;
-            this.pendingInteraction = null;
-            this.nextPlayerNumber = 1;
-            this.started = false;
-            console.log("房间超时关闭，已重置等待新玩家加入");
-          }
-        }, this.reconnectTimeoutMs);
-        this.disconnected.set(gamePlayer.id, { name: trimmed, timer });
+        this.disconnected.set(gamePlayer.id, trimmed);
         this.disconnectedIds.add(gamePlayer.id);
         this.handleReconnect(socket, parser, gamePlayer.id, version);
         return;
@@ -318,14 +326,8 @@ export class GameServer {
       socket.end();
       return;
     }
-    const disconnectedInfo = this.disconnected.get(playerId);
-    let playerName: string;
-    if (disconnectedInfo) {
-      clearTimeout(disconnectedInfo.timer);
-      this.disconnected.delete(playerId);
-      this.disconnectedIds.delete(playerId);
-      playerName = disconnectedInfo.name;
-    } else {
+    let playerName = this.disconnected.get(playerId);
+    if (!playerName) {
       // Player not in disconnected map — might be a stale peer (client crash,
       // network partition where TCP close wasn't detected). Check if the player
       // exists in the game and if so, force-kick the old peer.
@@ -337,6 +339,8 @@ export class GameServer {
       }
       playerName = gamePlayer.name;
     }
+    this.disconnected.delete(playerId);
+    this.disconnectedIds.delete(playerId);
     // Remove any old peer entries for this playerId to prevent
     // the stale socket's close handler from interfering with reconnection.
     for (const [s, p] of this.peers) {
@@ -347,15 +351,19 @@ export class GameServer {
     }
     const peer: Peer = { id: playerId, name: playerName, socket, parser };
     this.peers.set(socket, peer);
+    // 重连即交还控制权：终止在途的 AI 代打，座位决策改回由该玩家的 socket 提供。
+    const wasTakenOver = this.takeoverIds.delete(playerId);
+    this.bumpEpoch(playerId);
+    this.game.setDecisionHandler(playerId, (request) => this.requestPeerDecision(playerId, request));
     this.send(socket, { type: "reconnect_ok", playerId });
-    this.sendStateToPeer(peer);
-    this.broadcastState();
     if (this.pendingInteraction?.playerId === playerId) {
       this.send(socket, { type: "interaction", request: this.pendingInteraction.request });
     }
     this.broadcast({ type: "player_reconnected", playerName });
-    this.logs.push(`${playerName} 已重连`);
-    console.log(`${playerName} 已重连`);
+    this.logs.push(wasTakenOver ? `${playerName} 已重连，AI 控制权已交还` : `${playerName} 已重连`);
+    console.log(wasTakenOver ? `${playerName} 已重连，AI 控制权已交还` : `${playerName} 已重连`);
+    this.sendStateToPeer(peer);
+    this.broadcastState();
   }
 
   private startGame(): void {
@@ -383,16 +391,42 @@ export class GameServer {
   }
 
   private registerAiDecisionHandlers(): void {
-    if (!this.aiLoop) {
-      return;
-    }
     for (const aiId of this.aiPlayerIds) {
-      this.game.setDecisionHandler(aiId, async (request) => {
-        if (request.kind === "choose-suit") {
-          return null; // 纯概率响应走引擎自动决策
-        }
-        return this.aiLoop?.decideInteraction(this.game, aiId, request) ?? null;
-      });
+      this.game.setDecisionHandler(aiId, (request) => this.decideInteractionAi(aiId, request));
+    }
+  }
+
+  /** 原生 AI 与断线托管共用的交互决策：choose-suit 等纯概率响应返回 null 走引擎自动决策。 */
+  private async decideInteractionAi(playerId: string, request: InteractionRequest): Promise<InteractionDecision | null> {
+    if (request.kind === "choose-suit") {
+      return null; // 纯概率响应走引擎自动决策
+    }
+    if (this.aiLoop) {
+      return (await this.aiLoop.decideInteraction(this.game, playerId, request)) ?? null;
+    }
+    return null;
+  }
+
+  /** 断线托管：把人类座位的交互决策改路由给 AI，并为 LLM 驱动注册子代理。 */
+  private registerTakeoverSeat(playerId: string, player?: GameSnapshot["players"][number]): void {
+    const seat = player ?? this.game.getSnapshot().players.find((item) => item.id === playerId);
+    if (seat) {
+      this.aiLoop?.registerSeatForTakeover(playerId, seat.name, seat.role, seat.general);
+    }
+    this.game.setDecisionHandler(playerId, (request) => this.decideInteractionAi(playerId, request));
+  }
+
+  /** 断线时改由 AI 应答正在等待的交互；若等待期间玩家已重连则放弃代答改为 pass。 */
+  private async answerPendingForTakeover(playerId: string, pending: PendingInteraction, epoch: number): Promise<void> {
+    try {
+      if (this.isStaleDrive(playerId, epoch)) {
+        pending.resolve({ choice: "pass" });
+        return;
+      }
+      const decision = await this.decideInteractionAi(playerId, pending.request);
+      pending.resolve(decision ?? { choice: "pass" });
+    } catch {
+      pending.resolve({ choice: "pass" });
     }
   }
 
@@ -406,12 +440,11 @@ export class GameServer {
       if (peer) {
         this.send(peer.socket, { type: "interaction", request });
       } else if (!this.disconnected.has(playerId)) {
-        // Player is not connected AND not in reconnect window — auto-pass
+        // Player is not connected AND not AI-driven (断线托管会把该座位的 handler 切到 AI，
+        // 因此正常流程不会走到这里)——自动 pass，避免牌局等待一个不在线的玩家。
         this.pendingInteraction = null;
         resolve({ choice: "pass" });
       }
-      // If player is in disconnected map, the interaction stays pending
-      // and will be re-sent to them on reconnect
     });
   }
 
@@ -435,8 +468,8 @@ export class GameServer {
     const reason = `${phase}是否发动${effectLabel}？`;
     this.game.setOptionalEffectDecision(playerId, effect, false);
     let decision: InteractionDecision | null;
-    if (this.isAiPlayer(playerId) && this.aiLoop) {
-      decision = await this.aiLoop.decideInteraction(this.game, playerId, {
+    if (this.isAiDriven(playerId)) {
+      decision = await this.decideInteractionAi(playerId, {
         kind: "optional-effect",
         requestId: 0,
         playerId,
@@ -467,7 +500,7 @@ export class GameServer {
     this.trackBattlefield();
     this.broadcastState();
     await this.checkAndHandleGameOver();
-    if (!this.game.isGameOver() && this.game.getCurrentPlayer().isAI) {
+    if (!this.game.isGameOver() && this.isAiDriven(this.game.getCurrentPlayer().id)) {
       await this.driveAiTurn(this.game.getCurrentPlayer().id);
     }
   }
@@ -476,69 +509,88 @@ export class GameServer {
     if (!this.localAiEngine) {
       return;
     }
-    let actionsTaken = 0;
-    while (true) {
-      if (this.game.isGameOver()) {
-        return;
-      }
-      const snapshot = this.game.getSnapshot();
-      const current = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
-      if (!current || !current.isAI || current.id !== aiId || !current.alive) {
-        return;
-      }
-      if (this.game.getPlayableActions(aiId).length === 0) {
-        return;
-      }
-      // 兜底：LLM 可能反复执行木牛流马「置入/取出」等无收益空转，动作数达上限强制收尾
-      const actionLimit = computeAiTurnActionLimit(current.hand.length, current.treasureCards.length);
-      if (actionsTaken >= actionLimit) {
-        this.logs.push(`[AI] ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
+    if (this.activeDrivers.has(aiId)) {
+      return; // 已有驱动循环在跑（断线瞬间与回合流程并发时避免双驱）
+    }
+    this.activeDrivers.add(aiId);
+    const driveEpoch = this.getEpoch(aiId);
+    const seatLabel = this.aiPlayerIds.includes(aiId) ? "[AI]" : "（托管）";
+    try {
+      let actionsTaken = 0;
+      while (true) {
+        if (this.isStaleDrive(aiId, driveEpoch)) {
+          return; // 玩家已重连，交还控制权
+        }
+        if (this.game.isGameOver()) {
+          return;
+        }
+        const snapshot = this.game.getSnapshot();
+        const current = snapshot.players.find((player) => player.id === snapshot.currentPlayerId);
+        if (!current || !current.alive || !this.isAiDriven(current.id) || current.id !== aiId) {
+          return;
+        }
+        if (this.game.getPlayableActions(aiId).length === 0) {
+          return;
+        }
+        // 兜底：LLM 可能反复执行木牛流马「置入/取出」等无收益空转，动作数达上限强制收尾
+        const actionLimit = computeAiTurnActionLimit(current.hand.length, current.treasureCards.length);
+        if (actionsTaken >= actionLimit) {
+          this.logs.push(`${seatLabel} ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
+          this.broadcastInterimState();
+          const ended = await this.forceEndAiTurn(aiId);
+          if (!ended || this.isStaleDrive(aiId, driveEpoch)) {
+            return;
+          }
+          continue;
+        }
+        this.trackBattlefield();
+        const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
+        this.aiLoop?.setPreviousRoundContexts(previousRounds);
+        this.localAiEngine.syncPreviousRounds(previousRounds);
+        this.logs.push(`${seatLabel} ${current.name} 正在思考...`);
         this.broadcastInterimState();
-        const ended = await this.forceEndAiTurn(aiId);
-        if (!ended) {
+        const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
+        if (this.isStaleDrive(aiId, driveEpoch)) {
+          return; // 决策期间玩家已重连，放弃本次代打出牌
+        }
+        const decision = picked.decision;
+        if (!decision) {
+          const ended = await this.forceEndAiTurn(aiId);
+          if (!ended || this.isStaleDrive(aiId, driveEpoch)) {
+            return;
+          }
+          continue;
+        }
+        const targetText = decision.targetId ? ` -> ${this.labelPlayer(decision.targetId)}` : "";
+        const reasonText = picked.fallbackReason ? `（回退原因：${picked.fallbackReason}）` : "";
+        this.logs.push(`[${picked.driverLabel}] ${current.name} 选择：${decision.action.label}${targetText}${reasonText}`);
+        const targetName = decision.targetId
+          ? this.game.getSnapshot().players.find((player) => player.id === decision.targetId)?.name ?? decision.targetId
+          : undefined;
+        this.logs.push(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
+        this.broadcastInterimState();
+        const actionLogs = await this.game.playAction(aiId, decision.action, decision.targetId);
+        if (this.isStaleDrive(aiId, driveEpoch)) {
           return;
         }
-        continue;
-      }
-      this.trackBattlefield();
-      const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
-      this.aiLoop?.setPreviousRoundContexts(previousRounds);
-      this.localAiEngine.syncPreviousRounds(previousRounds);
-      this.logs.push(`[AI] ${current.name} 正在思考...`);
-      this.broadcastInterimState();
-      const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
-      const decision = picked.decision;
-      if (!decision) {
-        const ended = await this.forceEndAiTurn(aiId);
-        if (!ended) {
+        this.logs.push(...actionLogs);
+        this.logs.push(...(await this.game.ensureTurnState()));
+        this.logs.push(...(await this.game.resolvePendingDeaths()));
+        this.trackBattlefield();
+        this.broadcastState();
+        await this.checkAndHandleGameOver();
+        await this.advanceIfCurrentPlayerDead();
+        if (!this.game.getCurrentPlayer().alive) {
           return;
         }
-        continue;
+        if (this.game.getPendingDiscardCount(aiId) === 0) {
+          await this.resolveTurnEnd(aiId);
+        }
+        await this.delay(AI_ACTION_PACING_MS);
+        actionsTaken += 1;
       }
-      const targetText = decision.targetId ? ` -> ${this.labelPlayer(decision.targetId)}` : "";
-      const reasonText = picked.fallbackReason ? `（回退原因：${picked.fallbackReason}）` : "";
-      this.logs.push(`[${picked.driverLabel}] ${current.name} 选择：${decision.action.label}${targetText}${reasonText}`);
-      const targetName = decision.targetId
-        ? this.game.getSnapshot().players.find((player) => player.id === decision.targetId)?.name ?? decision.targetId
-        : undefined;
-      this.logs.push(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
-      this.broadcastInterimState();
-      const actionLogs = await this.game.playAction(aiId, decision.action, decision.targetId);
-      this.logs.push(...actionLogs);
-      this.logs.push(...(await this.game.ensureTurnState()));
-      this.logs.push(...(await this.game.resolvePendingDeaths()));
-      this.trackBattlefield();
-      this.broadcastState();
-      await this.checkAndHandleGameOver();
-      await this.advanceIfCurrentPlayerDead();
-      if (!this.game.getCurrentPlayer().alive) {
-        return;
-      }
-      if (this.game.getPendingDiscardCount(aiId) === 0) {
-        await this.resolveTurnEnd(aiId);
-      }
-      await this.delay(AI_ACTION_PACING_MS);
-      actionsTaken += 1;
+    } finally {
+      this.activeDrivers.delete(aiId);
     }
   }
 
@@ -760,41 +812,37 @@ export class GameServer {
     }
     const snapshot = this.game.getSnapshot();
     const player = snapshot.players.find((p) => p.id === peer.id);
+    if (this.closing) {
+      return;
+    }
     if (player && !player.alive) {
       this.logs.push(`${peer.name} 已阵亡退出`);
       console.log(`${peer.name} 阵亡退出，无需等待重连`);
       return;
     }
-    if (this.pendingInteraction?.playerId === peer.id) {
-      this.pendingInteraction.resolve({ choice: "pass" });
-      this.pendingInteraction = null;
-    }
+    // 断线托管：座位立即交给 AI（LLM 或本地策略）代打，玩家可随时重连取回控制权，
+    // 不再有“超时未重连即关闭房间”的行为。
+    this.takeoverIds.add(peer.id);
+    this.bumpEpoch(peer.id);
+    this.registerTakeoverSeat(peer.id, player);
+    this.disconnected.set(peer.id, peer.name);
+    this.disconnectedIds.add(peer.id);
     if (!alreadyNotified) {
       this.broadcast({ type: "player_disconnected", playerName: peer.name, waitTimeSeconds: this.reconnectTimeoutMs / 1000 });
     }
-    const timer = setTimeout(() => {
-      const restartAfterClose = this.options.autoRestartAfterClose;
-      for (const other of this.peers.values()) {
-        this.send(other.socket, { type: "closed", message: `${peer.name} 断线超时，房间即将重启` });
-        other.socket.end();
-      }
-      this.disconnected.clear();
-      if (restartAfterClose) {
-        this.game = new SanGuoGame(secureRng);
-        this.game.setDeferDyingResolution(true);
-        this.peers.clear();
-        this.logs.length = 0;
-        this.pendingAction = null;
-        this.pendingInteraction = null;
-        this.nextPlayerNumber = 1;
-        this.started = false;
-        console.log("房间超时关闭，已重置等待新玩家加入");
-      }
-    }, this.reconnectTimeoutMs);
-    this.disconnected.set(peer.id, { name: peer.name, timer });
-    this.disconnectedIds.add(peer.id);
-    this.logs.push(`${peer.name} 断线了，${this.reconnectTimeoutMs / 1000}s 内可重连`);
-    console.log(`${peer.name} 断线，等待重连 ${this.reconnectTimeoutMs / 1000}s`);
+    this.logs.push(`${peer.name} 断线了，AI 已托管其座位，可随时重连取回控制权`);
+    console.log(`${peer.name} 断线，AI 托管中，可随时重连`);
+    // 正在等待该玩家的交互请求改由 AI 应答（若等待期间玩家已重连则改为 pass）。
+    if (this.pendingInteraction?.playerId === peer.id) {
+      const pending = this.pendingInteraction;
+      this.pendingInteraction = null;
+      const epoch = this.getEpoch(peer.id);
+      void this.answerPendingForTakeover(peer.id, pending, epoch);
+    }
+    // 若当前正是该玩家行动，立即驱动 AI 推进回合，避免牌局停滞。
+    if (!this.game.isGameOver() && this.game.getCurrentPlayer().id === peer.id && player?.alive) {
+      void this.driveAiTurn(peer.id);
+    }
     this.broadcastState();
   }
 

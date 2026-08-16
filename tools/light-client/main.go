@@ -358,7 +358,7 @@ func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) boo
 			fmt.Printf("\n%s\n1. 发动\n2. 不发动\n", message.Reason)
 			_ = send(writer, map[string]interface{}{"type": "effect", "enabled": choose("请选择: ", 2) == 0})
 		case "player_disconnected":
-			fmt.Printf("%s 已断线，%ds 内可重连\n", message.PlayerName, message.WaitTimeSeconds)
+			fmt.Printf("%s 已断线，AI 已托管其座位，可随时重连取回控制权\n", message.PlayerName)
 		case "player_reconnected":
 			if message.PlayerName != "" {
 				fmt.Printf("%s 已重连\n", message.PlayerName)

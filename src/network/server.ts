@@ -1,5 +1,5 @@
 import { createServer, Socket, Server } from "node:net";
-import { randomInt } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
@@ -25,6 +25,8 @@ export type GameServerOptions = {
   openingHandCount: number;
   reconnectTimeoutMs?: number;
   autoRestartAfterGameOver?: boolean;
+  /** 允许同一来源（机器）同时在线多个玩家。默认 false：一台机器同一时间只允许一个活跃座位。 */
+  allowMultiConnectionsPerSource?: boolean;
   aiCount?: number;
   aiDriver?: AiModelProvider | "simple";
   aiThinkingMs?: number;
@@ -40,6 +42,13 @@ const AI_ACTION_PACING_MS = 800;
 
 const secureRng = (): number => randomInt(0, 0x1_0000_0000) / 0x1_0000_0000;
 
+/** 来源指纹：sha1(IP:机器标识)。机器标识由客户端持久化（WebUI=localStorage，CLI=配置文件），
+ *  使同一公网 IP（NAT）下的不同机器不会被误判为同一台；同一台机器的不同窗口/终端可被识别。 */
+const fingerprintOf = (ip: string, machineId: string): string =>
+  createHash("sha1").update(`${ip.replace(/^::ffff:/, "")}:${machineId}`).digest("hex").slice(0, 16);
+
+type SourceInfo = { fingerprint: string; verified: boolean };
+
 export class GameServer {
   private game: SanGuoGame;
   private readonly peers = new Map<Socket, Peer>();
@@ -53,6 +62,7 @@ export class GameServer {
   private readonly takeoverIds = new Set<string>(); // 断线托管中的人类座位
   private readonly seatEpoch = new Map<string, number>(); // 每次断线/重连递增，用于终止在途的 AI 代打
   private readonly activeDrivers = new Set<string>(); // 正在驱动出牌的座位，防止并发双驱
+  private readonly sourceFingerprints = new Map<Socket, { ip: string; machineId: string }>(); // 连接 -> 来源（中继透传或按对端 IP 计算）
   private server: Server | null = null;
   private restarting = false;
   private closing = false;
@@ -236,11 +246,22 @@ export class GameServer {
         this.send(socket, { type: "error", message: "消息格式无效" });
       }
     });
-    socket.on("close", () => this.disconnect(socket));
+    socket.on("close", () => {
+      this.sourceFingerprints.delete(socket);
+      this.disconnect(socket);
+    });
     socket.on("error", () => this.disconnect(socket));
   }
 
   private handle(socket: Socket, parser: JsonLineParser<ClientMessage>, message: ClientMessage): void {
+    if (message.type === "source") {
+      // 客户端机器标识：CLI/浏览器发送；中继会补上浏览器真实 IP 再转发。
+      this.sourceFingerprints.set(socket, {
+        ip: message.ip ?? socket.remoteAddress ?? "unknown",
+        machineId: message.machineId,
+      });
+      return;
+    }
     if (message.type === "reconnect") {
       this.handleReconnect(socket, parser, message.playerId, message.version);
       return;
@@ -264,6 +285,15 @@ export class GameServer {
     }
   }
 
+  /** 来源信息：有机器标识的连接视为“已验证机器”（参加同机校验）；否则降级为仅按 IP 指纹，不参与机器校验。 */
+  private getSourceInfo(socket: Socket): SourceInfo {
+    const info = this.sourceFingerprints.get(socket);
+    if (info && info.machineId) {
+      return { fingerprint: fingerprintOf(info.ip, info.machineId), verified: true };
+    }
+    return { fingerprint: fingerprintOf(socket.remoteAddress ?? "unknown", ""), verified: false };
+  }
+
   private handleJoin(socket: Socket, parser: JsonLineParser<ClientMessage>, name: string, version: number): void {
     const trimmed = name.trim().slice(0, 20);
     if (!trimmed) {
@@ -274,6 +304,26 @@ export class GameServer {
       this.send(socket, { type: "error", message: "该名称已被 AI 玩家占用，请换一个名字" });
       return;
     }
+    // 同机校验：指纹 = sha1(IP:机器标识)，同一台机器（浏览器 localStorage / CLI 配置文件一致）
+    // 同时只允许一个活跃玩家，防“双开不同名整人”。同一公网 IP（NAT）下不同机器标识不同，不会误伤。
+    // 未提供机器标识的连接（旧客户端）跳过机器校验；重连（reconnect）不走此路径。
+    if (!this.options.allowMultiConnectionsPerSource) {
+      const mine = this.getSourceInfo(socket);
+      if (mine.verified) {
+        const sameSource = Array.from(this.peers.values()).find((peer) => {
+          const theirs = this.getSourceInfo(peer.socket);
+          return theirs.verified && theirs.fingerprint === mine.fingerprint;
+        });
+        if (sameSource) {
+          this.send(socket, {
+            type: "closed",
+            message: `本机已有玩家「${sameSource.name}」在线：同一台机器同一时间只允许一个玩家（防止双开），请先关闭另一个窗口/终端`,
+          });
+          socket.end();
+          return;
+        }
+      }
+    }
     if (this.started) {
       // Normal reconnection: player is in disconnected map (clean disconnect)
       const entry = Array.from(this.disconnected.entries()).find(([, playerName]) => playerName === trimmed);
@@ -283,10 +333,12 @@ export class GameServer {
       }
       // Client crash / ungraceful disconnect: player exists in game but not in
       // disconnected map. Force-kick the old peer and treat as reconnect.
+      // 跨机同名视为“换设备接管”：通知旧连接停止，避免两端互相抢座。
       const gamePlayer = this.game.getSnapshot().players.find((p) => p.name === trimmed);
       if (gamePlayer) {
         for (const [s, p] of this.peers) {
           if (p.id === gamePlayer.id) {
+            this.send(s, { type: "closed", message: `你的名字「${trimmed}」已在其他设备登录，本连接已关闭` });
             this.peers.delete(s);
             s.end();
           }
@@ -301,6 +353,11 @@ export class GameServer {
     }
     if (this.peers.size >= this.humanSlots) {
       this.send(socket, { type: "error", message: "房间已满" });
+      return;
+    }
+    if (Array.from(this.peers.values()).some((peer) => peer.name === trimmed)) {
+      this.send(socket, { type: "closed", message: "该名字已被占用，请换一个名字" });
+      socket.end();
       return;
     }
     if (version !== NETWORK_PROTOCOL_VERSION) {

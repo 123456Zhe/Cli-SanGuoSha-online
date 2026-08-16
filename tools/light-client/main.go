@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -91,6 +94,32 @@ type serverMessage struct {
 var input = bufio.NewScanner(os.Stdin)
 var lastPlayers []player
 var myPlayerID string
+
+// machineID 与 TS CLI 共用同一持久化文件（~/.clisanguo/machine-id），
+// 供服务器做“同机单账号”校验：同机多开（Go/Go、Go/CLI）可被识别为同一台机器。
+var machineID = loadMachineID()
+
+func loadMachineID() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "go-fallback"
+	}
+	dir := filepath.Join(home, ".clisanguo")
+	file := filepath.Join(dir, "machine-id")
+	if raw, readErr := os.ReadFile(file); readErr == nil {
+		if id := strings.TrimSpace(string(raw)); id != "" {
+			return id
+		}
+	}
+	randomBytes := make([]byte, 16)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "go-fallback"
+	}
+	id := "cli-" + hex.EncodeToString(randomBytes)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(file, []byte(id), 0o600)
+	return id
+}
 
 const reconnectMaxAttempts = 3
 
@@ -330,6 +359,7 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 
 func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) bool {
 	if isReconnect {
+		_ = send(writer, map[string]interface{}{"type": "source", "machineId": machineID})
 		_ = send(writer, map[string]interface{}{"type": "reconnect", "playerId": myPlayerID, "version": 4})
 	}
 	for scanner.Scan() {
@@ -395,6 +425,7 @@ func main() {
 	defer connection.Close()
 
 	writer := bufio.NewWriter(connection)
+	_ = send(writer, map[string]interface{}{"type": "source", "machineId": machineID})
 	if err = send(writer, map[string]interface{}{"type": "join", "name": *name, "version": 4}); err != nil {
 		fmt.Println(err)
 		return

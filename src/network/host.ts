@@ -10,6 +10,7 @@ const aiContextRounds = Number.parseInt(valueOf("ai-context-rounds", "30"), 10);
 const aiDriverValue = valueOf("ai-driver", "qwen");
 const aiReasoningValue = valueOf("ai-reasoning", "auto");
 const aiStrategyValue = valueOf("ai-strategy", "own");
+const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
 if (!Number.isInteger(playerCount) || playerCount < 2 || playerCount > 6) throw new Error("--players 必须为 2 到 6");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port 无效");
 if (!Number.isInteger(aiCount) || aiCount < 0 || aiCount >= playerCount) throw new Error("--ai 必须为 0 到 players-1（至少保留 1 个人类玩家）");
@@ -22,6 +23,7 @@ const options: GameServerOptions = {
   playerCount,
   openingHandCount,
   autoRestartAfterGameOver: true,
+  allowMultiConnectionsPerSource: allowMultiSource,
   aiCount,
   aiDriver: aiDriverValue,
   aiThinkingMs,

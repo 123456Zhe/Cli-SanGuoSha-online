@@ -25,7 +25,12 @@ export type ClientMessage =
   | { type: "reconnect"; playerId: string; version: number }
   | { type: "discard"; handIndex: number }
   | { type: "interaction"; decision: InteractionDecision }
-  | { type: "leave" };
+  | { type: "leave" }
+  // 机器标识（同机账号校验用，普通客户端在 join/reconnect 前发送）：
+  // - CLI：从 ~/.clisanguo/machine-id 持久化读取；WebUI：localStorage 持久化。
+  // - 中继会补上浏览器真实 IP 后转发给服务器，服务器以 sha1(IP:机器ID) 作为来源指纹。
+  // 不发送此消息的连接（如旧 Go 客户端）视为“无法验证机器”，仅按名字规则处理。
+  | { type: "source"; machineId: string; ip?: string };
 
 export type ServerMessage =
   | { type: "welcome"; playerId: string; roomSize: number }

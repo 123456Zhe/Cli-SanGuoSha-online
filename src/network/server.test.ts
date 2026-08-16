@@ -208,4 +208,99 @@ void test("AI 玩家：1 人类 + 1 AI 开局，AI 自动完成出牌回合", as
   }
 });
 
+void test("同机校验：同一机器第二个连接（不同名双开）被拒绝", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple" },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port, "machine-A");
+  const c2 = await TestClient.connect(port, "machine-B");
+  const c3 = await TestClient.connect(port, "machine-C");
+  const c4 = await TestClient.connect(port, "machine-A"); // 与 c1 同一台“机器”
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(c1.messages.some((m) => m.type === "welcome"), "c1 应加入成功");
+
+    c4.send({ type: "join", name: "丁", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(c4.messages.some((m) => m.type === "closed"), "同机第二个连接应被拒绝");
+    assert.ok(!c4.messages.some((m) => m.type === "welcome"), "不应获得座位");
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    c4.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("跨机同名：新连接接管座位，旧连接收到关闭提示", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple" },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port, "machine-A");
+  const c2 = await TestClient.connect(port, "machine-B");
+  const c3 = await TestClient.connect(port, "machine-C");
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(c1.messages.some((m) => m.type === "welcome"), "c1 应加入成功");
+
+    // 另一台机器（不同机器标识）用同一名字加入 → 接管座位，旧连接被通知停止
+    const c4 = await TestClient.connect(port, "machine-D");
+    c4.send({ type: "join", name: "甲", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(c1.messages.some((m) => m.type === "closed"), "旧连接应收到关闭提示");
+    assert.ok(c4.messages.some((m) => m.type === "reconnect_ok"), "新连接应获得该座位");
+    c4.destroy();
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("无机器标识（旧客户端）不受同机校验限制，同 IP 可多人加入", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple" },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port, null); // 不发送机器标识（模拟 Go 轻客户端）
+  const c2 = await TestClient.connect(port, null);
+  const c3 = await TestClient.connect(port, null);
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const c of [c1, c2, c3]) {
+      assert.ok(c.messages.some((m) => m.type === "welcome"), "无机器标识的多个同 IP 客户端应都能加入");
+    }
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
 

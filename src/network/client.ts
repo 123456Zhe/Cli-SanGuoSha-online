@@ -1,5 +1,9 @@
 import { connect, Socket } from "node:net";
 import { createInterface } from "node:readline/promises";
+import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { GameAction, InteractionRequest, RemovableCardOption } from "../engine/game.js";
 import { ClientMessage, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
@@ -20,6 +24,25 @@ let left = false;
 let _interacting = false;       // tracks if an interaction prompt is active
 let _msgQueue: ServerMessage[] = [];  // sequential message queue
 let _processingMsg = false;     // queue processing guard
+
+// 机器标识：持久化在 ~/.clisanguo/machine-id，供服务器做“同机单账号”校验
+// （与 WebUI 的 localStorage 各自持久化；同一台机器的 CLI 多开可被识别，跨端以名字为准）。
+const machineId = ((): string => {
+  try {
+    const dir = join(homedir(), ".clisanguo");
+    const file = join(dir, "machine-id");
+    if (existsSync(file)) {
+      const existing = readFileSync(file, "utf8").trim();
+      if (existing) return existing;
+    }
+    const generated = `cli-${randomUUID()}`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, generated);
+    return generated;
+  } catch {
+    return `cli-${randomUUID()}`; // 无法持久化时降级：每次随机，同机多开无法识别
+  }
+})();
 
 const send = (message: ClientMessage): void => {
   if (!socket.destroyed) socket.write(encodeMessage(message));
@@ -227,6 +250,7 @@ const attemptReconnect = async (): Promise<void> => {
 const bindSocket = (s: Socket, p: JsonLineParser<ServerMessage>): void => {
   s.setEncoding("utf8");
   s.on("connect", () => {
+    s.write(encodeMessage({ type: "source", machineId }));
     if (playerId) {
       s.write(encodeMessage({ type: "reconnect", playerId, version: NETWORK_PROTOCOL_VERSION }));
     } else {

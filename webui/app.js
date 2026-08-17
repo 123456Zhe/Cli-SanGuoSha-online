@@ -160,6 +160,14 @@
     }
   });
 
+  // 结算画面「确认下一局」按钮
+  $("confirm-next").addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    $("confirm-next").disabled = true;
+    $("confirm-status").textContent = "等待其他玩家确认…";
+    send({ type: "confirm_next" });
+  });
+
   // ---- 顺序消息队列（避免并发处理相互覆盖界面） ----
 
   const enqueue = (message) => {
@@ -235,10 +243,11 @@
         break;
       case "game_over":
         $("gameover-title").textContent = message.message;
+        $("confirm-status").textContent = "";
+        $("confirm-next").disabled = false;
         $("gameover-overlay").hidden = false;
         break;
       case "game_restarting":
-        // 宿主（如聊天插件）在真人确认后续局：收起结算层，等待新一局 state
         $("gameover-overlay").hidden = true;
         break;
       default:

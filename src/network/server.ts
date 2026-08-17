@@ -347,6 +347,13 @@ export class GameServer {
       void this.handleDiscard(peer, message.handIndex);
     } else if (message.type === "interaction") {
       this.handleInteraction(peer, message.decision);
+    } else if (message.type === "confirm_next") {
+      // 结算画面：真人玩家点「确认下一局」→ 手动重启（需对局已结束）
+      void this.requestRestart().then((ok) => {
+        if (ok) {
+          this.log(`${peer.name} 确认下一局`);
+        }
+      });
     }
   }
 

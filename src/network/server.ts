@@ -43,6 +43,8 @@ const AI_NAME_PREFIX = "[AI]电脑-";
 const AI_NAME_SEQUENCE = ["甲", "乙", "丙", "丁", "戊"];
 const DEFAULT_CONTEXT_ROUNDS = 30;
 const AI_ACTION_PACING_MS = 800;
+/** 服务端日志上限：无限长的 AI 托管对局（如无人干预的 AI 互打）不得让日志数组无限增长。 */
+const LOGS_MAX_LINES = 2000;
 
 const secureRng = (): number => randomInt(0, 0x1_0000_0000) / 0x1_0000_0000;
 
@@ -113,9 +115,12 @@ export class GameServer {
     }
   }
 
-  /** 追加对局日志；debug 等级下逐条回显到房主控制台并完整追加写入 devlog/server-log.md（跨局保留，不截断）。 */
+  /** 追加对局日志（超出 LOGS_MAX_LINES 时裁剪最旧行，防止无限对局内存增长）；debug 等级下回显并写入 devlog/server-log.md。 */
   private log(...lines: string[]): void {
     this.logs.push(...lines);
+    if (this.logs.length > LOGS_MAX_LINES) {
+      this.logs = this.logs.slice(-LOGS_MAX_LINES);
+    }
     if (this.options.logLevel !== "debug") {
       return;
     }
@@ -651,6 +656,13 @@ export class GameServer {
         if (!current || !current.alive || !this.isAiDriven(current.id) || current.id !== aiId) {
           return;
         }
+        // 弃牌阶段：引擎只对 isAI 原生座位自动弃牌；断线托管的人类座位（isAI=false）
+        // 必须由服务端主动弃牌，否则回合会永久卡死在弃牌阶段（getPlayableActions 为空、无人发 discard）。
+        if (this.game.getPendingDiscardCount(aiId) > 0) {
+          await this.discardPendingForAi(aiId, driveEpoch);
+          await this.resolveTurnEnd(aiId);
+          continue;
+        }
         if (this.game.getPlayableActions(aiId).length === 0) {
           return;
         }
@@ -713,6 +725,21 @@ export class GameServer {
       }
     } finally {
       this.activeDrivers.delete(aiId);
+    }
+  }
+
+  /** AI 托管座位的弃牌阶段：逐张弃掉超出体力的手牌（引擎只自动处理 isAI 原生座位）。 */
+  private async discardPendingForAi(aiId: string, driveEpoch: number): Promise<void> {
+    while (!this.isStaleDrive(aiId, driveEpoch) && this.game.getPendingDiscardCount(aiId) > 0) {
+      const options = this.game.getDiscardOptions(aiId);
+      const first = options[0];
+      if (!first) {
+        break;
+      }
+      const logs = await this.game.discardForCurrentPlayer(aiId, first.handIndex);
+      this.log(...logs);
+      this.broadcastState();
+      await this.delay(150);
     }
   }
 

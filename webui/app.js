@@ -237,6 +237,10 @@
         $("gameover-title").textContent = message.message;
         $("gameover-overlay").hidden = false;
         break;
+      case "game_restarting":
+        // 宿主（如聊天插件）在真人确认后续局：收起结算层，等待新一局 state
+        $("gameover-overlay").hidden = true;
+        break;
       default:
         break;
     }

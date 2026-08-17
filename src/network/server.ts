@@ -246,16 +246,53 @@ export class GameServer {
 
   private async checkAndHandleGameOver(): Promise<void> {
     if (!this.game.isGameOver() || this.restarting) return;
-    if (!this.options.autoRestartAfterGameOver) return;
     this.restarting = true;
     const snapshot = this.game.getSnapshot();
     const winner = snapshot.winner;
     const msg = '游戏结束：' + (winner === 'draw' ? '平局！' : (winner === 'human' ? '人类玩家胜利！' : 'AI 玩家胜利！'));
     this.broadcast({ type: "game_over", winner, message: msg });
     this.log(msg);
+    if (!this.options.autoRestartAfterGameOver) {
+      // 嵌入宿主（如聊天插件）场景：只广播结束，不开下一局——由宿主在真人确认后调用 requestRestart()。
+      this.restarting = false;
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 3000));
     await this.restartGame();
     this.restarting = false;
+  }
+
+  /** 对局是否已结束（宿主轮询检测用，配合 autoRestartAfterGameOver=false）。 */
+  isGameOver(): boolean {
+    return this.game.isGameOver();
+  }
+
+  /** 对局结果摘要；未结束时返回 null（宿主用于生成「等待确认续局」公告）。 */
+  getGameResult(): { winner: "human" | "ai" | "draw" | null; message: string } | null {
+    if (!this.game.isGameOver()) {
+      return null;
+    }
+    const winner = this.game.getSnapshot().winner;
+    const message = '游戏结束：' + (winner === 'draw' ? '平局！' : (winner === 'human' ? '人类玩家胜利！' : 'AI 玩家胜利！'));
+    return { winner, message };
+  }
+
+  /**
+   * 宿主在真人玩家确认后手动开启下一局（配合 autoRestartAfterGameOver=false）。
+   * 仅在当前对局已结束时生效；已连接玩家收到 game_restarting 广播后无缝进入新一局，
+   * 人数不足时回到等待加入状态（started=false）。
+   */
+  async requestRestart(): Promise<boolean> {
+    if (this.restarting || !this.game.isGameOver()) {
+      return false;
+    }
+    this.restarting = true;
+    try {
+      await this.restartGame();
+      return true;
+    } finally {
+      this.restarting = false;
+    }
   }
 
   private accept(socket: Socket): void {

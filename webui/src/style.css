@@ -26,7 +26,9 @@ body {
   flex-direction: column;
 }
 
-#topbar {
+/* ── TopBar ──────────────────────────────────────── */
+
+.topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -58,20 +60,17 @@ body {
   border: 1px solid var(--border);
 }
 
-.status.ok {
-  color: var(--green);
-  border-color: var(--green);
+.status.ok { color: var(--green); border-color: var(--green); }
+.status.warn { color: var(--accent); border-color: var(--accent); }
+.status.err { color: var(--red); border-color: var(--red); }
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.status.warn {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.status.err {
-  color: var(--red);
-  border-color: var(--red);
-}
+/* ── Main ─────────────────────────────────────────── */
 
 main {
   flex: 1;
@@ -84,7 +83,9 @@ main {
   gap: 12px;
 }
 
-#battlefield {
+/* ── Battlefield ──────────────────────────────────── */
+
+.battlefield {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -135,15 +136,8 @@ main {
   border: 1px solid var(--border);
 }
 
-.tag.dead-tag {
-  color: var(--red);
-  border-color: var(--red);
-}
-
-.tag.me-tag {
-  color: var(--accent);
-  border-color: var(--accent);
-}
+.tag.dead-tag { color: var(--red); border-color: var(--red); }
+.tag.me-tag { color: var(--accent); border-color: var(--accent); }
 
 .pc-info {
   display: flex;
@@ -191,7 +185,9 @@ main {
   color: var(--muted);
 }
 
-#logs {
+/* ── Game Log ─────────────────────────────────────── */
+
+.game-log {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -207,7 +203,10 @@ main {
   word-break: break-all;
 }
 
-#actions {
+/* ── Action / Interaction Panel ───────────────────── */
+
+.action-panel,
+.interaction-panel {
   min-height: 64px;
   display: flex;
   flex-wrap: wrap;
@@ -255,24 +254,14 @@ main {
   font-weight: 600;
 }
 
-#confirm-next {
-  display: block;
-  margin: 16px auto 0;
-  padding: 10px 28px;
-  border: none;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #1c2128;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-#confirm-next:disabled {
+.act-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-#myhand {
+/* ── MyHand ───────────────────────────────────────── */
+
+.myhand-panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -309,22 +298,16 @@ main {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
-.card-chip.red {
-  color: #b03030;
-}
-
-.card-chip.black {
-  color: #222;
-}
-
-.card-chip.none {
-  color: #555;
-}
+.card-chip.red { color: #b03030; }
+.card-chip.black { color: #222; }
+.card-chip.none { color: #555; }
 
 .card-chip.treasure {
   background: #e4e0d2;
   border-style: dashed;
 }
+
+/* ── Overlay / Modal ──────────────────────────────── */
 
 .overlay {
   position: fixed;
@@ -334,10 +317,6 @@ main {
   align-items: center;
   justify-content: center;
   z-index: 100;
-}
-
-.overlay[hidden] {
-  display: none !important;
 }
 
 .modal {
@@ -366,9 +345,7 @@ main {
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.4);
 }
 
-.modal input::placeholder {
-  color: #7a8a9a;
-}
+.modal input::placeholder { color: #7a8a9a; }
 
 .modal input:focus {
   outline: none;
@@ -387,8 +364,11 @@ main {
   cursor: pointer;
 }
 
-.modal button:hover {
-  background: #e8b94f;
+.modal button:hover { background: #e8b94f; }
+
+.modal button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .modal .hint {
@@ -397,18 +377,20 @@ main {
   line-height: 1.6;
 }
 
-#lobby {
+/* ── Lobby ────────────────────────────────────────── */
+
+.lobby-panel {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 20px;
 }
 
-#lobby h2 {
+.lobby-panel h2 {
   margin-bottom: 12px;
 }
 
-#lobby-list {
+.lobby-panel ul {
   list-style: none;
   display: flex;
   flex-direction: column;

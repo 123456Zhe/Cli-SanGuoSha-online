@@ -8,6 +8,7 @@
     "host": "tsx src/network/host.ts",
     "join": "tsx src/network/client.ts",
     "webui": "tsx src/webui/relay.ts",
+    "webui:build": "cd webui && npm run build",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
@@ -18,10 +19,12 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@opentui/core": "^0.1.96"
+    "@opentui/core": "^0.1.96",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
     "eslint": "^9.39.4",

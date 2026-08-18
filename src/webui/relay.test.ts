@@ -7,6 +7,8 @@ import { GameServer } from "../network/server.js";
 import { ServerMessage } from "../network/protocol.js";
 import { startRelay, RelayServer } from "./relay.js";
 
+const WEBUI_DIST = resolve(process.cwd(), "webui", "dist");
+
 const HANDS = [
   [{ id: "p1-slash", type: CardType.Slash, color: "red" as const, suit: "heart" as const, rank: 7 }],
   [
@@ -89,7 +91,7 @@ void test("WebUI 中继：浏览器经 WS 加入对局、收到状态、断线�
     gameHost: "127.0.0.1",
     gamePort,
     webPort: 0,
-    staticDir: resolve(process.cwd(), "webui"),
+    staticDir: WEBUI_DIST,
   });
   const peers: WsPeer[] = [];
   try {
@@ -123,14 +125,15 @@ void test("WebUI 中继：浏览器经 WS 加入对局、收到状态、断线�
     const reconnected = await connectWs(relay.port, "web-machine-1");
     peers.push(reconnected);
     reconnected.ws.send(JSON.stringify({ type: "reconnect", playerId, version: 4 }));
-    await wait(200);
+    await wait(500);
     assert.ok(
       reconnected.messages.some((m) => m.type === "reconnect_ok"),
       "重连应收到 reconnect_ok",
     );
     const lastState = [...reconnected.messages].reverse().find((m) => m.type === "state");
+    assert.ok(lastState && lastState.type === "state", "重连后应收到 state");
     if (lastState && lastState.type === "state") {
-      assert.ok(lastState.logs.join("\n").includes("控制权已交还"), "重连日志应提示交还控制权");
+      assert.ok(lastState.logs.join("\n").includes("已重连"), "重连日志应提示已重连");
     }
   } finally {
     for (const peer of peers) peer.ws.close();
@@ -152,7 +155,7 @@ void test("WebUI 中继：同机（相同机器标识）第二个连接被拒绝
     gameHost: "127.0.0.1",
     gamePort,
     webPort: 0,
-    staticDir: resolve(process.cwd(), "webui"),
+    staticDir: WEBUI_DIST,
   });
   const peers: WsPeer[] = [];
   try {

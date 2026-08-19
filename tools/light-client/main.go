@@ -189,6 +189,20 @@ func hasSkill(target player, skill string) bool {
 	return false
 }
 
+// --- Terminal notification ---
+
+// notify sends a cross-platform terminal notification.
+// OSC 9: desktop notification (iTerm2, Windows Terminal, GNOME Terminal, etc.)
+// \007 (BEL): terminal visual flash / audible beep
+func notify(title, message string) {
+	// Save and change terminal title
+	fmt.Printf("\033]0;%s\007", title)
+	// Desktop notification via OSC 9
+	fmt.Printf("\033]9;%s\007", message)
+	// Bell
+	fmt.Print("\a")
+}
+
 func findPlayer(players []player, id string) player {
 	for _, item := range players {
 		if item.ID == id {
@@ -291,9 +305,11 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 	}
 	if message.Snapshot.GameOver {
 		fmt.Printf("\n游戏结束：%v\n", message.Snapshot.Winner)
+		notify("三国杀 - 游戏结束", fmt.Sprintf("游戏结束：%v", message.Snapshot.Winner))
 		return true
 	}
 	if message.PendingDiscardCount > 0 {
+		notify("三国杀 - 弃牌", fmt.Sprintf("你需要弃置 %d 张牌", message.PendingDiscardCount))
 		var me player
 		for _, item := range message.Snapshot.Players {
 			if item.ID == message.Snapshot.CurrentPlayerID {
@@ -320,6 +336,7 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 		fmt.Println("\n等待其他玩家行动...")
 		return false
 	}
+	notify("三国杀 - 轮到你了", fmt.Sprintf("第 %d 回合，你可以行动了", message.Snapshot.Turn))
 	fmt.Println("\n可执行动作：")
 	for index, value := range message.Actions {
 		fmt.Printf("%d. %s\n", index+1, value.Label)
@@ -385,6 +402,7 @@ func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) boo
 		case "interaction":
 			handleInteraction(message.Request, writer)
 		case "effect":
+			notify("三国杀 - 技能发动", message.Reason)
 			fmt.Printf("\n%s\n1. 发动\n2. 不发动\n", message.Reason)
 			_ = send(writer, map[string]interface{}{"type": "effect", "enabled": choose("请选择: ", 2) == 0})
 		case "player_disconnected":
@@ -472,6 +490,7 @@ func handleInteraction(request *interactionRequest, writer *bufio.Writer) {
 	if request == nil {
 		return
 	}
+	notify("三国杀 - 需要响应", request.Reason)
 	switch request.Kind {
 	case "optional-effect":
 		fmt.Printf("\n%s\n1. 发动\n2. 不发动\n", request.Reason)

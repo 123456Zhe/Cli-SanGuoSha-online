@@ -55,7 +55,7 @@ const gameOverVisible = ref(false);
 // 私有
 let ws: WebSocket | null = null;
 let reconnectAttempts = 0;
-let asking = false; // 操作区有表单在等待用户选择
+const asking = ref(false); // 操作区有表单在等待用户选择（ref 使其响应式）
 const msgQueue: ServerMessage[] = [];
 let processingMsg = false;
 
@@ -162,7 +162,7 @@ const handle = async (message: ServerMessage) => {
         clearActions();
         return;
       }
-      if (asking) return; // 表单已就绪，不覆盖
+      if (asking.value) return; // 表单已就绪，不覆盖
       if (message.pendingDiscardCount > 0) return;
       if (message.actions.length > 0) return;
       break;
@@ -191,7 +191,7 @@ const sendDecision = (decision: InteractionDecision) =>
 
 const clearActions = () => {
   actions.value = [];
-  asking = false;
+  asking.value = false;
 };
 
 // ─── 连接 / 重连 ────────────────────────────────────
@@ -287,17 +287,19 @@ const joinGame = (name: string) => {
 };
 
 const sendAction = (actionIndex: number, targetId?: string, selectedCardId?: string) => {
-  asking = false;
+  asking.value = false;
+  interactionRequest.value = null; // 清除可能残留的交互请求
   send({ type: "action", actionIndex, targetId, selectedCardId });
 };
 
 const sendDiscard = (handIndex: number) => {
-  asking = false;
+  asking.value = false;
+  interactionRequest.value = null; // 清除可能残留的交互请求
   send({ type: "discard", handIndex });
 };
 
 const setAsking = (value: boolean) => {
-  asking = value;
+  asking.value = value;
 };
 
 const confirmNext = () => {

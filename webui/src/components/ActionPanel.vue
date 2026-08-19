@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { useGameConnection } from "../composables/useGameConnection.js";
 import type { GameAction, RemovableCardOption } from "../protocol.js";
 
@@ -12,6 +12,7 @@ const {
   sendAction,
   sendDiscard,
   setAsking,
+  interactionRequest,
 } = useGameConnection();
 
 type Step = "idle" | "pick-target" | "pick-card";
@@ -19,6 +20,23 @@ const step = ref<Step>("idle");
 const selectedAction = ref<GameAction | null>(null);
 const selectedActionIndex = ref(-1);
 const selectedTargetId = ref("");
+
+// 服务端推送新 actions 时，自动重置本地步骤状态
+// 防止出牌/选目标后 UI 残留在 pick-target/pick-card 界面
+watch(actions, () => {
+  step.value = "idle";
+  selectedAction.value = null;
+  selectedActionIndex.value = -1;
+  selectedTargetId.value = "";
+});
+
+// 收到交互请求时（如需要响应闪/杀），也重置步骤状态
+watch(interactionRequest, () => {
+  step.value = "idle";
+  selectedAction.value = null;
+  selectedActionIndex.value = -1;
+  selectedTargetId.value = "";
+});
 
 const playerNameOf = (id: string) => {
   const p = snapshot.value?.players.find((pp) => pp.id === id);

@@ -26,7 +26,7 @@ type AgentMessage = {
   content: string;
 };
 
-type AiDecision = {
+export type AiDecision = {
   action: GameAction;
   targetId?: string;
   driverLabel: AiDriverLabel;

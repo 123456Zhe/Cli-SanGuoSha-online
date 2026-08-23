@@ -1,5 +1,5 @@
 import { GameAction, SanGuoGame } from "../engine/game.js";
-import { AiDriverLabel, GameAiLoop } from "./ai.js";
+import { AiDecision, AiDriverLabel, GameAiLoop } from "./ai.js";
 import { LocalAiEngine } from "./local-engine.js";
 
 export type AiTurnDecision = {
@@ -84,7 +84,7 @@ export const pickAiTurnDecision = async (
 ): Promise<AiTurnDecisionResult> => {
   // LLM 决策的任何意外异常（网络、解析、日志副作用等）都不得中断对局：
   // 捕获后回退本地策略，并把失败原因交给上层记录。
-  let modelDecision: AiTurnDecision | null = null;
+  let modelDecision: AiDecision | null = null;
   if (aiLoop) {
     try {
       modelDecision = await aiLoop.decide(game, playerId);

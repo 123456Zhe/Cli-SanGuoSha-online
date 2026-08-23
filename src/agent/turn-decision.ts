@@ -82,7 +82,16 @@ export const pickAiTurnDecision = async (
   aiLoop: GameAiLoop | null,
   localAiEngine: LocalAiEngine,
 ): Promise<AiTurnDecisionResult> => {
-  const modelDecision = aiLoop ? await aiLoop.decide(game, playerId) : null;
+  // LLM 决策的任何意外异常（网络、解析、日志副作用等）都不得中断对局：
+  // 捕获后回退本地策略，并把失败原因交给上层记录。
+  let modelDecision: AiTurnDecision | null = null;
+  if (aiLoop) {
+    try {
+      modelDecision = await aiLoop.decide(game, playerId);
+    } catch (error) {
+      aiLoop.noteFailure(error);
+    }
+  }
   const localDecision = localAiEngine.decide(game, playerId);
   const fallbackDecision: AiTurnDecision | null = localDecision
     ? localDecision.targetId

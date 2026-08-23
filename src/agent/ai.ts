@@ -285,6 +285,11 @@ export class GameAiLoop {
     return this.lastFailureReason;
   }
 
+  /** 记录一次 LLM 决策失败（供 pickAiTurnDecision 捕获意外异常时回填原因，避免静默丢失）。 */
+  noteFailure(error: unknown): void {
+    this.lastFailureReason = error instanceof Error ? error.message : String(error);
+  }
+
   getStrategyNote(playerId: string): string | undefined {
     const block = this.subAgents.get(playerId)?.memory.composePromptBlock();
     return block || undefined;

@@ -11,12 +11,13 @@ import InteractionPanel from "./components/InteractionPanel.vue";
 import MyHand from "./components/MyHand.vue";
 import GameOver from "./components/GameOver.vue";
 
-const { inLobby, snapshot, connected } = useGameConnection();
+const { inLobby, snapshot, connected, connect } = useGameConnection();
 
 onMounted(() => {
-  // 首次加载时自动连接
+  // 首次加载即自动连接：无历史座位 → 宿主模式自动以账号加入；有历史座位 → 自动重连。
+  // （旧版仅靠「加入」按钮触发连接，若 localStorage 残留 sgsPlayerId，弹窗被跳过且永不发起 WS，页面卡在“未连接”。）
   if (!connected.value) {
-    // useGameConnection 内部会自动 connect()
+    connect();
   }
 });
 </script>

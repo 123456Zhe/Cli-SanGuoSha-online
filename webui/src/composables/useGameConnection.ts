@@ -126,6 +126,11 @@ const handle = async (message: ServerMessage) => {
       if (message.message.includes("没有找到可重连的玩家")) {
         playerId.value = null;
         localStorage.removeItem(STORAGE_ID);
+        // 旧座位在其他房间或已不存在：宿主模式下自动以 polychat 账号重新加入当前房间，
+        // 避免“已连接却永远不发起 join”的卡死。
+        if (HOSTED) {
+          autoJoinWithHostedName();
+        }
       }
       break;
 

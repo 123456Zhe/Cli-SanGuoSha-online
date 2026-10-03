@@ -825,6 +825,33 @@ void test("奸雄（原版）：受到伤害后获得造成伤害的牌", async 
   assert.equal(human.hp, 3);
 });
 
+void test("鬼才：替换判定牌时日志显示原牌与替换牌的花色点数", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [SkillName.GuiCai];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+    { id: "r1", type: CardType.Peach, color: "red", suit: "heart", rank: 6 },
+  ];
+  ai1.hand = [];
+  ai1.armor = CardType.EightDiagram;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(human.id, (request) => {
+    if (request.kind === "choose-discard" && request.reason.includes(SkillName.GuiCai)) {
+      const src = request.sources.find((s) => s.sourceId === "hand:r1");
+      return src ? { choice: "card", sourceId: src.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  const logs = await game.playAction(human.id, slash, ai1.id);
+  const guiCaiLog = logs.find((line) => line.includes(SkillName.GuiCai) && line.includes("替换判定牌"));
+  assert.ok(guiCaiLog, "应有鬼才替换日志");
+  assert.ok(guiCaiLog.includes("桃[红桃6]"), `替换牌应显示花色点数，实际：${guiCaiLog}`);
+  assert.ok(/替换判定牌 .+\[.+/.test(guiCaiLog), `原判定牌应显示花色点数，实际：${guiCaiLog}`);
+});
+
 void test("牌堆：官方标准+军争构成共161张", async () => {
   const summary = new Map(CARD_LIBRARY_SUMMARY.map((item) => [item.type, item.count]));
   const total = [...summary.values()].reduce((sum, count) => sum + count, 0);

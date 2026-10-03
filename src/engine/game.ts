@@ -1449,6 +1449,15 @@ export class SanGuoGame {
       negate: CardType.Negate,
       peach: CardType.Peach,
     };
+    // 求桃时明确濒死者，救援者才知道要救谁
+    let reason = `${trigger.cardName}：是否打出${cardNames[kind]}？`;
+    if (kind === "peach") {
+      const dying = this.players.find((item) => item.id === trigger.actorId);
+      const dyingName = dying ? dying.name : "";
+      reason = trigger.actorId === player.id
+        ? `你濒死：是否打出${CardType.Peach}自救？`
+        : `${dyingName}濒死：是否打出${CardType.Peach}救援？`;
+    }
     const decision = await this.decide({
       kind: "respond",
       requestId: this.nextInteractionId(),
@@ -1457,7 +1466,7 @@ export class SanGuoGame {
       responseKind: kind,
       sources,
       allowPass: true,
-      reason: `${trigger.cardName}：是否打出${cardNames[kind]}？`,
+      reason,
     });
     if (decision.choice !== "card") {
       return false;
@@ -1899,8 +1908,8 @@ export class SanGuoGame {
           const replacement = await this.removeUsableCardBySourceId(guiCaiPlayer, decision.sourceId);
           if (replacement) {
             this.discardPile.push(replacement);
+            logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${describeCard(replacement)} 替换判定牌 ${describeCard(card)}`);
             card = replacement;
-            logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${replacement.type} 替换判定牌`);
           }
         }
       }

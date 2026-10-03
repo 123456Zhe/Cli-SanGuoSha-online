@@ -2,6 +2,7 @@ import { createServer as createHttpServer, IncomingMessage, Server as HttpServer
 import { createConnection, Socket } from "node:net";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { JsonLineParser } from "../network/line-parser.js";
 
@@ -175,7 +176,8 @@ const pipeToGame = (ws: WebSocket, remoteAddress: string, options: RelayOptions)
 const valueOf = (name: string, fallback: string): string =>
   process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const entryFile = process.argv[1];
+if (entryFile && import.meta.url === pathToFileURL(entryFile).href) {
   const gameHost = valueOf("host", "127.0.0.1");
   const gamePort = Number.parseInt(valueOf("port", "9527"), 10);
   const webPort = Number.parseInt(valueOf("web-port", "8080"), 10);

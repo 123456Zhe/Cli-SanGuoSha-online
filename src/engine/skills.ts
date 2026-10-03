@@ -1,4 +1,5 @@
 import { Card, CardType } from "./cards.js";
+import { DamageKind } from "./card-utils.js";
 import { resolveGeneralByName } from "./generals.js";
 import {
   CardSource,
@@ -30,7 +31,16 @@ export type SkillUseContext = {
   removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined>;
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
-  applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[]): Promise<void>;
+  applyDamage(
+    source: Player | null,
+    target: Player,
+    amount: number,
+    reason: string,
+    logs: string[],
+    damageCard?: Card,
+    damageKind?: DamageKind | null,
+    isChainSpread?: boolean,
+  ): Promise<void>;
   resolveDuel(user: Player, target: Player): Promise<string[]>;
   resolveDeaths(): Promise<string[]>;
   resolveWinner(): string[];
@@ -241,7 +251,7 @@ export async function useSkillAction(
     ctx.discardPile.push(discarded);
     markSkillUsed(ctx, player.id, SkillName.Assault);
     const logs = [` 发动，弃置 `];
-    await ctx.applyDamage(player, target, 1, SkillName.Assault, logs);
+    await ctx.applyDamage(player, target, 1, SkillName.Assault, logs, discarded);
     logs.push(...(await ctx.resolveDeaths()));
     logs.push(...ctx.resolveWinner());
     await ctx.advanceIfCurrentPlayerDead(logs);
@@ -385,7 +395,7 @@ export async function useSkillAction(
       sources: player.hand.map((handCard, index) => ({
         sourceId: `hand:${handCard.id}`,
         origin: "hand" as const,
-        card: handCard,
+        // 故意不带 card：这是周瑜的手牌，目标只能盲选，牌面不能发给客户端
         label: `${player.name} 的手牌 ${index + 1}`,
       })),
       count: 1,

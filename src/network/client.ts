@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { GameAction, InteractionRequest, RemovableCardOption } from "../engine/game.js";
+import { describeCard } from "../engine/card-utils.js";
 import { ClientMessage, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
 
@@ -191,8 +192,8 @@ const handle = async (message: ServerMessage): Promise<void> => {
     console.log(message.logs.map((line) => `- ${line}`).join("\n"));
     console.log("\n战场：");
     for (const player of message.snapshot.players) {
-      const cards = player.hand ? player.hand.map((card) => card.type).join("、") || "无" : `${player.handCount} 张`;
-      console.log(`${player.id === message.snapshot.currentPlayerId ? ">" : " "} ${player.name} [${player.general}]  身份:${player.role}  体力:${Math.max(0, player.hp)}/${player.maxHp}  手牌:${cards}  状态:${player.faceDown ? "翻面" : "正面"}`);
+      const cards = player.hand ? player.hand.map((card) => describeCard(card)).join("、") || "无" : `${player.handCount} 张`;
+      console.log(`${player.id === message.snapshot.currentPlayerId ? ">" : " "} ${player.name} [${player.general}]  身份:${player.role}  体力:${Math.max(0, player.hp)}/${player.maxHp}  手牌:${cards}  状态:${player.faceDown ? "翻面" : "正面"}${player.chained ? "·连环" : ""}`);
       console.log(`  装备 | 武器:${equipmentName(player.weapon)} | 防具:${equipmentName(player.armor)} | 进攻马:${equipmentName(player.attackHorse)} | 防御马:${equipmentName(player.defenseHorse)} | 宝物:${equipmentName(player.treasure)}`);
     }
     if (message.snapshot.gameOver) { console.log(`\n游戏结束：${message.snapshot.winner}`); return; }
@@ -201,7 +202,7 @@ const handle = async (message: ServerMessage): Promise<void> => {
     try {
       if (message.pendingDiscardCount > 0) {
         const me = message.snapshot.players.find((player) => player.id === message.snapshot.currentPlayerId);
-        const usable = [...(me?.hand ?? []).map((card) => card.type), ...(me?.treasureCards ?? []).map((card) => `${card.type}（木牛流马）`)];
+        const usable = [...(me?.hand ?? []).map((card) => describeCard(card)), ...(me?.treasureCards ?? []).map((card) => `${describeCard(card)}（木牛流马）`)];
         usable.forEach((label, index) => console.log(`${index + 1}. ${label}`));
         send({ type: "discard", handIndex: await choose(`弃置一张牌（还需 ${message.pendingDiscardCount} 张）: `, usable.length) });
       } else {
@@ -211,7 +212,10 @@ const handle = async (message: ServerMessage): Promise<void> => {
         const action = message.actions[actionIndex];
         if (!action) return;
         const targetId = action.type === "end" ? undefined : await chooseTarget(action, message.snapshot.players);
-        const selectedCardId = targetId ? await chooseTargetCard(message.removableCards[targetId]) : undefined;
+        // 只有顺手牵羊/过河拆桥这类需要从目标处选牌的行动才弹选牌提示（needsTargetCard 由服务端标记）
+        const selectedCardId = targetId && action.type === "play" && action.needsTargetCard
+          ? await chooseTargetCard(message.removableCards[targetId])
+          : undefined;
         send({ type: "action", actionIndex, ...(targetId ? { targetId } : {}), ...(selectedCardId ? { selectedCardId } : {}) });
       }
     } finally { asking = false; }

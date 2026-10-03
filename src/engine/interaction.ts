@@ -8,7 +8,11 @@ export type CardSuit = Card["suit"];
 export type CardSource = {
   sourceId: string;
   origin: CardOrigin;
-  card: Card;
+  /**
+   * 关联的真实卡牌。指向其他玩家手牌的匿名选项（如反间）会省略该字段，
+   * 避免把牌面信息发给不应看到的客户端；仅凭 sourceId 即可完成结算。
+   */
+  card?: Card;
   label: string;
 };
 

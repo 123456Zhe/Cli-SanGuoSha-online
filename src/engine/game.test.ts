@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CARD_LIBRARY, Card, CardType, createDeck } from "./cards.js";
-import { GENERAL_LIBRARY, Player, PlayerRole, SanGuoGame, SkillName, InteractionRequest } from "./game.js";
+import { CARD_LIBRARY, CARD_LIBRARY_SUMMARY, Card, CardType, createDeck } from "./cards.js";
+import { GENERAL_LIBRARY, Player, PlayerRole, SanGuoGame, SkillName, InteractionDecision, InteractionRequest } from "./game.js";
 
 const fixedRng = (): number => 0;
 
@@ -22,6 +22,7 @@ const createGame = async (aiCount: number) => {
       armor: CardType | null;
       treasure: CardType | null;
       treasureCards: Card[];
+      chained: boolean;
     }>;
   };
   const human = runtime.players.find((player) => player.id === "human")!;
@@ -586,6 +587,263 @@ void test("木牛流马：出牌阶段可取回内部牌", async () => {
   await game.playAction(human.id, action);
   assert.ok(human.hand.some((card) => card.type === CardType.Peach));
   assert.equal(human.treasureCards.length, 0);
+});
+
+void test("木牛流马：内部的杀同样受每回合出杀次数限制", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  human.treasure = CardType.WoodenOx;
+  human.treasureCards = [{ id: "oxslash", type: CardType.Slash, color: "red", suit: "heart", rank: 7 }];
+  human.hand = [{ id: "hslash", type: CardType.Slash, color: "red", suit: "heart", rank: 8 }];
+  ai1.hand = [];
+  ai1.hp = ai1.maxHp;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  // 先用手牌杀
+  const handSlash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.cardIndex === 0)!;
+  await game.playAction(human.id, handSlash, ai1.id);
+  // 木牛流马下的杀不应再出现在可玩动作中
+  const oxSlashAction = game
+    .getPlayableActions(human.id)
+    .find((item) => item.type === "play" && item.cardIndex === -1000);
+  assert.equal(oxSlashAction, undefined);
+  // 直接构造越过可玩动作列表也应被拒绝，且牌留在牛下
+  const forced = await game.playAction(human.id, {
+    type: "play",
+    cardIndex: -1000,
+    label: "使用 木牛流马下的 杀",
+    requiresTarget: true,
+    targets: [ai1.id],
+  }, ai1.id);
+  assert.ok(forced.join("").includes("已使用过杀"));
+  assert.equal(human.treasureCards.length, 1);
+});
+
+void test("酒：出牌阶段使用后本回合下一张杀伤害+1，且每回合限一次", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [
+    { id: "w1", type: CardType.Wine, color: "black", suit: "spade", rank: 3 },
+    { id: "w2", type: CardType.Wine, color: "black", suit: "club", rank: 9 },
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+  ];
+  ai1.hand = [];
+  ai1.hp = 4;
+  ai1.maxHp = 4;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const wine = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Wine}`)!;
+  assert.ok(wine);
+  await game.playAction(human.id, wine);
+  assert.equal(
+    game.getPlayableActions(human.id).filter((item) => item.type === "play" && item.label === `使用 ${CardType.Wine}`).length,
+    0,
+    "酒每回合限用一次",
+  );
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 2);
+});
+
+void test("酒：濒死时可当桃自救", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [{ id: "w1", type: CardType.Wine, color: "black", suit: "spade", rank: 3 }];
+  human.hp = 1;
+  ai1.hand = [{ id: "as1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(ai1);
+  game.setDecisionHandler(human.id, (request) => {
+    if (request.kind === "respond" && request.responseKind === "peach") {
+      const wine = request.sources.find((source) => source.label.includes("自救"));
+      return wine ? { choice: "card", sourceId: wine.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const slash = game.getPlayableActions(ai1.id).find((item) => item.type === "play" && /杀$/.test(item.label))!;
+  await game.playAction(ai1.id, slash, human.id);
+  assert.equal(human.alive, true);
+  assert.equal(human.hp, 1);
+});
+
+void test("火攻：目标展示手牌后弃同花色牌造成1点火焰伤害", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [
+    { id: "fa1", type: CardType.FireAttack, color: "black", suit: "spade", rank: 2 },
+    { id: "h1", type: CardType.Dodge, color: "red", suit: "heart", rank: 5 },
+  ];
+  ai1.hand = [{ id: "t1", type: CardType.Peach, color: "red", suit: "heart", rank: 6 }];
+  ai1.hp = 4;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const chooseFirst = (request: InteractionRequest): InteractionDecision => {
+    if (request.kind === "choose-discard") {
+      const first = request.sources[0];
+      return first ? { choice: "card", sourceId: first.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  };
+  game.setDecisionHandler(ai1.id, chooseFirst);
+  game.setDecisionHandler(human.id, chooseFirst);
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.FireAttack}`)!;
+  assert.ok(action);
+  await game.playAction(human.id, action, ai1.id);
+  assert.equal(ai1.hp, 3);
+});
+
+void test("铁索连环：横置/重置角色，目标可包括自己", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [{ id: "ic1", type: CardType.IronChain, color: "black", suit: "club", rank: 10 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.IronChain}`)!;
+  assert.ok(action && action.type === "play" && action.targets.includes(human.id), "铁索连环可对自己使用");
+  await game.playAction(human.id, action, ai1.id);
+  assert.equal(ai1.chained, true);
+  human.hand = [{ id: "ic2", type: CardType.IronChain, color: "black", suit: "spade", rank: 11 }];
+  const action2 = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.IronChain}`)!;
+  await game.playAction(human.id, action2, ai1.id);
+  assert.equal(ai1.chained, false);
+});
+
+void test("铁索连环：重铸弃置并摸一张", async () => {
+  const { game, runtime, human } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  human.hand = [{ id: "ic1", type: CardType.IronChain, color: "black", suit: "club", rank: 10 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const reforge = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label.startsWith("重铸"))!;
+  assert.ok(reforge);
+  await game.playAction(human.id, reforge);
+  assert.equal(human.hand.length, 1);
+  assert.notEqual(human.hand[0]?.type, CardType.IronChain);
+});
+
+void test("铁索连环：连环角色受到火焰伤害时向其他连环角色传导", async () => {
+  const { game, runtime, human, ai1 } = await createGame(2);
+  const ai2 = runtime.players.find((player) => player.id === "ai-2")!;
+  for (const player of [human, ai1, ai2]) {
+    (player as { skills: SkillName[] }).skills = [];
+  }
+  human.hand = [{ id: "fs1", type: CardType.FireSlash, color: "red", suit: "heart", rank: 4 }];
+  ai1.hand = [];
+  ai2.hand = [];
+  ai1.hp = 4;
+  ai2.hp = 4;
+  ai1.chained = true;
+  ai2.chained = true;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.FireSlash}`)!;
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 3);
+  assert.equal(ai2.hp, 3, "火焰伤害应传导给其他连环角色");
+});
+
+void test("雷杀：藤甲不抵消雷杀", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [{ id: "ts1", type: CardType.ThunderSlash, color: "black", suit: "spade", rank: 5 }];
+  ai1.hand = [];
+  ai1.armor = CardType.VineArmor;
+  ai1.hp = 4;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.ThunderSlash}`)!;
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 3);
+});
+
+void test("仁王盾：黑色的杀无效", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [{ id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  ai1.hand = [];
+  ai1.armor = CardType.RenWangShield;
+  ai1.hp = 4;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 4);
+});
+
+void test("朱雀羽扇：普通杀视为火杀，藤甲受伤+1", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.weapon = CardType.VermilionFan;
+  human.hand = [{ id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  ai1.hand = [];
+  ai1.armor = CardType.VineArmor;
+  ai1.hp = 4;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  const logs = await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 2);
+  assert.ok(logs.some((line) => line.includes("火杀") || line.includes("火焰")), "日志应体现火属性");
+});
+
+void test("朱雀羽扇：普通杀视为火杀，可触发铁索传导", async () => {
+  const { game, runtime, human, ai1 } = await createGame(2);
+  const ai2 = runtime.players.find((player) => player.id === "ai-2")!;
+  for (const player of [human, ai1, ai2]) {
+    (player as { skills: SkillName[] }).skills = [];
+  }
+  human.weapon = CardType.VermilionFan;
+  human.hand = [{ id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  ai1.hand = [];
+  ai2.hand = [];
+  ai1.hp = 4;
+  ai2.hp = 4;
+  ai1.chained = true;
+  ai2.chained = true;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.hp, 3);
+  assert.equal(ai2.hp, 3, "朱雀羽扇的火杀应触发铁索传导");
+});
+
+void test("奸雄（原版）：受到伤害后获得造成伤害的牌", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [SkillName.JianXiong];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [];
+  human.hp = 4;
+  ai1.hand = [{ id: "as1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(ai1);
+  game.setDecisionHandler(human.id, (request) => {
+    if (request.kind === "optional-effect") {
+      return { choice: "effect", enabled: true };
+    }
+    return { choice: "pass" };
+  });
+  const slash = game.getPlayableActions(ai1.id).find((item) => item.type === "play" && /杀$/.test(item.label))!;
+  await game.playAction(ai1.id, slash, human.id);
+  assert.ok(human.hand.some((card) => card.id === "as1"), "奸雄应获得造成伤害的杀");
+  assert.equal(human.hp, 3);
+});
+
+void test("牌堆：官方标准+军争构成共161张", async () => {
+  const summary = new Map(CARD_LIBRARY_SUMMARY.map((item) => [item.type, item.count]));
+  const total = [...summary.values()].reduce((sum, count) => sum + count, 0);
+  assert.equal(total, 161);
+  assert.equal(summary.get(CardType.Slash), 30);
+  assert.equal(summary.get(CardType.FireSlash), 5);
+  assert.equal(summary.get(CardType.ThunderSlash), 9);
+  assert.equal(summary.get(CardType.Dodge), 24);
+  assert.equal(summary.get(CardType.Peach), 12);
+  assert.equal(summary.get(CardType.Wine), 5);
+  assert.equal(summary.get(CardType.Dismantle), 6);
+  assert.equal(summary.get(CardType.Snatch), 5);
+  assert.equal(summary.get(CardType.Negate), 6);
+  assert.equal(summary.get(CardType.FireAttack), 3);
+  assert.equal(summary.get(CardType.IronChain), 6);
+  assert.equal(summary.get(CardType.EightDiagram), 2);
+  assert.equal(summary.get(CardType.RenWangShield), 1);
+  assert.equal(summary.get(CardType.VineArmor), 2);
+  assert.equal(CARD_LIBRARY.length, 161);
 });
 
 void test("反间：目标可声明花色并从周瑜手牌中匿名自选一张", async () => {

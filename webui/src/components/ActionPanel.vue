@@ -60,7 +60,8 @@ const onActionClick = (index: number) => {
 };
 
 const onTargetClick = (targetId: string) => {
-  const cardOptions = removableCards.value[targetId];
+  // 只有服务端标记 needsTargetCard 的行动（顺手牵羊/过河拆桥）才需要从目标处选牌
+  const cardOptions = selectedAction.value?.needsTargetCard ? removableCards.value[targetId] : undefined;
   if (cardOptions && cardOptions.length > 0) {
     selectedTargetId.value = targetId;
     step.value = "pick-card";

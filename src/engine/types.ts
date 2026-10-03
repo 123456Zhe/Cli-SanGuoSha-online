@@ -28,9 +28,11 @@ export type Player = {
   attackHorse: AttackHorseType | null;
   treasure: TreasureType | null;
   treasureCards: Card[];
-  delayedTricks: Array<{ cardType: CardType; sourcePlayerId: string }>;
+  delayedTricks: Array<{ cardType: CardType; sourcePlayerId: string; card?: Card }>;
   alive: boolean;
   faceDown: boolean;
+  /** 铁索连环状态（横置）：受到属性伤害时会向其他连环角色传导 */
+  chained: boolean;
 };
 
 export enum SkillName {
@@ -88,6 +90,8 @@ export type GameAction =
       label: string;
       requiresTarget: boolean;
       targets: string[];
+      /** 该牌结算时需要从目标处选择一张牌（如顺手牵羊/过河拆桥），客户端据此决定是否弹出选牌提示 */
+      needsTargetCard?: boolean;
     }
   | {
       type: "skill";
@@ -145,6 +149,8 @@ export type SkillEventPayload = {
   drawCount?: number;
   damage?: number;
   reason?: string;
+  /** 造成本次伤害的牌（如杀/决斗/锦囊），供奸雄等技能获取 */
+  card?: Card;
 };
 
 export type SkillHook = (payload: SkillEventPayload, logs: string[]) => void | Promise<void>;
@@ -184,17 +190,20 @@ export type WeaponType =
   | CardType.FemaleSword
   | CardType.QinggangSword
   | CardType.IceSword
+  | CardType.SilverMoonSpear
   | CardType.GudingBlade
   | CardType.SerpentSpear
   | CardType.GreenDragonBlade
   | CardType.RockCleavingAxe
   | CardType.Halberd
-  | CardType.KylinBow;
+  | CardType.KylinBow
+  | CardType.VermilionFan;
 export type ArmorType =
   | CardType.EightDiagram
+  | CardType.RenWangShield
   | CardType.VineArmor
   | CardType.SilverLion;
-export type DefenseHorseType = CardType.Dilu | CardType.JueYing | CardType.ZhuaHuangFeiDian;
+export type DefenseHorseType = CardType.Dilu | CardType.JueYing | CardType.ZhuaHuangFeiDian | CardType.HuaLiu;
 export type AttackHorseType = CardType.ChiTu | CardType.DaYuan | CardType.ZiXing;
 export type TreasureType = CardType.WoodenOx;
 export type EquipCardType = WeaponType | ArmorType | DefenseHorseType | AttackHorseType | TreasureType;

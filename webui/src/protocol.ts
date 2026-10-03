@@ -44,6 +44,7 @@ export interface PublicPlayer {
   delayedTricks: Array<{ cardType: string; sourcePlayerId: string }>;
   alive: boolean;
   faceDown: boolean;
+  chained: boolean;
 }
 
 // ─── 快照 ───────────────────────────────────────────
@@ -66,6 +67,8 @@ export interface GameAction {
   type: string;
   requiresTarget: boolean;
   targets: string[];
+  /** 顺手牵羊/过河拆桥等需要从目标处选牌时为 true */
+  needsTargetCard?: boolean;
 }
 
 export interface RemovableCardOption {

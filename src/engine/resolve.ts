@@ -1,12 +1,15 @@
 import { Card, CardType } from "./cards.js";
 import {
   countRemovableSelfCards,
+  DamageKind,
   hasRemovableCard,
   isArmorCard,
   isAttackHorseCard,
   isDefenseHorseCard,
   isSlashCard,
   isWeaponCard,
+  slashKindOf,
+  SlashKind,
   usableCardCount,
 } from "./card-utils.js";
 import { resolveGeneralByName } from "./generals.js";
@@ -41,7 +44,16 @@ export type ResolveContext = {
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
   drawJudgmentCard(reason: string, logs: string[], owner: Player): Promise<Card | null>;
-  applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[]): Promise<void>;
+  applyDamage(
+    source: Player | null,
+    target: Player,
+    amount: number,
+    reason: string,
+    logs: string[],
+    damageCard?: Card,
+    damageKind?: DamageKind | null,
+    isChainSpread?: boolean,
+  ): Promise<void>;
   discardSelfCards(player: Player, count: number): Promise<string[]>;
   canPlayerRespond(playerId: string, kind: ResponseKind): boolean;
   setPlayerResponseSelection(playerId: string, kind: ResponseKind, optionId: string | null): void;
@@ -54,6 +66,8 @@ export type ResolveContext = {
   consumePeachResponse(player: Player, dyingPlayerId: string, logs: string[]): Promise<boolean>;
   randomIndex(length: number): number;
   buildSlashSources(player: Player): CardSource[];
+  /** 酒的"下一张杀伤害+1"：若玩家有酒增益则消耗并返回 true */
+  consumeWineBuff(player: Player): boolean;
 };
 
 export function resolveSlash(
@@ -61,12 +75,13 @@ export function resolveSlash(
   attacker: Player,
   target: Player,
   fromSerpent = false,
-  fire = false,
-  redSlash = false,
+  kind: SlashKind = "normal",
+  damageCard?: Card,
 ): Promise<string[]> {
   return (async () => {
-    const logs = [`${attacker.name} 对 ${target.name} 使用${fire ? CardType.FireSlash : CardType.Slash}`];
-    await triggerJiAng(ctx, attacker, target, redSlash, logs);
+    const kindName = kind === "fire" ? CardType.FireSlash : kind === "thunder" ? CardType.ThunderSlash : CardType.Slash;
+    const logs = [`${attacker.name} 对 ${target.name} 使用${kindName}`];
+    await triggerJiAng(ctx, attacker, target, damageCard?.color === "red", logs);
     if (ctx.isKongChengProtected(target, CardType.Slash)) {
       logs.push(`${target.name} 的${SkillName.KongCheng}生效，无法成为杀的目标`);
       return logs;
@@ -111,7 +126,7 @@ export function resolveSlash(
                 : undefined;
             if (chosen) {
               logs.push(`${target.name} 发动${SkillName.LiuLi}，弃置 ${discarded.type} 将杀转移给 ${chosen.name}`);
-              logs.push(...(await resolveSlash(ctx, attacker, chosen, fromSerpent, fire, redSlash)));
+              logs.push(...(await resolveSlash(ctx, attacker, chosen, fromSerpent, kind, damageCard)));
               return logs;
             }
           }
@@ -119,8 +134,12 @@ export function resolveSlash(
       }
     }
     const ignoreArmor = attacker.weapon === CardType.QinggangSword && await ctx.shouldActivateOptionalEffect(attacker, CardType.QinggangSword);
-    if (!fire && !ignoreArmor && target.armor === CardType.VineArmor) {
+    if (kind === "normal" && !ignoreArmor && target.armor === CardType.VineArmor) {
       logs.push(`${target.name} 的藤甲生效，抵消了杀`);
+      return logs;
+    }
+    if (!ignoreArmor && target.armor === CardType.RenWangShield && damageCard?.color === "black") {
+      logs.push(`${target.name} 的仁王盾生效，抵消了黑色的杀`);
       return logs;
     }
     if (attacker.weapon === CardType.FemaleSword && await ctx.shouldActivateOptionalEffect(attacker, CardType.FemaleSword) && attacker.gender !== target.gender) {
@@ -173,7 +192,7 @@ export function resolveSlash(
         dodged = false;
       } else {
         for (let i = 0; i < requireDodgeCount; i += 1) {
-          if (!(await consumeDodgeResponse(ctx, target, { cardName: fire ? CardType.FireSlash : CardType.Slash, actorId: attacker.id }, logs))) {
+          if (!(await consumeDodgeResponse(ctx, target, { cardName: kindName, actorId: attacker.id }, logs))) {
             dodged = false;
             break;
           }
@@ -181,7 +200,7 @@ export function resolveSlash(
       }
     } else {
       for (let i = 0; i < requireDodgeCount; i += 1) {
-        if (!(await consumeDodgeResponse(ctx, target, { cardName: fire ? CardType.FireSlash : CardType.Slash, actorId: attacker.id }, logs))) {
+        if (!(await consumeDodgeResponse(ctx, target, { cardName: kindName, actorId: attacker.id }, logs))) {
           dodged = false;
           break;
         }
@@ -200,7 +219,7 @@ export function resolveSlash(
           if (slash) {
             ctx.discardPile.push(slash);
             logs.push(`${attacker.name} 的青龙偃月刀生效，追加一张杀`);
-            logs.push(...(await resolveSlash(ctx, attacker, target, false, slash.type === CardType.FireSlash, slash.color === "red")));
+            logs.push(...(await resolveSlash(ctx, attacker, target, false, slashKindOf(attacker, slash.type), slash)));
             return logs;
           }
         }
@@ -219,9 +238,13 @@ export function resolveSlash(
       return logs;
     }
     let damage = 1;
-    if (fire && target.armor === CardType.VineArmor) {
+    if (kind === "fire" && target.armor === CardType.VineArmor) {
       damage += 1;
       logs.push(`${target.name} 的藤甲受到火焰克制，伤害+1`);
+    }
+    if (ctx.consumeWineBuff(attacker)) {
+      damage += 1;
+      logs.push(`${attacker.name} 的酒生效，本次杀伤害+1`);
     }
     if (attacker.weapon === CardType.GudingBlade && await ctx.shouldActivateOptionalEffect(attacker, CardType.GudingBlade) && target.hand.length === 0) {
       damage += 1;
@@ -231,7 +254,7 @@ export function resolveSlash(
       damage += 1;
       logs.push(`${attacker.name} 的${SkillName.LuoYi}生效，本次杀伤害+1`);
     }
-    await ctx.applyDamage(attacker, target, damage, "杀", logs);
+    await ctx.applyDamage(attacker, target, damage, "杀", logs, damageCard, kind === "normal" ? null : kind);
     if (attacker.weapon === CardType.KylinBow && await ctx.shouldActivateOptionalEffect(attacker, CardType.KylinBow)) {
       const horseLogs = removeHorseEquip(ctx, target);
       logs.push(...horseLogs);
@@ -288,7 +311,7 @@ export function resolveSnatch(ctx: ResolveContext, user: Player, target: Player,
   })();
 }
 
-export function resolveDuel(ctx: ResolveContext, user: Player, target: Player): Promise<string[]> {
+export function resolveDuel(ctx: ResolveContext, user: Player, target: Player, duelCard?: Card): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 对 ${target.name} 发起决斗`];
     await triggerJiAng(ctx, user, target, true, logs);
@@ -324,7 +347,7 @@ export function resolveDuel(ctx: ResolveContext, user: Player, target: Player): 
           damage += 1;
           logs.push(`${attacker.name} 的${SkillName.LuoYi}生效，本次决斗伤害+1`);
         }
-        await ctx.applyDamage(attacker, defender, damage, "决斗", logs);
+        await ctx.applyDamage(attacker, defender, damage, "决斗", logs, duelCard);
         break;
       }
       const wushuangNote = needCount > 1 ? `（${SkillName.WuShuang}消耗 ${needCount} 张杀）` : "";
@@ -337,7 +360,7 @@ export function resolveDuel(ctx: ResolveContext, user: Player, target: Player): 
   })();
 }
 
-export function resolveBarbarian(ctx: ResolveContext, user: Player): Promise<string[]> {
+export function resolveBarbarian(ctx: ResolveContext, user: Player, trickCard?: Card): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 使用南蛮入侵`];
     for (const target of ctx.players) {
@@ -354,14 +377,14 @@ export function resolveBarbarian(ctx: ResolveContext, user: Player): Promise<str
       if (await consumeSlashResponse(ctx, target, { cardName: CardType.Barbarian, actorId: user.id }, logs)) {
         logs.push(`${target.name} 打出杀，抵消南蛮入侵`);
       } else {
-        await ctx.applyDamage(user, target, 1, "南蛮入侵", logs);
+        await ctx.applyDamage(user, target, 1, "南蛮入侵", logs, trickCard);
       }
     }
     return logs;
   })();
 }
 
-export function resolveArrowRain(ctx: ResolveContext, user: Player): Promise<string[]> {
+export function resolveArrowRain(ctx: ResolveContext, user: Player, trickCard?: Card): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 使用万箭齐发`];
     for (const target of ctx.players) {
@@ -378,7 +401,7 @@ export function resolveArrowRain(ctx: ResolveContext, user: Player): Promise<str
       if (await consumeDodgeResponse(ctx, target, { cardName: CardType.ArrowRain, actorId: user.id }, logs)) {
         logs.push(`${target.name} 打出闪，抵消万箭齐发`);
       } else {
-        await ctx.applyDamage(user, target, 1, "万箭齐发", logs);
+        await ctx.applyDamage(user, target, 1, "万箭齐发", logs, trickCard);
       }
     }
     return logs;
@@ -451,7 +474,7 @@ export function resolveCollateral(ctx: ResolveContext, user: Player, target: Pla
       if (slash) {
         ctx.discardPile.push(slash);
         logs.push(`${target.name} 对 ${chosenVictim.name} 使用杀`);
-        logs.push(...(await resolveSlash(ctx, target, chosenVictim, false, slash.type === CardType.FireSlash, slash.color === "red")));
+        logs.push(...(await resolveSlash(ctx, target, chosenVictim, false, slashKindOf(target, slash.type), slash)));
         return logs;
       }
     }
@@ -461,6 +484,98 @@ export function resolveCollateral(ctx: ResolveContext, user: Player, target: Pla
       return logs;
     }
     logs.push(...(await removeSelectedCardFromPlayer(ctx, target, "获得", "weapon", user)));
+    return logs;
+  })();
+}
+
+/**
+ * 火攻：目标展示一张手牌，你可弃置一张同花色手牌，对其造成 1 点火焰伤害。
+ * 官方规则：出牌阶段对一名其他角色使用；目标无手牌则无法展示，火攻无效。
+ */
+export function resolveFireAttack(ctx: ResolveContext, user: Player, target: Player, usedCard: Card): Promise<string[]> {
+  return (async () => {
+    const logs = [`${user.name} 对 ${target.name} 使用${CardType.FireAttack}`];
+    if (await tryNegate(ctx, target, CardType.FireAttack, logs, user.id)) {
+      return logs;
+    }
+    if (target.hand.length === 0) {
+      logs.push(`${target.name} 没有手牌可展示，${CardType.FireAttack}无效`);
+      return logs;
+    }
+    // 目标选择一张手牌展示（不弃置）
+    const showDecision = await ctx.decide({
+      kind: "choose-discard",
+      requestId: ctx.nextInteractionId(),
+      playerId: target.id,
+      reason: `${CardType.FireAttack}：${target.name} 请选择 1 张手牌展示`,
+      sources: ctx.buildUsableSources(target).filter((source) => source.origin === "hand"),
+      count: 1,
+      allowPass: false,
+    });
+    let shownSuit: Card["suit"] | null = null;
+    if (showDecision.choice === "card") {
+      const shown = target.hand.find((card) => `hand:${card.id}` === showDecision.sourceId);
+      if (shown) {
+        shownSuit = shown.suit;
+        const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无" } as const;
+        logs.push(`${target.name} 展示了${suitNames[shown.suit]}牌`);
+      }
+    }
+    if (!shownSuit) {
+      return logs;
+    }
+    const sameSuit = user.hand.filter((card) => card.suit === shownSuit);
+    if (sameSuit.length === 0) {
+      logs.push(`${user.name} 没有同花色的手牌可弃置，${CardType.FireAttack}无效`);
+      return logs;
+    }
+    const discardDecision = await ctx.decide({
+      kind: "choose-discard",
+      requestId: ctx.nextInteractionId(),
+      playerId: user.id,
+      reason: `${CardType.FireAttack}：是否弃置 1 张同花色手牌造成 1 点火焰伤害？`,
+      sources: sameSuit.map((card) => ({
+        sourceId: `hand:${card.id}`,
+        origin: "hand" as const,
+        card,
+        label: `弃置${card.type}`,
+      })),
+      count: 1,
+      allowPass: true,
+      passLabel: "不弃置",
+    });
+    if (discardDecision.choice !== "card") {
+      logs.push(`${user.name} 选择不弃置，${CardType.FireAttack}无效`);
+      return logs;
+    }
+    const discarded = await ctx.removeUsableCardBySourceId(user, discardDecision.sourceId);
+    if (!discarded) {
+      return logs;
+    }
+    ctx.discardPile.push(discarded);
+    logs.push(`${user.name} 弃置 ${discarded.type}，${CardType.FireAttack}生效`);
+    await ctx.applyDamage(user, target, 1, CardType.FireAttack, logs, usedCard);
+    return logs;
+  })();
+}
+
+/**
+ * 铁索连环：横置/重置一名角色（连环状态切换）；或重铸（弃置此牌摸一张）。
+ * 注：官方为"至多两名角色"，本实现因单目标行动模型每次指定一名，可连用两张达到同样效果。
+ * 处于连环状态的角色受到属性伤害时，伤害向其他连环角色传导（见 applyDamage）。
+ */
+export function resolveIronChain(
+  ctx: ResolveContext,
+  user: Player,
+  target: Player,
+): Promise<string[]> {
+  return (async () => {
+    const logs = [`${user.name} 对 ${target.name} 使用${CardType.IronChain}`];
+    if (await tryNegate(ctx, target, CardType.IronChain, logs, user.id)) {
+      return logs;
+    }
+    target.chained = !target.chained;
+    logs.push(`${target.name} 的武将牌被${target.chained ? "横置" : "重置"}`);
     return logs;
   })();
 }
@@ -476,7 +591,7 @@ export function resolveDelayedTrick(ctx: ResolveContext, user: Player, usedCard:
     if (usedCard.type !== CardType.Lightning && await tryNegate(ctx, target, usedCard.type, logs, user.id)) {
       return logs;
     }
-    target.delayedTricks.push({ cardType: usedCard.type, sourcePlayerId: user.id });
+    target.delayedTricks.push({ cardType: usedCard.type, sourcePlayerId: user.id, card: usedCard });
     logs.push(`${target.name} 的判定区增加了 ${usedCard.type}`);
     return logs;
   })();
@@ -517,7 +632,7 @@ export function resolveSingleDelayedJudgment(ctx: ResolveContext, player: Player
     if (trick.cardType === CardType.Lightning) {
       if (judgment.suit === "spade" && judgment.rank >= 2 && judgment.rank <= 9) {
         logs.push(`${player.name} 的闪电判定为黑桃${judgment.rank}，受到 3 点雷电伤害`);
-        await ctx.applyDamage(player, player, 3, "闪电", logs);
+        await ctx.applyDamage(player, player, 3, "闪电", logs, trick.card);
       } else {
         logs.push(`${player.name} 的闪电判定未命中`);
         const alivePlayers = ctx.players.filter((p) => p.alive);
@@ -784,11 +899,12 @@ export function getAttackRange(player: Player): number {
   if (
     player.weapon === CardType.SerpentSpear ||
     player.weapon === CardType.GreenDragonBlade ||
-    player.weapon === CardType.RockCleavingAxe
+    player.weapon === CardType.RockCleavingAxe ||
+    player.weapon === CardType.SilverMoonSpear
   ) {
     return 3;
   }
-  if (player.weapon === CardType.Halberd) {
+  if (player.weapon === CardType.Halberd || player.weapon === CardType.VermilionFan) {
     return 4;
   }
   if (player.weapon === CardType.KylinBow) {
@@ -1076,7 +1192,8 @@ export function removeSelectedCardFromPlayer(
       }
       if (mode === "获得" && receiver) {
         receiver.hand.push(removed);
-        return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的手牌 ${removed.type}`];
+        // 从手牌获得时不公开牌型（与其他玩家视角的盲选一致），获得者自己能在手牌中看到
+        return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的 1 张手牌`];
       }
       ctx.discardPile.push(removed);
       return [...extraLogs, `${player.name} 的手牌 ${removed.type} 被弃置`];

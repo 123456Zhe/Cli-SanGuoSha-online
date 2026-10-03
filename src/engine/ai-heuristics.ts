@@ -42,6 +42,19 @@ export function pickBestAiAction(ctx: AiHeuristicsContext, actions: GameAction[]
     const card = player.hand[action.cardIndex];
     return card ? isSlashCard(card.type) : false;
   });
+  // 酒：有杀可出时先喝酒，让下一张杀伤害+1
+  if (slash) {
+    const wine = playable.find((action) => {
+      if (action.type !== "play") {
+        return false;
+      }
+      const card = player.hand[action.cardIndex];
+      return card?.type === CardType.Wine;
+    });
+    if (wine) {
+      return wine;
+    }
+  }
   if (slash) {
     return slash;
   }

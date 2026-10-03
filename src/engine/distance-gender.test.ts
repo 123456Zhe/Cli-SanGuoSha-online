@@ -24,6 +24,7 @@ const makePlayer = (id: string, overrides: Partial<Player> = {}): Player => ({
   delayedTricks: [],
   alive: true,
   faceDown: false,
+  chained: false,
   ...overrides,
 });
 

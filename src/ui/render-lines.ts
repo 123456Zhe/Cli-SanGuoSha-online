@@ -1,5 +1,6 @@
 import { GameAction, GameSnapshot, InteractionRequest, Player, PlayerRole, RemovableCardOption } from "../engine/game.js";
 import { computeDistanceBetween, getAttackRange } from "../engine/resolve.js";
+import { describeCard } from "../engine/card-utils.js";
 
 type TargetAction = Exclude<GameAction, { type: "end" }>;
 
@@ -25,7 +26,7 @@ export function describeHand(cards: Player["hand"]): string {
   if (cards.length === 0) {
     return "0 张";
   }
-  return cards.map((card, index) => `${index + 1}:${card.type}`).join(" ");
+  return cards.map((card, index) => `${index + 1}:${describeCard(card)}`).join(" ");
 }
 
 export function buildDisplayLines(logs: string[], overlay: { title: string | null; lines: string[] }): string[] {
@@ -61,7 +62,8 @@ export function buildStatusLines(
   statusLines.push("");
   statusLines.push("玩家状态:");
   for (const player of snapshot.players) {
-    const status = player.alive ? "存活" : "阵亡";
+    const status = player.alive ? (player.faceDown ? "存活·翻面" : "存活") : "阵亡";
+    const chainedMark = player.alive && player.chained ? "·连环" : "";
     const identity = !player.alive ? player.role : player.role === PlayerRole.Lord ? PlayerRole.Lord : "未知";
     const hand = player.isAI ? `${player.hand.length} 张` : describeHand(player.hand);
     const skills = player.skills.length > 0 ? player.skills.join("、") : "无";
@@ -80,7 +82,7 @@ export function buildStatusLines(
       }
     }
     statusLines.push(
-      `- ${player.name}[${player.general}] | 身份 ${identity} | HP ${Math.max(player.hp, 0)}/${player.maxHp} | 手牌 ${hand} | 装备 武器:${weapon} 防具:${armor} +1马:${defenseHorse} -1马:${attackHorse} 宝物:${treasure} | 技能 ${skills}${reachInfo} | ${status}`,
+      `- ${player.name}[${player.general}] | 身份 ${identity} | HP ${Math.max(player.hp, 0)}/${player.maxHp} | 手牌 ${hand} | 装备 武器:${weapon} 防具:${armor} +1马:${defenseHorse} -1马:${attackHorse} 宝物:${treasure} | 技能 ${skills}${reachInfo} | ${status}${chainedMark}`,
     );
   }
   if (snapshot.gameOver) {
@@ -169,7 +171,7 @@ export function buildActionLines(state: ActionAreaState): string[] {
         `弃牌阶段：需弃置 ${needDiscard} 张（手牌 ${current.hand.length} / 体力 ${Math.max(current.hp, 0)}）`,
       );
       current.hand.forEach((card, index) => {
-        actionLines.push(`${index + 1}. 弃置 ${card.type}`);
+        actionLines.push(`${index + 1}. 弃置 ${describeCard(card)}`);
       });
     } else {
       actionLines.push("等待回合推进...");

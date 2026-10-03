@@ -21,6 +21,7 @@ const equipmentOf = (p: PublicPlayer) => [
 const extraInfo = (p: PublicPlayer) => {
   const parts: string[] = [];
   if (p.faceDown) parts.push("翻面");
+  if (p.chained) parts.push("连环");
   if (p.id !== playerId.value) parts.push(`手牌 ${p.handCount} 张`);
   if (p.treasureCardCount > 0) parts.push(`宝物区 ${p.treasureCardCount} 张`);
   return parts;

@@ -625,10 +625,22 @@ export class GameServer {
       await this.askOptionalEffect(playerId, effect, "摸牌阶段");
     }
     const logs = await this.game.startTurn();
+    // 判定阶段可能造成延迟结算的死亡（如闪电）：回合开始时是干净的结算边界，
+    // 在此立即结算。若当前玩家阵亡则跳过其回合、推进到下一存活玩家。
+    logs.push(...(await this.game.resolvePendingDeaths()));
+    if (!this.game.getCurrentPlayer().alive) {
+      logs.push(...(await this.game.ensureTurnState()));
+    }
     this.log(...logs);
     this.trackBattlefield();
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    if (this.game.isGameOver()) return;
+    if (this.game.consumePendingNextTurn()) {
+      // 当前玩家在判定阶段阵亡，已推进到下一玩家：直接开始其回合
+      this.beginTurn();
+      return;
+    }
     // startTurn 可能因「跳过出牌阶段」（乐不思蜀判定失败、翻面等）直接走完弃牌，
     // 把回合收尾挂起到 pendingTurnEndPlayer——正常路径由出牌/弃牌消息触发 resolveTurnEnd 消费，
     // 这里必须统一消费，否则真人/AI 回合都会卡死在弃牌阶段（pendingDiscardCount=0 且无动作可执行）。
@@ -873,12 +885,15 @@ export class GameServer {
   private async resolveTurnEnd(playerId: string): Promise<void> {
     const enderId = this.game.consumePendingTurnEnd();
     if (enderId !== playerId) return;
+    const player = this.game.getSnapshot().players.find((p) => p.id === playerId);
+    // 阵亡玩家不再走回合结束流程：其回合已由 advanceIfCurrentPlayerDead 推进到下一玩家，
+    // 此时再 finishTurn 会导致 currentPlayerIndex 被多推一位（跳过一个活人玩家）。
+    if (!player || !player.alive) return;
     const effects = this.game.getTurnEndOptionalEffects(playerId);
     for (const effect of effects) {
       await this.askOptionalEffect(playerId, effect, "结束阶段");
     }
-    const player = this.game.getSnapshot().players.find((p) => p.id === playerId);
-    if (player) {
+    {
       const logs = await this.game.finishTurn(player as any);
       this.log(...logs);
       this.trackBattlefield();
@@ -899,12 +914,22 @@ export class GameServer {
     this.log(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    if (this.game.isGameOver()) return;
     this.reviewStrategiesForTurnEnd(current.id);
     if (this.game.consumePendingNextTurn()) {
       this.beginTurn();
       return;
     }
-    await this.advanceIfCurrentPlayerDead();
+    // 延迟结算的死亡（如判定阶段被闪电劈死）可能在没有挂起下一回合时触发。
+    // 此时直接跳过阵亡者、推进到下一存活玩家并开始其回合。
+    // 注意：禁止无条件递归——currentPlayerIndex 未推进时会导致无限循环拖死服务器。
+    this.log(...(await this.game.ensureTurnState()));
+    this.broadcastState();
+    await this.checkAndHandleGameOver();
+    if (this.game.isGameOver()) return;
+    if (this.game.consumePendingNextTurn()) {
+      this.beginTurn();
+    }
   }
 
   private sendStateToPeer(peer: Peer): void {

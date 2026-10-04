@@ -22,7 +22,12 @@ export type ClientSnapshot = Omit<GameSnapshot, "players"> & { players: PublicPl
 export type ClientMessage =
   | { type: "join"; name: string; version: number }
   | { type: "action"; actionIndex: number; targetId?: string; selectedCardId?: string }
-  | { type: "reconnect"; playerId: string; version: number }
+  /**
+   * 重连：`seatToken` 由服务端在 welcome 里签发。
+   * 未提供令牌时，服务端会退一步校验"是否来自该座位当初加入的同一台机器"（来源指纹一致），
+   * 因此尚未存储令牌的现有客户端在本机重连仍可成功；跨机顶座则会被明确拒绝。
+   */
+  | { type: "reconnect"; playerId: string; version: number; seatToken?: string }
   | { type: "discard"; handIndex: number }
   | { type: "interaction"; decision: InteractionDecision }
   | { type: "leave" }
@@ -35,7 +40,7 @@ export type ClientMessage =
   | { type: "source"; machineId: string; ip?: string };
 
 export type ServerMessage =
-  | { type: "welcome"; playerId: string; roomSize: number }
+  | { type: "welcome"; playerId: string; roomSize: number; /** 座位令牌：重连/接管座位时用于证明身份（客户端应持久化） */ seatToken?: string }
   | { type: "reconnect_ok"; playerId: string }
   | { type: "lobby"; players: Array<{ id: string; name: string }>; roomSize: number }
   | { type: "player_disconnected"; playerName: string; waitTimeSeconds: number }

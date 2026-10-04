@@ -71,6 +71,8 @@ void test("主动退出后可在超时内重连", async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     const welcome = client1.messages.find((m) => m.type === "welcome");
     assert.ok(welcome);
+    const seatToken = welcome.seatToken;
+    assert.ok(seatToken, "welcome 应包含座位令牌（重连凭据）");
 
     client1.send({ type: "leave" });
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -79,7 +81,7 @@ void test("主动退出后可在超时内重连", async () => {
 
     const reconnectClient = await TestClient.connect(port);
     try {
-      reconnectClient.send({ type: "reconnect", playerId: welcome.playerId, version: 4 });
+      reconnectClient.send({ type: "reconnect", playerId: welcome.playerId, version: 4, seatToken });
       await new Promise((resolve) => setTimeout(resolve, 50));
       assert.ok(reconnectClient.messages.some((m) => m.type === "reconnect_ok"), "reconnectClient should receive reconnect_ok");
     } finally {
@@ -112,6 +114,8 @@ void test("网络掉线后提示重连且房间不立即关闭", async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     const welcome = client1.messages.find((m) => m.type === "welcome");
     assert.ok(welcome);
+    const seatToken = welcome.seatToken;
+    assert.ok(seatToken, "welcome 应包含座位令牌（重连凭据）");
 
     client1.destroy();
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -120,7 +124,7 @@ void test("网络掉线后提示重连且房间不立即关闭", async () => {
 
     const reconnectClient = await TestClient.connect(port);
     try {
-      reconnectClient.send({ type: "reconnect", playerId: welcome.playerId, version: 4 });
+      reconnectClient.send({ type: "reconnect", playerId: welcome.playerId, version: 4, seatToken });
       await new Promise((resolve) => setTimeout(resolve, 50));
       assert.ok(reconnectClient.messages.some((m) => m.type === "reconnect_ok"), "reconnectClient should receive reconnect_ok");
     } finally {
@@ -241,7 +245,7 @@ void test("同机校验：同一机器第二个连接（不同名双开）被拒
   }
 });
 
-void test("跨机同名：新连接接管座位，旧连接收到关闭提示", async () => {
+void test("跨机同名：未带座位令牌不能顶掉在线座位，原连接不受影响", async () => {
   console.log = () => {};
   const { game } = await createConfiguredGame();
   const server = new GameServer(
@@ -259,13 +263,71 @@ void test("跨机同名：新连接接管座位，旧连接收到关闭提示", 
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.ok(c1.messages.some((m) => m.type === "welcome"), "c1 应加入成功");
 
-    // 另一台机器（不同机器标识）用同一名字加入 → 接管座位，旧连接被通知停止
+    // 另一台机器（不同机器标识、无座位令牌）用同一名字加入：玩家名是对局公开信息，
+    // 不能仅凭名字顶座，否则任何人都能踢掉真人并看到其手牌。
     const c4 = await TestClient.connect(port, "machine-D");
     c4.send({ type: "join", name: "甲", version: 4 });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.ok(c1.messages.some((m) => m.type === "closed"), "旧连接应收到关闭提示");
-    assert.ok(c4.messages.some((m) => m.type === "reconnect_ok"), "新连接应获得该座位");
+    assert.ok(
+      c4.messages.some((m) => m.type === "error" && m.message.includes("座位令牌")),
+      "无令牌的跨机顶座应被明确拒绝并给出可操作提示",
+    );
+    assert.ok(!c1.messages.some((m) => m.type === "closed"), "原连接不应被踢掉");
     c4.destroy();
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("座位令牌：带正确令牌可跨机接管座位，旧连接收到关闭提示", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple" },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port, "machine-A");
+  const c2 = await TestClient.connect(port, "machine-B");
+  const c3 = await TestClient.connect(port, "machine-C");
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const welcome = c1.messages.find((m) => m.type === "welcome");
+    assert.ok(welcome);
+    const seatToken = welcome.seatToken;
+    assert.ok(seatToken, "welcome 应包含座位令牌");
+
+    // 伪造令牌 → 拒绝
+    const forged = await TestClient.connect(port, "machine-E");
+    try {
+      forged.send({ type: "reconnect", playerId: welcome.playerId, version: 4, seatToken: "forged-token" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.ok(
+        forged.messages.some((m) => m.type === "error" && m.message.includes("令牌不匹配")),
+        "伪造令牌应被拒绝",
+      );
+      assert.ok(!c1.messages.some((m) => m.type === "closed"), "校验失败不应影响原连接");
+    } finally {
+      forged.destroy();
+    }
+
+    // 正确令牌（换设备登录）→ 接管座位
+    const reconnected = await TestClient.connect(port, "machine-F");
+    try {
+      reconnected.send({ type: "reconnect", playerId: welcome.playerId, version: 4, seatToken });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.ok(reconnected.messages.some((m) => m.type === "reconnect_ok"), "带正确令牌应接管成功");
+      assert.ok(c1.messages.some((m) => m.type === "closed"), "旧连接应收到关闭提示");
+    } finally {
+      reconnected.destroy();
+    }
   } finally {
     c1.destroy();
     c2.destroy();
@@ -376,6 +438,120 @@ void test("乐不思蜀跳过出牌阶段后回合自动推进，不卡死在弃
     if (stuckAtDiscard) {
       assert.fail("回合曾卡死在弃牌阶段（无动作且无需弃牌）");
     }
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("交互超时：长时间不响应按未响应处理，牌局继续而不是挂死", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple", interactionTimeoutMs: 200 },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port);
+  const c2 = await TestClient.connect(port);
+  const c3 = await TestClient.connect(port);
+  try {
+    c1.send({ type: "join", name: "甲", version: 4 });
+    c2.send({ type: "join", name: "乙", version: 4 });
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await wait(200);
+    const state = [...c1.messages].reverse().find((m) => m.type === "state");
+    assert.ok(state && state.type === "state", "开局后应收到 state");
+    const slashIndex = state.actions.findIndex((action) => action.type === "play" && action.label.includes("杀"));
+    assert.ok(slashIndex >= 0, "甲应有可用的杀");
+    const p2 = state.snapshot.players.find((player) => player.name === "乙");
+    assert.ok(p2, "应找到乙的座位");
+    const hpBefore = p2.hp;
+
+    c1.send({ type: "action", actionIndex: slashIndex, targetId: p2.id });
+    // 出杀的武将会先被询问是否发动技能（如铁骑）；正常应答"不发动"再推进到乙的闪响应。
+    await wait(100);
+    const attackerPrompt = [...c1.messages].reverse().find((m) => m.type === "interaction");
+    if (attackerPrompt && attackerPrompt.type === "interaction") {
+      c1.send({
+        type: "interaction",
+        decision: attackerPrompt.request.kind === "optional-effect" ? { choice: "effect", enabled: false } : { choice: "pass" },
+      });
+    }
+    await wait(150);
+    assert.ok(c2.messages.some((m) => m.type === "interaction"), "乙应收到打闪的交互请求");
+
+    // 乙故意不响应：超时后应按“未响应”继续结算，而不是让整局永久等待。
+    await wait(500);
+    const after = [...c1.messages].reverse().find((m) => m.type === "state");
+    assert.ok(after && after.type === "state", "超时后应继续广播 state");
+    assert.equal(
+      after.snapshot.players.find((player) => player.id === p2.id)?.hp,
+      hpBefore - 1,
+      "未响应视为不出闪，杀应正常造成伤害",
+    );
+    assert.ok(after.logs.some((line) => line.includes("未响应")), "服务端日志应记录按未响应处理");
+  } finally {
+    c1.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("消息长度上限：超长单条消息被拒绝并断开连接", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple", maxLineChars: 1024 },
+    game,
+  );
+  const port = await server.listen();
+  const client = await TestClient.connect(port);
+  try {
+    client.send({ type: "join", name: "甲", version: 4 });
+    await wait(100);
+    // 一条永不换行、远超上限的垃圾数据（模拟恶意客户端占满内存）
+    client.socket.write("x".repeat(8192));
+    await wait(300);
+    assert.ok(
+      client.messages.some((m) => m.type === "error" && m.message.includes("长度上限")),
+      "应回一条长度超限错误",
+    );
+    assert.equal(client.socket.destroyed, true, "超长消息后服务端应断开该连接");
+  } finally {
+    client.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("连接数上限：超过上限的连接被明确拒绝", async () => {
+  console.log = () => {};
+  const { game } = await createConfiguredGame();
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple", maxConnections: 2 },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port);
+  const c2 = await TestClient.connect(port);
+  const c3 = await TestClient.connect(port);
+  try {
+    await wait(200);
+    assert.ok(
+      c3.messages.some((m) => m.type === "error" && m.message.includes("上限")),
+      "第 3 个连接应收到连接数上限错误",
+    );
+    assert.equal(c3.socket.destroyed, true, "被拒绝的连接应被断开");
+    assert.ok(!c1.messages.some((m) => m.type === "error"), "已建立的连接不受影响");
   } finally {
     c1.destroy();
     c2.destroy();

@@ -1,5 +1,5 @@
 import { createServer, Socket, Server } from "node:net";
-import { createHash, randomInt } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
@@ -12,13 +12,14 @@ import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, Netw
 import { hotReloadEngine } from "../engine/hot-reload.js";
 import { CardType } from "../engine/cards.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
-import { JsonLineParser } from "./line-parser.js";
+import { JsonLineParser, LineTooLongError } from "./line-parser.js";
 
 type Peer = { id: string; name: string; socket: Socket; parser: JsonLineParser<ClientMessage> };
 type PendingInteraction = {
   playerId: string;
   request: InteractionRequest;
   resolve: (decision: InteractionDecision) => void;
+  timer: NodeJS.Timeout | null;
 };
 
 export type GameServerOptions = {
@@ -46,6 +47,14 @@ export type GameServerOptions = {
   aiStrategy?: "own" | "always";
   /** 服务端日志等级：info=仅关键事件（默认）；debug=每一条对局日志实时回显并完整写入 devlog/server-log.md。 */
   logLevel?: "info" | "debug";
+  /** 最大并发 TCP 连接数（默认 32）：空连接/恶意连接不得无限占用房主资源。 */
+  maxConnections?: number;
+  /** 单条消息（一行 JSON）长度上限，默认 1 MiB（见 line-parser.ts）。 */
+  maxLineChars?: number;
+  /** 交互请求超时（默认 120 秒）：超时视为未响应，按默认不响应处理并记日志，避免牌局被挂死。 */
+  interactionTimeoutMs?: number;
+  /** 连接后必须在此时间内 join/reconnect（默认 30 秒），否则断开，避免空连接堆积。 */
+  joinTimeoutMs?: number;
 };
 
 const AI_NAME_PREFIX = "[AI]电脑-";
@@ -80,6 +89,9 @@ export class GameServer {
   private readonly seatEpoch = new Map<string, number>(); // 每次断线/重连递增，用于终止在途的 AI 代打
   private readonly activeDrivers = new Set<string>(); // 正在驱动出牌的座位，防止并发双驱
   private readonly sourceFingerprints = new Map<Socket, { ip: string; machineId: string }>(); // 连接 -> 来源（中继透传或按对端 IP 计算）
+  private liveConnections: Set<Socket> | undefined; // 当前 TCP 连接（连接数上限用），迟初始化
+  private seatTokens: Map<string, string> | undefined; // playerId -> 座位令牌（join 时签发）
+  private seatSources: Map<string, string> | undefined; // playerId -> 加入时的来源指纹（令牌缺失时的兜底校验）
   private server: Server | null = null;
   private restarting = false;
   private closing = false;
@@ -91,6 +103,72 @@ export class GameServer {
 
   private get reconnectTimeoutMs(): number {
     return this.options.reconnectTimeoutMs ?? 60_000;
+  }
+
+  private get maxConnections(): number {
+    return this.options.maxConnections ?? 32;
+  }
+
+  private get interactionTimeoutMs(): number {
+    return this.options.interactionTimeoutMs ?? 120_000;
+  }
+
+  private get joinTimeoutMs(): number {
+    return this.options.joinTimeoutMs ?? 30_000;
+  }
+
+  /** 当前 TCP 连接集合；迟初始化以兼容热重载后缺少新字段的存活实例。 */
+  private connections(): Set<Socket> {
+    this.liveConnections ??= new Set<Socket>();
+    return this.liveConnections;
+  }
+
+  private seatTokensMap(): Map<string, string> {
+    this.seatTokens ??= new Map<string, string>();
+    return this.seatTokens;
+  }
+
+  private seatSourcesMap(): Map<string, string> {
+    this.seatSources ??= new Map<string, string>();
+    return this.seatSources;
+  }
+
+  /**
+   * 座位接管校验（重连 / 同名顶座）——playerId 与玩家名在对局中都是公开信息，
+   * 因此"知道 id 就能顶座"是不能接受的：
+   * 1. 带座位令牌且匹配 → 放行；
+   * 2. 未带令牌，但连接来自该座位当初加入的同一台机器（来源指纹一致）→ 放行，
+   *    这样尚未存储令牌的现有 CLI/WebUI/Go 客户端在本机重连依旧可用；
+   * 3. 其余情况拒绝（老客户端会拿到明确提示，而不是静默失败）。
+   */
+  private verifySeatClaim(playerId: string, socket: Socket, seatToken?: string): { ok: true } | { ok: false; message: string } {
+    const expected = this.seatTokensMap().get(playerId);
+    if (seatToken) {
+      if (expected && seatToken === expected) {
+        return { ok: true };
+      }
+      return { ok: false, message: "座位令牌不匹配：不能接管他人的座位" };
+    }
+    const source = this.getSourceInfo(socket);
+    const seatSource = this.seatSourcesMap().get(playerId);
+    if (source.verified && seatSource && source.fingerprint === seatSource) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      message: "缺少座位令牌且不是原设备：为防止顶替座位，请更新到最新客户端或改用原设备重连",
+    };
+  }
+
+  private seatTokenOf(playerId: string): string {
+    const tokens = this.seatTokensMap();
+    const existed = tokens.get(playerId);
+    if (existed) {
+      return existed;
+    }
+    const token = randomUUID().replace(/-/g, "");
+    tokens.set(playerId, token);
+    return token;
   }
 
   constructor(private readonly options: GameServerOptions, game = new SanGuoGame(secureRng)) {
@@ -265,7 +343,7 @@ export class GameServer {
     this.logs.length = 0;
     this.nextPlayerNumber = 1;
     this.pendingAction = null;
-    this.pendingInteraction = null;
+    this.clearPendingInteraction();
     this.clearDisconnected();
     this.roundBattlefieldHistory.clear();
     const onlinePeers = Array.from(this.peers.values());
@@ -348,17 +426,42 @@ export class GameServer {
   }
 
   private accept(socket: Socket): void {
-    const parser = new JsonLineParser<ClientMessage>();
+    const connections = this.connections();
+    if (connections.size >= this.maxConnections) {
+      // 连接数上限：明确回一条错误再断开，避免静默拒绝导致难排障。
+      this.send(socket, { type: "error", message: `房间连接数已达上限（${this.maxConnections}）` });
+      socket.destroySoon();
+      return;
+    }
+    connections.add(socket);
+    const parser = new JsonLineParser<ClientMessage>(this.options.maxLineChars);
     socket.setEncoding("utf8");
     socket.setKeepAlive(true, 5000); // detect dead connections within ~10s
+    // 握手超时：连上却一直不 join/reconnect 的空连接不长期占用名额。
+    const joinTimer = setTimeout(() => {
+      if (!this.peers.has(socket)) {
+        this.send(socket, { type: "error", message: "长时间未加入房间，连接已断开" });
+        socket.destroy();
+      }
+    }, this.joinTimeoutMs);
+    // 不要让这个兜底计时器把进程（或测试进程）吊住：服务器本身由监听 socket 保活。
+    joinTimer.unref?.();
     socket.on("data", (chunk: string) => {
       try {
         for (const message of parser.push(chunk)) this.handle(socket, parser, message);
-      } catch {
+      } catch (error) {
+        if (error instanceof LineTooLongError) {
+          // 超长消息之后的字节流无法安全丢弃，直接断开该连接（destroySoon 先冲刷错误消息）。
+          this.send(socket, { type: "error", message: error.message });
+          socket.destroySoon();
+          return;
+        }
         this.send(socket, { type: "error", message: "消息格式无效" });
       }
     });
     socket.on("close", () => {
+      clearTimeout(joinTimer);
+      connections.delete(socket);
       this.sourceFingerprints.delete(socket);
       this.disconnect(socket);
     });
@@ -375,6 +478,12 @@ export class GameServer {
       return;
     }
     if (message.type === "reconnect") {
+      const claim = this.verifySeatClaim(message.playerId, socket, message.seatToken);
+      if (!claim.ok) {
+        this.send(socket, { type: "error", message: claim.message });
+        socket.end();
+        return;
+      }
       this.handleReconnect(socket, parser, message.playerId, message.version);
       return;
     }
@@ -455,6 +564,17 @@ export class GameServer {
       // 跨机同名视为“换设备接管”：通知旧连接停止，避免两端互相抢座。
       const gamePlayer = this.game.getSnapshot().players.find((p) => p.name === trimmed);
       if (gamePlayer) {
+        // 座位仍在线时，先证明身份（令牌或原设备指纹）才允许顶掉旧连接；
+        // 座位已离线（玩家已退出/断线）时维持原有的“换设备登录”行为。
+        const seatOnline = Array.from(this.peers.values()).some((peer) => peer.id === gamePlayer.id);
+        if (seatOnline) {
+          const claim = this.verifySeatClaim(gamePlayer.id, socket, undefined);
+          if (!claim.ok) {
+            this.send(socket, { type: "error", message: `${claim.message}（该名字正在对局中）` });
+            socket.end();
+            return;
+          }
+        }
         for (const [s, p] of this.peers) {
           if (p.id === gamePlayer.id) {
             this.send(s, { type: "closed", message: `你的名字「${trimmed}」已在其他设备登录，本连接已关闭` });
@@ -491,7 +611,12 @@ export class GameServer {
     } catch {}
     const peer: Peer = { id: peerId, name: trimmed, socket, parser };
     this.peers.set(socket, peer);
-    this.send(socket, { type: "welcome", playerId: peer.id, roomSize: this.options.playerCount });
+    const seatToken = this.seatTokenOf(peer.id);
+    const joinSource = this.getSourceInfo(socket);
+    if (joinSource.verified) {
+      this.seatSourcesMap().set(peer.id, joinSource.fingerprint);
+    }
+    this.send(socket, { type: "welcome", playerId: peer.id, roomSize: this.options.playerCount, seatToken });
     this.broadcastLobby();
     if (this.peers.size === this.humanSlots) this.startGame();
   }
@@ -519,14 +644,21 @@ export class GameServer {
     this.disconnectedIds.delete(playerId);
     // Remove any old peer entries for this playerId to prevent
     // the stale socket's close handler from interfering with reconnection.
+    // 明确告知旧连接"座位已被接管"，否则旧客户端会继续自动重连、与新连接互相抢座。
     for (const [s, p] of this.peers) {
       if (p.id === playerId) {
+        this.send(s, { type: "closed", message: "你的座位已在其他设备登录，本连接已关闭" });
         this.peers.delete(s);
         s.end();
       }
     }
     const peer: Peer = { id: playerId, name: playerName, socket, parser };
     this.peers.set(socket, peer);
+    // 接管成功后把来源指纹绑到当前设备：换了设备的玩家之后断线重连（尚未存储令牌）才不会自锁。
+    const reconnectSource = this.getSourceInfo(socket);
+    if (reconnectSource.verified) {
+      this.seatSourcesMap().set(playerId, reconnectSource.fingerprint);
+    }
     // 重连即交还控制权：终止在途的 AI 代打，座位决策改回由该玩家的 socket 提供。
     const wasTakenOver = this.takeoverIds.delete(playerId);
     this.bumpEpoch(playerId);
@@ -620,20 +752,49 @@ export class GameServer {
 
   private requestPeerDecision(playerId: string, request: InteractionRequest): Promise<InteractionDecision> {
     return new Promise<InteractionDecision>((resolve) => {
-      if (this.pendingInteraction) {
-        this.pendingInteraction.resolve({ choice: "pass" });
+      const previous = this.pendingInteraction;
+      if (previous) {
+        this.clearPendingInteraction();
+        previous.resolve({ choice: "pass" });
       }
-      this.pendingInteraction = { playerId, request, resolve };
+      const entry: PendingInteraction = { playerId, request, resolve, timer: null };
+      // 超时视为"未响应"，按默认不响应（pass）继续结算——这不是替玩家出牌，
+      // 而是不再让整局等一个不应答的连接；策略见 README「交互超时」。
+      const timer = setTimeout(() => {
+        if (this.pendingInteraction !== entry) {
+          return;
+        }
+        this.pendingInteraction = null;
+        const peerName = Array.from(this.peers.values()).find((item) => item.id === playerId)?.name ?? playerId;
+        this.log(`${peerName} 超过 ${Math.round(this.interactionTimeoutMs / 1000)} 秒未响应，按默认不响应处理`);
+        resolve({ choice: "pass" });
+      }, this.interactionTimeoutMs);
+      // 超时计时器不应把事件循环吊住（否则测试与一次性脚本会在结算后多等一整个超时时长）。
+      timer.unref?.();
+      entry.timer = timer;
+      this.pendingInteraction = entry;
       const peer = Array.from(this.peers.values()).find((item) => item.id === playerId);
       if (peer) {
         this.send(peer.socket, { type: "interaction", request });
       } else if (!this.disconnected.has(playerId)) {
         // Player is not connected AND not AI-driven (断线托管会把该座位的 handler 切到 AI，
         // 因此正常流程不会走到这里)——自动 pass，避免牌局等待一个不在线的玩家。
-        this.pendingInteraction = null;
+        this.clearPendingInteraction();
         resolve({ choice: "pass" });
       }
     });
+  }
+
+  /** 清除当前挂起的交互请求并停止其超时计时器。 */
+  private clearPendingInteraction(): void {
+    const pending = this.pendingInteraction;
+    if (!pending) {
+      return;
+    }
+    this.pendingInteraction = null;
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
   }
 
   private handleInteraction(peer: Peer, decision: InteractionDecision): void {
@@ -642,7 +803,7 @@ export class GameServer {
       this.send(peer.socket, { type: "error", message: "当前不需要你决策" });
       return;
     }
-    this.pendingInteraction = null;
+    this.clearPendingInteraction();
     pending.resolve(decision);
   }
 
@@ -1080,7 +1241,7 @@ export class GameServer {
     // 正在等待该玩家的交互请求改由 AI 应答（若等待期间玩家已重连则改为 pass）。
     if (this.pendingInteraction?.playerId === peer.id) {
       const pending = this.pendingInteraction;
-      this.pendingInteraction = null;
+      this.clearPendingInteraction();
       const epoch = this.getEpoch(peer.id);
       void this.answerPendingForTakeover(peer.id, pending, epoch);
     }

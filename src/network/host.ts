@@ -14,9 +14,13 @@ const aiStrategyValue = valueOf("ai-strategy", "own") as NonNullable<GameServerO
 const logLevelValue = valueOf("log-level", "info") as NonNullable<GameServerOptions["logLevel"]>;
 const hybridValue = valueOf("hybrid", process.env.SG_AI_HYBRID ?? "true");
 const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
+const interactionTimeoutSeconds = Number.parseInt(valueOf("interaction-timeout", "120"), 10);
+const maxConnections = Number.parseInt(valueOf("max-connections", "32"), 10);
 if (hybridValue !== "true" && hybridValue !== "false") throw new Error("--hybrid 必须为 true/false");
 if (!Number.isInteger(playerCount) || playerCount < 2 || playerCount > 6) throw new Error("--players 必须为 2 到 6");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port 无效");
+if (!Number.isInteger(interactionTimeoutSeconds) || interactionTimeoutSeconds < 5) throw new Error("--interaction-timeout 必须是不小于 5 的秒数");
+if (!Number.isInteger(maxConnections) || maxConnections < playerCount) throw new Error("--max-connections 不得小于玩家人数");
 if (!Number.isInteger(aiCount) || aiCount < 0 || aiCount >= playerCount) throw new Error("--ai 必须为 0 到 players-1（至少保留 1 个人类玩家）");
 if (aiDriverRaw !== "qwen" && aiDriverRaw !== "ollama" && aiDriverRaw !== "simple" && aiDriverRaw !== "system-one" && aiDriverRaw !== "hybrid") throw new Error("--ai-driver 必须为 qwen/ollama/simple/system-one/hybrid");
 if (aiReasoningValue !== "auto" && aiReasoningValue !== "fast" && aiReasoningValue !== "normal" && aiReasoningValue !== "deep") throw new Error("--ai-reasoning 必须为 auto/fast/normal/deep");
@@ -38,6 +42,9 @@ const options: GameServerOptions = {
   aiReasoning: aiReasoningValue,
   aiStrategy: aiStrategyValue,
   logLevel: logLevelValue,
+  /** 交互超时：超时视为"未响应"，按默认不响应（pass）继续结算，避免整局被一个不应答的连接挂死。 */
+  interactionTimeoutMs: interactionTimeoutSeconds * 1000,
+  maxConnections,
 };
 const server = new GameServer(options);
 await server.listen();

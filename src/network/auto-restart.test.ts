@@ -177,7 +177,7 @@ void test("断线托管：掉线玩家的回合由 AI 推进，超时不关房�
     // 重连取回控制权
     const rc = await TestClient.connect(port);
     try {
-      rc.send({ type: "reconnect", playerId: welcome.playerId, version: 4 });
+      rc.send({ type: "reconnect", playerId: welcome.playerId, version: 4, ...(welcome.seatToken ? { seatToken: welcome.seatToken } : {}) });
       await wait(200);
       assert.ok(rc.messages.some((m) => m.type === "reconnect_ok"), "重连应成功");
       const rcState = [...rc.messages].reverse().find((m) => m.type === "state");

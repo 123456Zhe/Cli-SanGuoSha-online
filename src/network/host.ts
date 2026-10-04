@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import { GameServer, GameServerOptions } from "./server.js";
 
 const valueOf = (name: string, fallback: string): string => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
@@ -38,4 +39,21 @@ const options: GameServerOptions = {
   aiStrategy: aiStrategyValue,
   logLevel: logLevelValue,
 };
-await new GameServer(options).listen();
+const server = new GameServer(options);
+await server.listen();
+
+// 主机控制台：git pull 拿到修复后，输入 reload 即可热重载引擎逻辑，
+// 进行中的对局不中断、玩家无感知。
+console.log("主机控制台命令：reload（热重载引擎逻辑）、help");
+const rl = createInterface({ input: process.stdin, output: process.stdout });
+for await (const line of rl) {
+  const command = line.trim().toLowerCase();
+  if (command === "reload") {
+    const result = await server.hotReloadEngine();
+    console.log(result.message);
+  } else if (command === "help") {
+    console.log("reload - 热重载 src/engine 对局逻辑（进行中的对局不中断；AI 层修改需重启服务器）");
+  } else if (command !== "") {
+    console.log(`未知命令：${command}（输入 help 查看可用命令）`);
+  }
+}

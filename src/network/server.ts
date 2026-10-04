@@ -9,6 +9,7 @@ import { JevAdvisor } from "../agent/jev-advisor.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
+import { hotReloadEngine } from "../engine/hot-reload.js";
 import { CardType } from "../engine/cards.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser } from "./line-parser.js";
@@ -65,6 +66,8 @@ type SourceInfo = { fingerprint: string; verified: boolean };
 
 export class GameServer {
   private game: SanGuoGame;
+  /** 热重载后指向新版 SanGuoGame 构造器：后续新开对局也用新逻辑。 */
+  private gameClass: typeof SanGuoGame = SanGuoGame;
   private readonly peers = new Map<Socket, Peer>();
   private logs: string[] = [];
   private started = false;
@@ -197,6 +200,26 @@ export class GameServer {
     });
   }
 
+  /**
+   * 热重载引擎逻辑（主机控制台 `reload` 命令触发）：
+   * 进行中的对局不中断，`SanGuoGame` 方法与技能钩子换成最新源码实现；
+   * 之后新开的对局也使用新逻辑。只覆盖 `src/engine`，AI 层修改仍需重启。
+   */
+  async hotReloadEngine(): Promise<{ ok: boolean; message: string }> {
+    try {
+      const { gameClass, report } = await hotReloadEngine(this.game);
+      this.gameClass = gameClass;
+      const message = `🔄 引擎热重载成功（源码指纹 ${report.sourceHash}），进行中的对局已切换到新逻辑`;
+      this.log(message);
+      this.broadcastState();
+      return { ok: true, message };
+    } catch (error) {
+      const message = `❌ 引擎热重载失败：${(error as Error).message}`;
+      this.log(message);
+      return { ok: false, message };
+    }
+  }
+
   getDisconnectedIds(): string[] {
     return Array.from(this.disconnectedIds);
   }
@@ -237,7 +260,7 @@ export class GameServer {
   }
 
   private async restartGame(): Promise<void> {
-    this.game = new SanGuoGame(secureRng);
+    this.game = new this.gameClass(secureRng);
     this.game.setDeferDyingResolution(true);
     this.logs.length = 0;
     this.nextPlayerNumber = 1;

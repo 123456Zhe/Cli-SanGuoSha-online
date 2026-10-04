@@ -78,6 +78,7 @@ type serverMessage struct {
 
 	Type                string                     `json:"type"`
 	PlayerID            string                     `json:"playerId"`
+	SeatToken           string                     `json:"seatToken"`
 	RoomSize            int                        `json:"roomSize"`
 	Message             string                     `json:"message"`
 	Players             []player                   `json:"players"`
@@ -94,6 +95,11 @@ type serverMessage struct {
 var input = bufio.NewScanner(os.Stdin)
 var lastPlayers []player
 var myPlayerID string
+
+// seatToken：welcome 里由服务端签发的座位令牌，重连时用来证明"这个座位是我的"。
+// 与 TS CLI 一样只保存在内存：Go 客户端同样不持久化 playerId，重启后本来就无法重连，
+// 因此内存保存已覆盖它的全部重连场景（服务器不必退回到"原设备指纹"兜底）。
+var seatToken string
 
 // machineID 与 TS CLI 共用同一持久化文件（~/.clisanguo/machine-id），
 // 供服务器做“同机单账号”校验：同机多开（Go/Go、Go/CLI）可被识别为同一台机器。
@@ -377,7 +383,11 @@ func renderState(message serverMessage, writer *bufio.Writer) bool {
 func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) bool {
 	if isReconnect {
 		_ = send(writer, map[string]interface{}{"type": "source", "machineId": machineID})
-		_ = send(writer, map[string]interface{}{"type": "reconnect", "playerId": myPlayerID, "version": 4})
+		payload := map[string]interface{}{"type": "reconnect", "playerId": myPlayerID, "version": 4}
+		if seatToken != "" {
+			payload["seatToken"] = seatToken
+		}
+		_ = send(writer, payload)
 	}
 	for scanner.Scan() {
 		var message serverMessage
@@ -388,6 +398,9 @@ func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) boo
 		switch message.Type {
 		case "welcome":
 			myPlayerID = message.PlayerID
+			if message.SeatToken != "" {
+				seatToken = message.SeatToken
+			}
 			fmt.Printf("已加入房间，你的 ID：%s\n", message.PlayerID)
 		case "reconnect_ok":
 			myPlayerID = message.PlayerID
@@ -396,6 +409,13 @@ func runGame(writer *bufio.Writer, scanner *bufio.Scanner, isReconnect bool) boo
 			fmt.Printf("等待玩家（%d/%d）\n", len(message.Players), message.RoomSize)
 		case "error":
 			fmt.Printf("错误：%s\n", message.Message)
+			// 座位令牌失效（例如房间重建后 online-N 被复用）：清掉本机座位，
+			// 避免无限重连失败，提示按名字重新加入。
+			if strings.Contains(message.Message, "座位令牌") {
+				myPlayerID = ""
+				seatToken = ""
+				fmt.Println("座位令牌已失效，请重新运行客户端按名字加入房间")
+			}
 		case "closed":
 			fmt.Println(message.Message)
 			return true

@@ -135,6 +135,20 @@ void test("WebUI 中继：浏览器经 WS 加入对局、收到状态、断线�
     if (lastState && lastState.type === "state") {
       assert.ok(lastState.logs.join("\n").includes("已重连"), "重连日志应提示已重连");
     }
+
+    // 换设备（另一台"机器"的浏览器）+ 座位令牌：应由令牌通过校验，
+    // 同时证明中继把 seatToken 字段原样透传给了游戏服务器。
+    const seatToken = welcome.seatToken;
+    assert.ok(seatToken, "welcome 应携带座位令牌");
+    const otherDevice = await connectWs(relay.port, "web-machine-9");
+    peers.push(otherDevice);
+    otherDevice.ws.send(JSON.stringify({ type: "reconnect", playerId, version: 4, seatToken }));
+    await wait(500);
+    assert.ok(otherDevice.messages.some((m) => m.type === "reconnect_ok"), "带座位令牌的跨机重连应接管座位");
+    assert.ok(
+      reconnected.messages.some((m) => m.type === "closed"),
+      "被接管的旧连接应收到关闭提示（避免两端抢座）",
+    );
   } finally {
     for (const peer of peers) peer.ws.close();
     await relay.close();

@@ -22,6 +22,8 @@ import { PROTOCOL_VERSION } from "../protocol.js";
 const STORAGE_ID = "sgsPlayerId";
 const STORAGE_NAME = "sgsPlayerName";
 const STORAGE_MACHINE = "sgsMachineId";
+/** 座位令牌：服务端在 welcome 里签发，重连/换设备时证明"这个座位是我的"（与 playerId 同生命周期）。 */
+const STORAGE_TOKEN = "sgsSeatToken";
 const MAX_RECONNECT = 10;
 
 // ─── 状态 ───────────────────────────────────────────
@@ -30,6 +32,7 @@ const statusText = ref("未连接");
 const statusClass = ref("");
 const connected = ref(false);
 const playerId = ref<string | null>(localStorage.getItem(STORAGE_ID));
+const seatToken = ref<string | null>(localStorage.getItem(STORAGE_TOKEN));
 const playerName = ref(localStorage.getItem(STORAGE_NAME) ?? "");
 const left = ref(false);
 
@@ -64,6 +67,14 @@ let processingMsg = false;
 const setStatus = (text: string, cls: string) => {
   statusText.value = text;
   statusClass.value = cls;
+};
+
+/** 丢弃本机保存的座位（playerId 与座位令牌必须一起清，否则会拿旧令牌去认别人的座位）。 */
+const clearSeat = () => {
+  playerId.value = null;
+  seatToken.value = null;
+  localStorage.removeItem(STORAGE_ID);
+  localStorage.removeItem(STORAGE_TOKEN);
 };
 
 const machineId = (() => {
@@ -108,6 +119,11 @@ const handle = async (message: ServerMessage) => {
     case "reconnect_ok":
       playerId.value = message.playerId;
       localStorage.setItem(STORAGE_ID, message.playerId);
+      // welcome 会带座位令牌；reconnect_ok 沿用已保存的那份。
+      if (message.type === "welcome" && message.seatToken) {
+        seatToken.value = message.seatToken;
+        localStorage.setItem(STORAGE_TOKEN, message.seatToken);
+      }
       if (playerName.value) localStorage.setItem(STORAGE_NAME, playerName.value);
       reconnectAttempts = 0;
       setStatus(message.type === "welcome" ? "已加入" : "已重连，控制权已交还", "ok");
@@ -123,10 +139,11 @@ const handle = async (message: ServerMessage) => {
 
     case "error":
       logs.value = [...logs.value, `错误：${message.message}`];
-      if (message.message.includes("没有找到可重连的玩家")) {
-        playerId.value = null;
-        localStorage.removeItem(STORAGE_ID);
-        // 旧座位在其他房间或已不存在：宿主模式下自动以 polychat 账号重新加入当前房间，
+      // 座位已失效：房间重建后 playerId 可能被复用，旧令牌会一直校验失败——
+      // 必须清掉本机座位，否则客户端会卡在"永远重连失败"。
+      if (message.message.includes("没有找到可重连的玩家") || message.message.includes("座位令牌")) {
+        clearSeat();
+        // 宿主模式下自动以 polychat 账号重新加入当前房间，
         // 避免“已连接却永远不发起 join”的卡死。
         if (HOSTED) {
           autoJoinWithHostedName();
@@ -211,7 +228,12 @@ const connect = () => {
     send({ type: "source", machineId });
 
     if (playerId.value) {
-      send({ type: "reconnect", playerId: playerId.value, version: PROTOCOL_VERSION });
+      send({
+        type: "reconnect",
+        playerId: playerId.value,
+        version: PROTOCOL_VERSION,
+        ...(seatToken.value ? { seatToken: seatToken.value } : {}),
+      });
     } else if (playerName.value) {
       send({ type: "join", name: playerName.value, version: PROTOCOL_VERSION });
     } else if (HOSTED) {
@@ -267,8 +289,7 @@ const autoJoinWithHostedName = () => {
       if (name) {
         playerName.value = name;
         localStorage.setItem(STORAGE_NAME, name);
-        playerId.value = null;
-        localStorage.removeItem(STORAGE_ID);
+        clearSeat();
         if (ws && ws.readyState === WebSocket.OPEN) {
           send({ type: "join", name, version: PROTOCOL_VERSION });
         }
@@ -282,8 +303,7 @@ const autoJoinWithHostedName = () => {
 const joinGame = (name: string) => {
   playerName.value = name;
   localStorage.setItem(STORAGE_NAME, name);
-  playerId.value = null;
-  localStorage.removeItem(STORAGE_ID);
+  clearSeat();
   if (ws && ws.readyState === WebSocket.OPEN) {
     send({ type: "join", name, version: PROTOCOL_VERSION });
   } else {

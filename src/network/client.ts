@@ -19,6 +19,10 @@ const rl = createInterface({ input: process.stdin, output: process.stdout });
 let asking = false;
 let lastPlayers: Array<{ id: string; name: string }> = [];
 let playerId: string | null = null;
+// 座位令牌（welcome 里由服务端签发）：重连时证明"这个座位是我的"。
+// CLI 的 playerId 只存在内存里（重启后本就无法重连），因此令牌同样只需内存保存——
+// 它覆盖了 CLI 全部重连场景，服务器不必再退回到"原设备指纹"兜底。
+let seatToken: string | null = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 let left = false;
@@ -163,10 +167,19 @@ const handle = async (message: ServerMessage): Promise<void> => {
   if (message.type === "welcome") {
     console.log(`已加入房间，你的 ID：${message.playerId}`);
     playerId = message.playerId;
+    if (message.seatToken) seatToken = message.seatToken;
     reconnectAttempts = 0;
   }
   else if (message.type === "lobby") console.log(`等待玩家 (${message.players.length}/${message.roomSize})：${message.players.map((p) => p.name).join("、")}`);
-  else if (message.type === "error") console.error(`错误：${message.message}`);
+  else if (message.type === "error") {
+    console.error(`错误：${message.message}`);
+    if (message.message.includes("座位令牌")) {
+      // 令牌失效或座位被复用：清掉本机座位，避免无限重连失败，提示用户按名字重新加入。
+      seatToken = null;
+      playerId = null;
+      console.error("座位令牌已失效，请重新运行客户端按名字加入房间");
+    }
+  }
   else if (message.type === "closed") {
     console.log(message.message);
     left = true;
@@ -256,7 +269,12 @@ const bindSocket = (s: Socket, p: JsonLineParser<ServerMessage>): void => {
   s.on("connect", () => {
     s.write(encodeMessage({ type: "source", machineId }));
     if (playerId) {
-      s.write(encodeMessage({ type: "reconnect", playerId, version: NETWORK_PROTOCOL_VERSION }));
+      s.write(encodeMessage({
+        type: "reconnect",
+        playerId,
+        version: NETWORK_PROTOCOL_VERSION,
+        ...(seatToken ? { seatToken } : {}),
+      }));
     } else {
       send({ type: "join", name, version: NETWORK_PROTOCOL_VERSION });
     }

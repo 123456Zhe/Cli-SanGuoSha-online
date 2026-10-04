@@ -138,7 +138,7 @@ export type InteractionDecision =
 export type ClientMessage =
   | { type: "join"; name: string; version: number }
   | { type: "action"; actionIndex: number; targetId?: string; selectedCardId?: string }
-  | { type: "reconnect"; playerId: string; version: number }
+  | { type: "reconnect"; playerId: string; version: number; seatToken?: string }
   | { type: "discard"; handIndex: number }
   | { type: "interaction"; decision: InteractionDecision }
   | { type: "leave" }
@@ -148,7 +148,7 @@ export type ClientMessage =
 // ─── 服务端 → 客户端 消息 ────────────────────────────
 
 export type ServerMessage =
-  | { type: "welcome"; playerId: string; roomSize: number }
+  | { type: "welcome"; playerId: string; roomSize: number; seatToken?: string }
   | { type: "reconnect_ok"; playerId: string }
   | { type: "lobby"; players: Array<{ id: string; name: string }>; roomSize: number }
   | { type: "player_disconnected"; playerName: string; waitTimeSeconds: number }

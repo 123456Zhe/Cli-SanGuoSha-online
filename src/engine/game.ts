@@ -28,7 +28,9 @@ import {
   canReachForSlash as canReachForSlashImpl,
   createCard as createCardImpl,
   discardSelfCards as discardSelfCardsImpl,
+  discardWoodenOxStoredCards as discardWoodenOxStoredCardsImpl,
   expandSlashTargets as expandSlashTargetsImpl,
+  onLoseEquip as onLoseEquipImpl,
   removeRandomCardFromPlayer as removeRandomCardFromPlayerImpl,
   ResolveContext,
   resolveArrowRain as resolveArrowRainImpl,
@@ -170,6 +172,11 @@ export class SanGuoGame {
   private staged = false;
   private pendingNextTurn = false;
   private pendingTurnEndPlayer: string | null = null;
+  /**
+   * 最近一次伤害的来源（目标 playerId → 来源 playerId | null），用于死亡结算时的击杀奖惩。
+   * 迟初始化：热重载会让已存活的实例缺少新字段，因此统一经 damageCreditMap() 访问。
+   */
+  private damageCredit: Map<string, string | null> | undefined;
 
   constructor(rng: () => number = Math.random) {
     this.rng = rng;
@@ -1235,6 +1242,111 @@ export class SanGuoGame {
     return { choice: "pass" };
   }
 
+  /**
+   * "弃置任意张牌"（制衡等）的可选范围：手牌 + 木牛流马内存牌 + 装备区。
+   * 装备区用 `equip:<槽位>` 作为 sourceId，客户端只回传 sourceId，因此不需要协议变更。
+   */
+  private buildAnyDiscardSources(player: Player): Array<CardSource & { card: Card }> {
+    const sources = [...this.buildUsableSources(player)];
+    const equipSource = (slot: string, label: string, type: CardType | null): void => {
+      if (type === null) {
+        return;
+      }
+      sources.push({
+        sourceId: `equip:${slot}`,
+        origin: "equip",
+        card: createCardImpl(this as unknown as ResolveContext, type, `equip-${slot}-${this.turn}`),
+        label: `${label} ${type}`,
+      });
+    };
+    equipSource("weapon", "武器", player.weapon);
+    equipSource("armor", "防具", player.armor);
+    equipSource("defenseHorse", "+1马", player.defenseHorse);
+    equipSource("attackHorse", "-1马", player.attackHorse);
+    equipSource("treasure", "宝物", player.treasure);
+    return sources;
+  }
+
+  private takeEquipSlot(player: Player, slot: string): EquipCardType | null {
+    if (slot === "weapon" && player.weapon !== null) {
+      const type = player.weapon;
+      player.weapon = null;
+      return type;
+    }
+    if (slot === "armor" && player.armor !== null) {
+      const type = player.armor;
+      player.armor = null;
+      return type;
+    }
+    if (slot === "defenseHorse" && player.defenseHorse !== null) {
+      const type = player.defenseHorse;
+      player.defenseHorse = null;
+      return type;
+    }
+    if (slot === "attackHorse" && player.attackHorse !== null) {
+      const type = player.attackHorse;
+      player.attackHorse = null;
+      return type;
+    }
+    if (slot === "treasure" && player.treasure !== null) {
+      const type = player.treasure;
+      player.treasure = null;
+      return type;
+    }
+    return null;
+  }
+
+  /**
+   * 逐张询问"要弃哪张"，直到玩家放弃或已无牌可弃；返回实际弃置张数。
+   * 复用现有 choose-discard 请求（allowPass=true），CLI / WebUI / Go 客户端均已支持放弃选项。
+   */
+  private async requestFlexibleDiscard(player: Player, reason: string, logs: string[]): Promise<number> {
+    const maxCount = this.buildAnyDiscardSources(player).length;
+    let discarded = 0;
+    while (discarded < maxCount) {
+      const sources = this.buildAnyDiscardSources(player);
+      if (sources.length === 0) {
+        break;
+      }
+      const decision = await this.decide({
+        kind: "choose-discard",
+        requestId: this.nextInteractionId(),
+        playerId: player.id,
+        reason: `${reason}（已选 ${discarded} 张，可放弃）`,
+        sources,
+        count: 1,
+        allowPass: true,
+      });
+      if (decision.choice !== "card") {
+        break;
+      }
+      const sourceId = decision.sourceId;
+      if (sourceId.startsWith("equip:")) {
+        const removed = this.takeEquipSlot(player, sourceId.slice("equip:".length));
+        if (removed === null) {
+          break;
+        }
+        this.discardPile.push(createCardImpl(this as unknown as ResolveContext, removed, `discard-${this.turn}`));
+        if (removed === CardType.WoodenOx) {
+          discardWoodenOxStoredCardsImpl(this as unknown as ResolveContext, player, logs);
+        }
+        logs.push(`${player.name} 弃置装备 ${removed}`);
+        // 弃置装备同样属于"失去装备"，枭姬/白银狮子等技能应正常触发。
+        logs.push(...(await onLoseEquipImpl(this as unknown as ResolveContext, player, removed)));
+        discarded += 1;
+        continue;
+      }
+      const card = await this.removeUsableCardBySourceId(player, sourceId);
+      if (!card) {
+        break;
+      }
+      this.discardPile.push(card);
+      logs.push(`${player.name} 弃置 ${card.type}`);
+      discarded += 1;
+    }
+    return discarded;
+  }
+
   private buildUsableSources(player: Player): Array<CardSource & { card: Card }> {
     const sources: Array<CardSource & { card: Card }> = [];
     for (const card of player.hand) {
@@ -2141,15 +2253,21 @@ export class SanGuoGame {
       return;
     }
     target.hp -= finalDamage;
+    // 记录击杀归属：伤害来源即"凶手"，无来源伤害（闪电、苦肉等 source === target）记 null。
+    this.noteDamageSource(source && source.id !== target.id ? source.id : null, target.id);
     logs.push(`${target.name} 受到 ${finalDamage} 点伤害，当前体力 ${Math.max(target.hp, 0)}`);
-    // 铁索连环传导：处于连环状态的角色受到属性伤害时，其他连环角色受到等量同属性伤害（单波次，不递归）
+    // 铁索连环传导：处于连环状态的角色受到属性伤害时，其他连环角色受到等量同属性伤害（单波次，不递归）。
+    // 属性伤害结算完成后，受到影响的所有角色（含被传导者）立即重置武将牌、脱离连环状态。
     if (!isChainSpread && target.chained) {
       const kind = damageKind ?? attributeDamageKind(damageCard?.type);
       if (kind) {
         const kindLabel = kind === "fire" ? "火焰" : "雷电";
+        target.chained = false;
+        logs.push(`${target.name} 受到${kindLabel}属性伤害，铁索连环状态重置`);
         const others = this.players.filter((p) => p.alive && p.chained && p.id !== target.id);
         for (const other of others) {
-          logs.push(`铁索连环传导：${other.name} 受到 ${finalDamage} 点${kindLabel}伤害`);
+          other.chained = false;
+          logs.push(`铁索连环传导：${other.name} 受到 ${finalDamage} 点${kindLabel}伤害，铁索连环状态重置`);
           await this.applyDamage(source, other, finalDamage, "铁索连环", logs, damageCard, kind, true);
         }
       }
@@ -2378,6 +2496,22 @@ export class SanGuoGame {
 
   private resolveDeaths(): Promise<string[]> {
     return resolveDeathsImpl(this as unknown as ResolveContext);
+  }
+
+  private damageCreditMap(): Map<string, string | null> {
+    this.damageCredit ??= new Map<string, string | null>();
+    return this.damageCredit;
+  }
+
+  private noteDamageSource(sourceId: string | null, targetId: string): void {
+    this.damageCreditMap().set(targetId, sourceId);
+  }
+
+  private takeDamageSource(targetId: string): string | null {
+    const map = this.damageCreditMap();
+    const sourceId = map.get(targetId) ?? null;
+    map.delete(targetId);
+    return sourceId;
   }
 
   private resolveWinner(): string[] {

@@ -28,6 +28,8 @@ export type SkillUseContext = {
   nextInteractionId(): number;
   buildUsableSources(player: Player): CardSource[];
   requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]>;
+  /** "弃置任意张牌"（制衡）：逐张询问直到玩家放弃，返回实际弃置张数（已入弃牌堆并结算失去装备） */
+  requestFlexibleDiscard(player: Player, reason: string, logs: string[]): Promise<number>;
   removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined>;
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
@@ -169,10 +171,23 @@ export function canUseZhiHeng(ctx: SkillUseContext, player: Player): boolean {
   if (!hasSkill(player, SkillName.ZhiHeng)) {
     return false;
   }
-  if (player.hand.length === 0) {
+  if (!hasDiscardableCard(player)) {
     return false;
   }
   return !isSkillUsed(ctx, player.id, SkillName.ZhiHeng);
+}
+
+/** 手牌 / 木牛流马内存牌 / 装备区是否有可弃置的牌（制衡等"弃置任意张"技能用）。 */
+export function hasDiscardableCard(player: Player): boolean {
+  return (
+    player.hand.length > 0 ||
+    player.treasureCards.length > 0 ||
+    player.weapon !== null ||
+    player.armor !== null ||
+    player.defenseHorse !== null ||
+    player.attackHorse !== null ||
+    player.treasure !== null
+  );
 }
 
 export function canUseQingNang(ctx: SkillUseContext, player: Player): boolean {
@@ -246,11 +261,11 @@ export async function useSkillAction(
     }
     const [discarded] = await ctx.requestDiscardSelection(player, 1, `发动：选择弃置1张牌`);
     if (!discarded) {
-      return [` 没有可弃置手牌`];
+      return [`${player.name} 没有可弃置的牌，无法发动${SkillName.Assault}`];
     }
     ctx.discardPile.push(discarded);
     markSkillUsed(ctx, player.id, SkillName.Assault);
-    const logs = [` 发动，弃置 `];
+    const logs = [`${player.name} 发动${SkillName.Assault}，弃置 ${discarded.type}`];
     await ctx.applyDamage(player, target, 1, SkillName.Assault, logs, discarded);
     logs.push(...(await ctx.resolveDeaths()));
     logs.push(...ctx.resolveWinner());
@@ -261,21 +276,20 @@ export async function useSkillAction(
     if (!canUseZhiHeng(ctx, player)) {
       return [`${player.name} 当前无法发动${SkillName.ZhiHeng}`];
     }
-    const discardCount = player.hand.length;
-    if (discardCount <= 0) {
-      return [`${player.name} 没有可弃置手牌`];
+    const logs: string[] = [];
+    const discardedCount = await ctx.requestFlexibleDiscard(
+      player,
+      `${player.name} 发动${SkillName.ZhiHeng}：选择弃置任意张牌（可放弃）`,
+      logs,
+    );
+    if (discardedCount === 0) {
+      logs.push(`${player.name} 没有弃置任何牌，${SkillName.ZhiHeng}未发动`);
+      return logs;
     }
-    const discarded: Card[] = [];
-    while (discarded.length < discardCount && player.hand.length > 0) {
-      const card = await ctx.removeHandCardAt(player, 0);
-      if (card) {
-        discarded.push(card);
-      }
-    }
-    ctx.discardPile.push(...discarded);
-    const drawn = ctx.drawCards(player.id, discardCount);
+    const drawn = ctx.drawCards(player.id, discardedCount);
     markSkillUsed(ctx, player.id, SkillName.ZhiHeng);
-    return [`${player.name} 发动${SkillName.ZhiHeng}，弃置 ${discardCount} 张并摸了 ${drawn} 张牌`];
+    logs.push(`${player.name} 发动${SkillName.ZhiHeng}，弃置 ${discardedCount} 张并摸了 ${drawn} 张牌`);
+    return logs;
   }
   if (action.skill === SkillName.QingNang) {
     if (!canUseQingNang(ctx, player)) {
@@ -290,12 +304,12 @@ export async function useSkillAction(
     }
     const [discarded] = await ctx.requestDiscardSelection(player, 1, `发动：选择弃置1张手牌`);
     if (!discarded) {
-      return [` 没有可弃置手牌`];
+      return [`${player.name} 没有可弃置的牌，无法发动${SkillName.QingNang}`];
     }
     ctx.discardPile.push(discarded);
     target.hp = Math.min(target.maxHp, target.hp + 1);
     markSkillUsed(ctx, player.id, SkillName.QingNang);
-    return [` 发动，弃置 ，令回复 1 点体力`];
+    return [`${player.name} 发动${SkillName.QingNang}，弃置 ${discarded.type}，令${target.name}回复 1 点体力`];
   }
   if (action.skill === SkillName.KuRou) {
     if (!canUseKuRou(ctx, player)) {
@@ -475,11 +489,11 @@ export async function useSkillAction(
     }
     const [discarded] = await ctx.requestDiscardSelection(player, 1, `发动：选择弃置1张牌`);
     if (!discarded) {
-      return [` 没有可弃置手牌`];
+      return [`${player.name} 没有可弃置的牌，无法发动${SkillName.LiJian}`];
     }
     ctx.discardPile.push(discarded);
     markSkillUsed(ctx, player.id, SkillName.LiJian);
-    const logs = [` 发动，弃置 ，令  与  决斗`];
+    const logs = [`${player.name} 发动${SkillName.LiJian}，弃置 ${discarded.type}，令${firstMale.name}与${secondMale.name}决斗`];
     logs.push(...(await ctx.resolveDuel(firstMale, secondMale)));
     logs.push(...(await ctx.resolveDeaths()));
     logs.push(...ctx.resolveWinner());
@@ -499,13 +513,13 @@ export async function useSkillAction(
     }
     const discarded = await ctx.requestDiscardSelection(player, 2, `发动：选择弃置2张手牌`);
     if (discarded.length < 2) {
-      return [` 手牌不足 2 张`];
+      return [`${player.name} 手牌不足 2 张，无法发动${SkillName.JieYin}`];
     }
     ctx.discardPile.push(...discarded);
     target.hp = Math.min(target.maxHp, target.hp + 1);
     player.hp = Math.min(player.maxHp, player.hp + 1);
     markSkillUsed(ctx, player.id, SkillName.JieYin);
-    return [` 发动，弃置 2 张手牌， 与  各回复 1 点体力`];
+    return [`${player.name} 发动${SkillName.JieYin}，弃置 2 张手牌，${player.name}与${target.name}各回复 1 点体力`];
   }
   return [`${player.name} 发动了未知技能`];
 }

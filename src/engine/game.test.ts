@@ -16,10 +16,13 @@ const createGame = async (aiCount: number) => {
       alive: boolean;
       hp: number;
       maxHp: number;
+      role: PlayerRole;
       hand: Card[];
       skills: SkillName[];
       weapon: CardType | null;
       armor: CardType | null;
+      defenseHorse: CardType | null;
+      attackHorse: CardType | null;
       treasure: CardType | null;
       treasureCards: Card[];
       chained: boolean;
@@ -737,6 +740,8 @@ void test("铁索连环：连环角色受到火焰伤害时向其他连环角色
   await game.playAction(human.id, slash, ai1.id);
   assert.equal(ai1.hp, 3);
   assert.equal(ai2.hp, 3, "火焰伤害应传导给其他连环角色");
+  assert.equal(ai1.chained, false, "受到属性伤害的角色应在结算后脱离连环状态");
+  assert.equal(ai2.chained, false, "被传导伤害的角色也应脱离连环状态");
 });
 
 void test("雷杀：藤甲不抵消雷杀", async () => {
@@ -803,6 +808,8 @@ void test("朱雀羽扇：普通杀视为火杀，可触发铁索传导", async 
   await game.playAction(human.id, slash, ai1.id);
   assert.equal(ai1.hp, 3);
   assert.equal(ai2.hp, 3, "朱雀羽扇的火杀应触发铁索传导");
+  assert.equal(ai1.chained, false, "被传导的属性伤害结算后应脱离连环状态");
+  assert.equal(ai2.chained, false, "被传导的属性伤害结算后应脱离连环状态");
 });
 
 void test("奸雄（原版）：受到伤害后获得造成伤害的牌", async () => {
@@ -929,6 +936,296 @@ void test("反间：伤害造成阵亡时应正确触发濒死与阵亡判定", 
   assert.equal(ai1.hp, 0);
   assert.equal(ai1.alive, false, "反间致死后应在结算内完成阵亡判定");
   assert.ok(logs.some((line) => line.includes("阵亡")), "日志应包含阵亡记录");
+});
+
+void test("濒死：欠 2 点体力时 1 张桃不足以脱离濒死", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  // 酒 + 杀 = 2 点伤害：ai1 体力 1 → -1，需要 2 张桃才能回到 1 点体力
+  human.hand = [
+    { id: "w1", type: CardType.Wine, color: "black", suit: "spade", rank: 3 },
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+  ];
+  ai1.hand = [{ id: "p1", type: CardType.Peach, color: "red", suit: "heart", rank: 4 }];
+  ai1.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "respond" && request.responseKind === "peach") {
+      const first = request.sources[0];
+      return first ? { choice: "card", sourceId: first.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const wine = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Wine}`)!;
+  assert.ok(wine);
+  await game.playAction(human.id, wine);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  const logs = await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.alive, false, "只有 1 张桃时不应脱离濒死");
+  assert.ok(ai1.hp <= 0, "阵亡者体力不应为正值");
+  assert.ok(logs.some((line) => line.includes("阵亡")), "日志应包含阵亡记录");
+  assert.equal(
+    runtime.players.filter((player) => player.alive && player.hp <= 0).length,
+    0,
+    "不允许出现体力 <= 0 仍然存活的状态",
+  );
+});
+
+void test("濒死：欠 2 点体力可用 2 张桃自救", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  human.hand = [
+    { id: "w1", type: CardType.Wine, color: "black", suit: "spade", rank: 3 },
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+  ];
+  ai1.hand = [
+    { id: "p1", type: CardType.Peach, color: "red", suit: "heart", rank: 4 },
+    { id: "p2", type: CardType.Peach, color: "red", suit: "diamond", rank: 6 },
+  ];
+  ai1.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "respond" && request.responseKind === "peach") {
+      const first = request.sources[0];
+      return first ? { choice: "card", sourceId: first.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const wine = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Wine}`)!;
+  assert.ok(wine);
+  await game.playAction(human.id, wine);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.alive, true, "2 张桃应刚好脱离濒死");
+  assert.equal(ai1.hp, 1);
+  assert.equal(ai1.hand.length, 0, "两张桃都应被消耗");
+});
+
+void test("濒死：其他角色的桃逐张结算，凑够才脱离", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  // ai1 用酒 + 杀把 1 点体力的 human 打到 -1，human 自己没有桃，由 ai1 用两张桃救回
+  ai1.hand = [
+    { id: "w1", type: CardType.Wine, color: "black", suit: "spade", rank: 3 },
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+    { id: "p1", type: CardType.Peach, color: "red", suit: "heart", rank: 4 },
+    { id: "p2", type: CardType.Peach, color: "red", suit: "diamond", rank: 6 },
+  ];
+  human.hand = [];
+  human.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(ai1);
+  game.setDecisionHandler(human.id, () => ({ choice: "pass" }));
+  const rescueRequests: number[] = [];
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "respond" && request.responseKind === "peach") {
+      rescueRequests.push(request.sources.length);
+      const first = request.sources[0];
+      return first ? { choice: "card", sourceId: first.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const wine = game.getPlayableActions(ai1.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Wine}`)!;
+  assert.ok(wine);
+  await game.playAction(ai1.id, wine);
+  const slash = game.getPlayableActions(ai1.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  await game.playAction(ai1.id, slash, human.id);
+  assert.equal(human.alive, true, "他人用两张桃应把 -1 体力救回");
+  assert.equal(human.hp, 1);
+  assert.equal(rescueRequests.length, 2, "救援请求应逐张发出：第 2 张桃用掉后即脱离濒死");
+  assert.deepEqual(rescueRequests, [2, 1], "非自救者的桃来源只含桃本身，不含酒");
+});
+
+void test("枭姬：武器被过河拆桥拆掉时摸两张牌", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [SkillName.XiaoJi];
+  ai1.weapon = CardType.Crossbow;
+  ai1.hand = [];
+  human.hand = [{ id: "d1", type: CardType.Dismantle, color: "black", suit: "club", rank: 3 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "optional-effect") {
+      return { choice: "effect", enabled: true };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Dismantle}`)!;
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action, ai1.id, "weapon");
+  assert.equal(ai1.weapon, null, "武器应被拆掉");
+  assert.equal(ai1.hand.length, 2, "枭姬应在失去武器后摸两张牌");
+  assert.ok(logs.some((line) => line.includes(SkillName.XiaoJi)), "日志应包含枭姬发动记录");
+});
+
+void test("枭姬：+1 马被替换时摸两张牌", async () => {
+  const { game, runtime, ai1 } = await createGame(1);
+  (ai1 as { skills: SkillName[] }).skills = [SkillName.XiaoJi];
+  ai1.defenseHorse = CardType.Dilu;
+  ai1.hand = [{ id: "h1", type: CardType.HuaLiu, color: "black", suit: "spade", rank: 13 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(ai1);
+  game.setDecisionHandler(ai1.id, (request) => {
+    if (request.kind === "optional-effect") {
+      return { choice: "effect", enabled: true };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(ai1.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.HuaLiu}`)!;
+  assert.ok(action, "应能使用新的 +1 马");
+  const logs = await game.playAction(ai1.id, action);
+  assert.equal(ai1.defenseHorse, CardType.HuaLiu);
+  assert.equal(ai1.hand.length, 2, "枭姬应在失去坐骑后摸两张牌");
+  assert.ok(logs.some((line) => line.includes(SkillName.XiaoJi)), "日志应包含枭姬发动记录");
+});
+
+void test("木牛流马被过河拆桥拆掉时内存的牌进入弃牌堆", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  ai1.treasure = CardType.WoodenOx;
+  ai1.treasureCards = [{ id: "ox1", type: CardType.Peach, color: "red", suit: "heart", rank: 7 }];
+  ai1.hand = [];
+  human.hand = [{ id: "d1", type: CardType.Dismantle, color: "black", suit: "club", rank: 3 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(ai1.id, () => ({ choice: "pass" }));
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Dismantle}`)!;
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action, ai1.id, "treasure");
+  assert.equal(ai1.treasure, null, "木牛流马应被拆掉");
+  assert.equal(ai1.treasureCards.length, 0, "内存的牌不应凭空消失");
+  assert.ok(logs.some((line) => line.includes("置入弃牌堆")), "日志应记录内存牌进入弃牌堆");
+});
+
+void test("击杀奖惩：击杀反贼者摸三张牌", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  ai1.role = PlayerRole.Rebel;
+  human.hand = [{ id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  ai1.hand = [];
+  ai1.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  const logs = await game.playAction(human.id, slash, ai1.id);
+  assert.equal(ai1.alive, false);
+  assert.equal(human.hand.length, 3, "击杀反贼应摸三张牌");
+  assert.ok(logs.some((line) => line.includes("击杀反贼")), "日志应包含击杀奖惩记录");
+});
+
+void test("击杀奖惩：主公杀死忠臣需弃置全部手牌与装备", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [];
+  assert.equal(human.role, PlayerRole.Lord, "默认人类玩家为主公");
+  ai1.role = PlayerRole.Loyalist;
+  human.hand = [
+    { id: "s1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+    { id: "d1", type: CardType.Dodge, color: "red", suit: "heart", rank: 2 },
+  ];
+  human.weapon = CardType.Crossbow;
+  human.treasure = CardType.WoodenOx;
+  human.treasureCards = [{ id: "oxdodge", type: CardType.Dodge, color: "red", suit: "heart", rank: 7 }];
+  ai1.hand = [];
+  ai1.hp = 1;
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  // 木牛流马里的牌可以作为响应牌使用；显式让主公放弃救援，避免默认决策自动出桃救人。
+  game.setDecisionHandler(human.id, () => ({ choice: "pass" }));
+  const slash = game.getPlayableActions(human.id).find((item) => item.type === "play" && item.label === `使用 ${CardType.Slash}`)!;
+  assert.ok(slash);
+  const logs = await game.playAction(human.id, slash, ai1.id);
+  assert.equal(human.hand.length, 0, "主公应弃置所有手牌");
+  assert.equal(human.weapon, null, "主公应弃置所有装备");
+  assert.equal(human.treasure, null);
+  assert.equal(human.treasureCards.length, 0, "木牛流马内存的牌也应一并弃置");
+  assert.ok(logs.some((line) => line.includes("杀死忠臣")), "日志应包含主公误杀忠臣的惩罚");
+});
+
+void test("击杀奖惩：无来源死亡（苦肉）不发放奖励", async () => {
+  const { game, runtime, human, ai1 } = await createGame(1);
+  (human as { skills: SkillName[] }).skills = [];
+  (ai1 as { skills: SkillName[] }).skills = [SkillName.KuRou];
+  ai1.hp = 1;
+  ai1.hand = [];
+  human.hand = [];
+  runtime.currentPlayerIndex = runtime.players.indexOf(ai1);
+  game.setDecisionHandler(ai1.id, () => ({ choice: "pass" }));
+  const action = game.getPlayableActions(ai1.id).find((item) => item.type === "skill" && item.skill === SkillName.KuRou)!;
+  assert.ok(action);
+  await game.playAction(ai1.id, action);
+  assert.equal(ai1.alive, false, "苦肉失去 1 点体力后应阵亡");
+  assert.equal(human.hand.length, 0, "无来源死亡不应给其他玩家奖励");
+});
+
+void test("制衡：可以只弃任意张牌，而不是弃光全部手牌", async () => {
+  const { game, runtime, human } = await createGame(1);
+  human.skills = [SkillName.ZhiHeng];
+  human.hand = [
+    { id: "z1", type: CardType.Slash, color: "black", suit: "club", rank: 7 },
+    { id: "z2", type: CardType.Peach, color: "red", suit: "heart", rank: 6 },
+  ];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  let asked = 0;
+  game.setDecisionHandler(human.id, (request) => {
+    if (request.kind === "choose-discard") {
+      asked += 1;
+      const picked = request.sources.find((source) => source.sourceId === "hand:z2");
+      return asked === 1 && picked ? { choice: "card", sourceId: picked.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "skill" && item.skill === SkillName.ZhiHeng)!;
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action);
+  assert.equal(asked, 2, "弃完一张后应再问一次是否继续");
+  assert.ok(!human.hand.some((card) => card.id === "z2"), "被弃置的牌应离开手牌");
+  assert.equal(human.hand.length, 2, "弃 1 张摸 1 张：剩余 1 张 + 新摸 1 张");
+  assert.ok(logs.some((line) => line.includes("弃置 1 张并摸了 1 张牌")), "日志应记录只弃置 1 张");
+});
+
+void test("制衡：可以弃置装备区的牌", async () => {
+  const { game, runtime, human } = await createGame(1);
+  human.skills = [SkillName.ZhiHeng];
+  human.weapon = CardType.Crossbow;
+  human.hand = [{ id: "z1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  let asked = 0;
+  game.setDecisionHandler(human.id, (request) => {
+    if (request.kind === "choose-discard") {
+      asked += 1;
+      const picked = request.sources.find((source) => source.sourceId === "equip:weapon");
+      return asked === 1 && picked ? { choice: "card", sourceId: picked.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "skill" && item.skill === SkillName.ZhiHeng)!;
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action);
+  assert.equal(human.weapon, null, "装备区的牌应可被制衡弃置");
+  assert.ok(logs.some((line) => line.includes("弃置装备")), "日志应记录弃置装备");
+  assert.equal(human.hand.length, 2, "弃 1 张装备摸 1 张：原 1 张 + 新摸 1 张");
+});
+
+void test("制衡：一张都不弃则视为未发动，技能仍可再用", async () => {
+  const { game, runtime, human } = await createGame(1);
+  human.skills = [SkillName.ZhiHeng];
+  human.hand = [{ id: "z1", type: CardType.Slash, color: "black", suit: "club", rank: 7 }];
+  runtime.currentPlayerIndex = runtime.players.indexOf(human);
+  game.setDecisionHandler(human.id, () => ({ choice: "pass" }));
+  const action = game.getPlayableActions(human.id).find((item) => item.type === "skill" && item.skill === SkillName.ZhiHeng)!;
+  assert.ok(action);
+  const logs = await game.playAction(human.id, action);
+  assert.equal(human.hand.length, 1, "放弃时不应弃牌也不应摸牌");
+  assert.ok(logs.some((line) => line.includes("未发动")), "日志应说明未发动");
+  assert.ok(
+    game.getPlayableActions(human.id).some((item) => item.type === "skill" && item.skill === SkillName.ZhiHeng),
+    "未弃牌不消耗本回合的制衡次数",
+  );
 });
 
 void test("initNetworkGame：支持 isAI 配置并正确标记玩家", async () => {

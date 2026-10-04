@@ -68,6 +68,10 @@ export type ResolveContext = {
   buildSlashSources(player: Player): CardSource[];
   /** 酒的"下一张杀伤害+1"：若玩家有酒增益则消耗并返回 true */
   consumeWineBuff(player: Player): boolean;
+  /** 记录最近一次伤害的来源，供死亡结算的击杀奖惩使用；null 表示无来源（闪电、苦肉等） */
+  noteDamageSource(sourceId: string | null, targetId: string): void;
+  /** 取出并清除目标的伤害来源（死亡结算时消费一次，避免旧伤害被重复计入） */
+  takeDamageSource(targetId: string): string | null;
 };
 
 export function resolveSlash(
@@ -721,6 +725,7 @@ export function resolveEquip(ctx: ResolveContext, user: Player, equipType: Equip
       if (previous !== null) {
         ctx.discardPile.push(createCard(ctx, previous, `replace-${ctx.turn}`));
         logs.push(`${user.name} 的旧+1马 ${previous} 被替换并弃置`);
+        logs.push(...(await onLoseEquip(ctx, user, previous)));
       }
       logs.push(`${user.name} 装备了${equipType}`);
       return logs;
@@ -731,6 +736,7 @@ export function resolveEquip(ctx: ResolveContext, user: Player, equipType: Equip
       if (previous !== null) {
         ctx.discardPile.push(createCard(ctx, previous, `replace-${ctx.turn}`));
         logs.push(`${user.name} 的旧-1马 ${previous} 被替换并弃置`);
+        logs.push(...(await onLoseEquip(ctx, user, previous)));
       }
       logs.push(`${user.name} 装备了${equipType}`);
       return logs;
@@ -740,6 +746,8 @@ export function resolveEquip(ctx: ResolveContext, user: Player, equipType: Equip
     if (previous !== null) {
       ctx.discardPile.push(createCard(ctx, previous, `replace-${ctx.turn}`));
       logs.push(`${user.name} 的旧宝物 ${previous} 被替换并弃置`);
+      discardWoodenOxStoredCards(ctx, user, logs);
+      logs.push(...(await onLoseEquip(ctx, user, previous)));
     }
     logs.push(`${user.name} 装备了${equipType}`);
     return logs;
@@ -757,37 +765,93 @@ export function resolveDeaths(ctx: ResolveContext): Promise<string[]> {
       if (player.hp > 0) {
         continue;
       }
-      if (await ctx.consumePeachResponse(player, player.id, logs)) {
-        player.hp = 1;
-        logs.push(`${player.name} 打出桃自救，体力恢复到 1`);
-        continue;
+      // 濒死：每张桃只回复 1 点体力，必须回到 1 点以上才算脱离濒死，
+      // 因此欠 N 点就要 N+1 张桃（hp=-2 需要 3 张）。
+      // 先由濒死者本人自救（酒可当桃自救），可连续使用多张；
+      // 再由其他存活角色按座次顺序逐一救援，每人也可连续使用多张，
+      // 直到体力 > 0 或无人再出桃，未脱离则阵亡。
+      while (player.hp <= 0 && (await ctx.consumePeachResponse(player, player.id, logs))) {
+        player.hp = Math.min(player.maxHp, player.hp + 1);
+        logs.push(`${player.name} 自救，体力恢复到 ${player.hp}`);
       }
-      let rescued = false;
-      const rescuers = getRescuersInOrder(ctx, player);
-      for (const rescuer of rescuers) {
-        if (!(await ctx.consumePeachResponse(rescuer, player.id, logs))) continue;
-        let recovered = 1;
-        if (
-          ctx.hasSkill(player, SkillName.JiuYuan) &&
-          player.role === PlayerRole.Lord &&
-          getPlayerKingdom(ctx, rescuer) === "吴"
-        ) {
-          recovered += 1;
-          logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 1 点体力`);
+      if (player.hp <= 0) {
+        for (const rescuer of getRescuersInOrder(ctx, player)) {
+          while (player.hp <= 0 && (await ctx.consumePeachResponse(rescuer, player.id, logs))) {
+            let recovered = 1;
+            if (
+              ctx.hasSkill(player, SkillName.JiuYuan) &&
+              player.role === PlayerRole.Lord &&
+              getPlayerKingdom(ctx, rescuer) === "吴"
+            ) {
+              recovered += 1;
+              logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 1 点体力`);
+            }
+            player.hp = Math.min(player.maxHp, player.hp + recovered);
+            logs.push(`${rescuer.name} 对${player.name}使用${CardType.Peach}，其体力恢复到 ${player.hp}`);
+          }
+          if (player.hp > 0) {
+            break;
+          }
         }
-        player.hp = Math.min(player.maxHp, player.hp + recovered);
-        logs.push(`${rescuer.name} 对${player.name}使用${CardType.Peach}，其体力恢复到 ${player.hp}`);
-        rescued = true;
-        break;
       }
-      if (!rescued && player.hp <= 0) {
+      if (player.hp <= 0) {
         player.alive = false;
         player.delayedTricks = [];
         logs.push(`${player.name} 阵亡，身份：${player.role}`);
+        logs.push(...resolveKillReward(ctx, player));
       }
     }
     return logs;
   })();
+}
+
+/**
+ * 击杀奖惩（身份局标准，见 rules.md §8）：
+ * - 击杀反贼：击杀者摸 3 张牌（任何身份击杀都生效）；
+ * - 主公杀死忠臣：主公弃置所有手牌与装备区牌（含木牛流马内存的牌）；
+ * - 无来源伤害（闪电、苦肉等）或凶手已阵亡时不结算奖惩。
+ *
+ * 已知简化：主公受罚弃置装备时不触发枭姬/白银狮子等"失去装备"技能，只做弃置。
+ */
+export function resolveKillReward(ctx: ResolveContext, victim: Player): string[] {
+  const killerId = ctx.takeDamageSource(victim.id);
+  if (killerId === null) {
+    return [];
+  }
+  const killer = ctx.players.find((player) => player.id === killerId);
+  if (!killer || killer.id === victim.id || !killer.alive) {
+    return [];
+  }
+  if (victim.role === PlayerRole.Rebel) {
+    const drawn = ctx.drawCards(killer.id, 3);
+    return [`${killer.name} 击杀${PlayerRole.Rebel}${victim.name}，摸 ${drawn} 张牌`];
+  }
+  if (victim.role !== PlayerRole.Loyalist || killer.role !== PlayerRole.Lord) {
+    return [];
+  }
+  const logs: string[] = [];
+  const handCount = killer.hand.length;
+  ctx.discardPile.push(...killer.hand);
+  killer.hand = [];
+  const equips: EquipCardType[] = [];
+  if (killer.weapon !== null) equips.push(killer.weapon);
+  if (killer.armor !== null) equips.push(killer.armor);
+  if (killer.defenseHorse !== null) equips.push(killer.defenseHorse);
+  if (killer.attackHorse !== null) equips.push(killer.attackHorse);
+  if (killer.treasure !== null) equips.push(killer.treasure);
+  for (const equip of equips) {
+    ctx.discardPile.push(createCard(ctx, equip, `punish-${ctx.turn}`));
+  }
+  killer.weapon = null;
+  killer.armor = null;
+  killer.defenseHorse = null;
+  killer.attackHorse = null;
+  killer.treasure = null;
+  discardWoodenOxStoredCards(ctx, killer, logs);
+  logs.push(
+    `${killer.name} 作为${PlayerRole.Lord}杀死${PlayerRole.Loyalist}${victim.name}，弃置全部 ${handCount} 张手牌与 ${equips.length} 件装备`,
+  );
+  return logs;
 }
 
 export function getPlayerKingdom(ctx: ResolveContext, player: Player): "魏" | "蜀" | "吴" | "群雄" {
@@ -1102,6 +1166,20 @@ export function onLoseEquip(ctx: ResolveContext, player: Player, equip: EquipCar
   })();
 }
 
+/**
+ * 木牛流马离开装备区（被弃置/被获得/被替换）时，其内存的牌必须一并置入弃牌堆，
+ * 否则这些牌会从对局中凭空消失。
+ */
+export function discardWoodenOxStoredCards(ctx: ResolveContext, player: Player, logs: string[]): void {
+  if (player.treasureCards.length === 0) {
+    return;
+  }
+  const stored = player.treasureCards.length;
+  ctx.discardPile.push(...player.treasureCards);
+  player.treasureCards = [];
+  logs.push(`${player.name} 的${CardType.WoodenOx}内存的 ${stored} 张牌置入弃牌堆`);
+}
+
 export function createCard(ctx: ResolveContext, type: CardType, seed: string): Card {
   return { id: `${type}-${seed}-${ctx.turn}`, type, color: "colorless", suit: "none", rank: 0 };
 }
@@ -1204,12 +1282,15 @@ export function removeSelectedCardFromPlayer(
       if (removedWeapon === null) {
         return [];
       }
+      const logs: string[] = [];
       if (mode === "获得" && receiver) {
         receiver.hand.push(createCard(ctx, removedWeapon, `loot-${ctx.turn}`));
-        return [`${receiver.name} 获得了 ${player.name} 的装备 ${removedWeapon}`];
+        logs.push(`${receiver.name} 获得了 ${player.name} 的装备 ${removedWeapon}`);
+      } else {
+        ctx.discardPile.push(createCard(ctx, removedWeapon, `discard-${ctx.turn}`));
+        logs.push(`${player.name} 的装备 ${removedWeapon} 被弃置`);
       }
-      ctx.discardPile.push(createCard(ctx, removedWeapon, `discard-${ctx.turn}`));
-      return [`${player.name} 的装备 ${removedWeapon} 被弃置`];
+      return [...logs, ...(await onLoseEquip(ctx, player, removedWeapon))];
     }
     if (selectedCardId === "armor") {
       const removedArmor = player.armor;
@@ -1233,12 +1314,15 @@ export function removeSelectedCardFromPlayer(
       if (removed === null) {
         return [];
       }
+      const logs: string[] = [];
       if (mode === "获得" && receiver) {
         receiver.hand.push(createCard(ctx, removed, `loot-${ctx.turn}`));
-        return [`${receiver.name} 获得了 ${player.name} 的装备 ${removed}`];
+        logs.push(`${receiver.name} 获得了 ${player.name} 的装备 ${removed}`);
+      } else {
+        ctx.discardPile.push(createCard(ctx, removed, `discard-${ctx.turn}`));
+        logs.push(`${player.name} 的装备 ${removed} 被弃置`);
       }
-      ctx.discardPile.push(createCard(ctx, removed, `discard-${ctx.turn}`));
-      return [`${player.name} 的装备 ${removed} 被弃置`];
+      return [...logs, ...(await onLoseEquip(ctx, player, removed))];
     }
     if (selectedCardId === "attackHorse") {
       const removed = player.attackHorse;
@@ -1246,12 +1330,15 @@ export function removeSelectedCardFromPlayer(
       if (removed === null) {
         return [];
       }
+      const logs: string[] = [];
       if (mode === "获得" && receiver) {
         receiver.hand.push(createCard(ctx, removed, `loot-${ctx.turn}`));
-        return [`${receiver.name} 获得了 ${player.name} 的装备 ${removed}`];
+        logs.push(`${receiver.name} 获得了 ${player.name} 的装备 ${removed}`);
+      } else {
+        ctx.discardPile.push(createCard(ctx, removed, `discard-${ctx.turn}`));
+        logs.push(`${player.name} 的装备 ${removed} 被弃置`);
       }
-      ctx.discardPile.push(createCard(ctx, removed, `discard-${ctx.turn}`));
-      return [`${player.name} 的装备 ${removed} 被弃置`];
+      return [...logs, ...(await onLoseEquip(ctx, player, removed))];
     }
     if (selectedCardId !== "treasure") {
       return [];
@@ -1261,12 +1348,16 @@ export function removeSelectedCardFromPlayer(
     if (removedTreasure === null) {
       return [];
     }
+    const treasureLogs: string[] = [];
     if (mode === "获得" && receiver) {
       receiver.hand.push(createCard(ctx, removedTreasure, `loot-${ctx.turn}`));
-      return [`${receiver.name} 获得了 ${player.name} 的装备 ${removedTreasure}`];
+      treasureLogs.push(`${receiver.name} 获得了 ${player.name} 的装备 ${removedTreasure}`);
+    } else {
+      ctx.discardPile.push(createCard(ctx, removedTreasure, `discard-${ctx.turn}`));
+      treasureLogs.push(`${player.name} 的装备 ${removedTreasure} 被弃置`);
     }
-    ctx.discardPile.push(createCard(ctx, removedTreasure, `discard-${ctx.turn}`));
-    return [`${player.name} 的装备 ${removedTreasure} 被弃置`];
+    discardWoodenOxStoredCards(ctx, player, treasureLogs);
+    return [...treasureLogs, ...(await onLoseEquip(ctx, player, removedTreasure))];
   })();
 }
 

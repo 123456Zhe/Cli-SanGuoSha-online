@@ -2,7 +2,8 @@ import type { Card } from "./cards.js";
 
 export type ResponseKind = "dodge" | "slash" | "negate" | "peach";
 
-export type CardOrigin = "hand" | "treasure";
+/** 可选牌来源：手牌 / 木牛流马内存牌 / 装备区（"弃置任意张牌"类技能会给出装备区选项）。 */
+export type CardOrigin = "hand" | "treasure" | "equip";
 export type CardSuit = Card["suit"];
 
 export type CardSource = {

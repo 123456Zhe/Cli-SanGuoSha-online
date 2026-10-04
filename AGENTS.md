@@ -8,7 +8,7 @@ CLI 三国杀 (SanGuoSha) — a TypeScript CLI card game with a host-authoritati
 - `npm run host -- --players=3` — start an online room server (default `0.0.0.0:9527`, 2–6 players). All players, including the host, join with a separate client. Online AI: `--ai=N` fills N server-side AI seats (LLM-driven, `--ai-driver=qwen|ollama|simple|system-one|hybrid`, fallback to local strategy); `hybrid`（默认开启，`--hybrid=false` 关闭）= **LLM 总规划 + Jev 局内快决策**（TypeSafe System One 决策模型 API，配置 `JEV_*` 启用，见 `jev-advisor.ts`；未配置则退回纯 LLM）; see README §联机游玩.
 - `npm run join -- --host=IP --port=9527 --name=NAME` — join a room.
 - `npm run typecheck` — `tsc --noEmit`. Keep it clean (passes today).
-- `npm test` — `node --test --import tsx src/**/*.test.ts`. **134 tests, all pass**（含规则补全与网络加固新增的用例；改测试数量时同步更新这里）。
+- `npm test` — `node --test --import tsx src/**/*.test.ts`. **140 tests, all pass**（含规则补全与网络加固新增的用例；改测试数量时同步更新这里）。
 - `npm run build` — `tsc` emit to `dist/`.
 - `npm run lint` — eslint. ⚠️ **Not a clean gate**: **25 pre-existing errors**（unused vars in `*.test.ts`, `no-explicit-any`, floating promises in `network/*`）。Don't add new ones; don't fix the old ones en masse.
 

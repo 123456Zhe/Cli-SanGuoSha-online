@@ -84,6 +84,14 @@ export function isNonDelayedTrickCard(cardType: CardType): boolean {
   );
 }
 
+/**
+ * 使用时受"距离 1"限制的锦囊：顺手牵羊、兵粮寸断。
+ * 黄月英的奇才为锁定技，可无视该限制（见 resolve.canReachForDistanceOneTrick）。
+ */
+export function isDistanceOneTrickCard(cardType: CardType): boolean {
+  return cardType === CardType.Snatch || cardType === CardType.SuppliesCut;
+}
+
 export function cardNeedsTarget(cardType: CardType): boolean {
   return (
     isSlashCard(cardType) ||

@@ -296,6 +296,10 @@ export function resolveSnatch(ctx: ResolveContext, user: Player, target: Player,
       logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为顺手牵羊的目标`);
       return logs;
     }
+    if (!canReachForDistanceOneTrick(ctx, user, target)) {
+      logs.push(`${target.name} 距离 ${user.name} 超过 1，${CardType.Snatch}无效`);
+      return logs;
+    }
     if (await tryNegate(ctx, target, CardType.Snatch, logs, user.id)) {
       return logs;
     }
@@ -590,6 +594,10 @@ export function resolveDelayedTrick(ctx: ResolveContext, user: Player, usedCard:
     const logs = [`${user.name} 对 ${target.name} 使用 ${usedCard.type}`];
     if (usedCard.type === CardType.Indulgence && ctx.hasSkill(target, SkillName.QianXun)) {
       logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为乐不思蜀的目标`);
+      return logs;
+    }
+    if (usedCard.type === CardType.SuppliesCut && !canReachForDistanceOneTrick(ctx, user, target)) {
+      logs.push(`${target.name} 距离 ${user.name} 超过 1，${CardType.SuppliesCut}无效`);
       return logs;
     }
     if (usedCard.type !== CardType.Lightning && await tryNegate(ctx, target, usedCard.type, logs, user.id)) {
@@ -946,6 +954,17 @@ export function resolveWinner(ctx: ResolveContext): string[] {
 export function canReachForSlash(ctx: ResolveContext, attacker: Player, target: Player): boolean {
   const distance = computeDistance(ctx, attacker, target);
   return distance <= getAttackRange(attacker);
+}
+
+/**
+ * 距离 1 锦囊（顺手牵羊 / 兵粮寸断）的目标合法性：目标须在距离 1 以内。
+ * 奇才是锁定技（使用锦囊无距离限制），有奇才的使用者无视该限制。
+ */
+export function canReachForDistanceOneTrick(ctx: ResolveContext, user: Player, target: Player): boolean {
+  if (ctx.hasSkill(user, SkillName.QiCai)) {
+    return true;
+  }
+  return computeDistance(ctx, user, target) <= 1;
 }
 
 export function getAttackRange(player: Player): number {

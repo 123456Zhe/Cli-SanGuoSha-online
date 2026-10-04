@@ -6,6 +6,7 @@ import {
   describeCard,
   hasRemovableCard,
   isDelayedTrickCard as isDelayedTrickCardImpl,
+  isDistanceOneTrickCard,
   isEquipCard as isEquipCardImpl,
   isNonDelayedTrickCard as isNonDelayedTrickCardImpl,
   isSlashCard as isSlashCardImpl,
@@ -25,6 +26,7 @@ import {
   resolveGeneralByName,
 } from "./generals.js";
 import {
+  canReachForDistanceOneTrick as canReachForDistanceOneTrickImpl,
   canReachForSlash as canReachForSlashImpl,
   createCard as createCardImpl,
   discardSelfCards as discardSelfCardsImpl,
@@ -1032,6 +1034,9 @@ export class SanGuoGame {
       if (this.isSlashCard(card.type) && !this.canReachForSlash(player, target)) {
         return ["目标超出攻击范围"];
       }
+      if (isDistanceOneTrickCard(card.type) && !this.canReachForDistanceOneTrick(player, target)) {
+        return [`目标超出距离，${card.type}只能对距离 1 以内的角色使用`];
+      }
     }
 
     const usedCard = await this.removeHandCardAt(player, action.cardIndex);
@@ -1929,9 +1934,14 @@ export class SanGuoGame {
       return targets.filter((id) => hasRemovableCard(this.mustGetPlayer(id)));
     }
     if (cardType === CardType.Snatch) {
+      const user = this.mustGetPlayer(playerId);
       return targets.filter((id) => {
         const holder = this.mustGetPlayer(id);
         if (this.hasSkill(holder, SkillName.QianXun)) {
+          return false;
+        }
+        // 顺手牵羊只能对距离 1 以内的角色使用（奇才无视该限制）
+        if (!this.canReachForDistanceOneTrick(user, holder)) {
           return false;
         }
         return hasRemovableCard(holder);
@@ -1948,9 +1958,14 @@ export class SanGuoGame {
       });
     }
     if (cardType === CardType.Indulgence || cardType === CardType.SuppliesCut) {
+      const user = this.mustGetPlayer(playerId);
       return targets.filter((id) => {
         const holder = this.mustGetPlayer(id);
         if (cardType === CardType.Indulgence && this.hasSkill(holder, SkillName.QianXun)) {
+          return false;
+        }
+        // 兵粮寸断只能对距离 1 以内的角色使用（奇才无视该限制）；乐不思蜀无距离限制
+        if (cardType === CardType.SuppliesCut && !this.canReachForDistanceOneTrick(user, holder)) {
           return false;
         }
         return !holder.delayedTricks.some((t) => t.cardType === cardType);
@@ -2410,6 +2425,10 @@ export class SanGuoGame {
 
   private canReachForSlash(attacker: Player, target: Player): boolean {
     return canReachForSlashImpl(this as unknown as ResolveContext, attacker, target);
+  }
+
+  private canReachForDistanceOneTrick(user: Player, target: Player): boolean {
+    return canReachForDistanceOneTrickImpl(this as unknown as ResolveContext, user, target);
   }
 
   private createCard(type: CardType, seed: string): Card {

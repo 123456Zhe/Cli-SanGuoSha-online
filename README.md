@@ -30,7 +30,8 @@ host 的 AI 相关参数：
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--ai=N` | 0 | AI 玩家数量（0 到 players-1，至少保留 1 个人类） |
-| `--ai-driver=qwen\|ollama\|simple` | qwen | AI 决策驱动；qwen 走 OpenAI 兼容接口，ollama 走本地模型，simple 仅用本地策略引擎 |
+| `--ai-driver=qwen\|ollama\|simple\|system-one\|hybrid` | qwen | AI 决策驱动；qwen 走 OpenAI 兼容接口，ollama 走本地模型，simple 仅用本地策略引擎，system-one 走内置快思考打分，hybrid=LLM+判断层快慢结合 |
+| `--hybrid=true\|false` | true | 是否开启 hybrid 快慢结合（仅对 qwen/ollama 生效）。`--ai-driver=hybrid` 等效于 qwen+开启 |
 | `--ai-thinking-ms` | 1200 | 每回合思考时间基数（毫秒），按推理等级乘以系数 |
 | `--ai-context-rounds` | 30 | 提示词保留的最近回合数（适配 256k 上下文模型，可调大） |
 | `--ai-reasoning=auto\|fast\|normal\|deep` | auto | 推理等级；auto 按局势自动选择 |
@@ -48,6 +49,14 @@ AI 决策逻辑（与离线模式一致）：
 - **出杀/闪/无懈可击等交互响应也是博弈的一部分**，由 LLM 决策；仅纯概率响应（如反间花色声明）走引擎自动决策。
 - **回合结束时 AI 以 deep 推理做一次结构化策略复盘**（单次调用，成本与旧版持平）：输出 执行回看 + 经验教训 + 下回合战术 + 战略方针更新，写入**分层策略记忆**（战术笔记/跨回合战略方针/滚动教训），注入后续决策上下文，影响后续出牌与交互。
 - LLM 不可用或超时自动回退本地策略引擎（`simple` 驱动），无 API Key 也能正常对局。
+
+**Hybrid（`--hybrid=true`，默认开启）= LLM 决策 + Jev 判断**：LLM 正常决策；随后由 **Jev**（`src/agent/jev-advisor.ts`）审核——一次请求同时问 `decision_ok`（noul：这个决策合理吗）与 `best_action`（choice：那最优是哪个，带概率分布）。`decision_ok` 低于阈值即否决，并回退到 Jev 给出的最优动作；**不再使用任何本地决策模型**。
+
+- 接入的是 TypeSafe [Jev](https://docs.typesafe.ai)（**System One 决策模型**，不是 chat 模型）：`POST {JEV_BASE_URL}/systemone`，传 `state` + 带类型的 `questions`，返回结构化 `answers`。配置 `JEV_API_KEY`（或官方 SDK 惯例名 `TYPESAFE_API_KEY`）即启用。
+- **未配置 `JEV_*` 时 hybrid 自动退回纯 LLM**，不影响开箱可用；Jev 调用失败时放行 LLM 决策（不否决、不阻塞对局）。
+- 可调 `JEV_ACCEPT_THRESHOLD`（默认 0.5，调高=更严格地否决）与 `JEV_MAX_CANDIDATES`（默认 40）。
+- 本地 `--ai-driver=system-one` 仍保留为独立驱动（不参与 hybrid 判断层）。
+- Jev 官方标注：英文准确率最高、CJK 可用但建议自行验证 —— 因此判断用 instructions 走英文，state 里的武将/卡牌保持中文原名。
 
 玩家在对局中断线或主动退出时，**座位立即由 AI 托管**（与 `--ai-driver` 一致：qwen/ollama 走 LLM，simple 走本地策略），牌局不会停滞，也不再有“超时未重连即关闭房间”的行为。玩家可随时重新连回（自动重连或按提示重连），AI 交还控制权后继续由本人操作。
 
@@ -100,6 +109,9 @@ npm run webui
 - `src/agent/prompt.ts`：Prompt 组装器，拼接静态上下文与动态局面（含近三轮上下文）。
 - `src/agent/qwen.ts`：Qwen 调用与连通性探测。
 - `src/agent/ollama.ts`：Ollama 调用、模型列表读取与连通性探测。
+- `src/agent/system-one.ts`：System-One 快思考 AI（本地启发式打分）+ `FastAdvisor` 接口，兼顾独立驱动与 hybrid 判断层。
+- `src/agent/jev.ts` / `src/agent/jev-advisor.ts`：Jev 判断模型 API 适配器（OpenAI 兼容）与判断层实现，配置 `JEV_*` 后替代本地判断。
+- `src/agent/turn-decision.ts`：出牌决策链（LLM/System-One → 本地策略 → 引擎启发式）与结果校验。
 - `src/devlog/ailog.ts`：AI 日志写入模块，实时追加到 `devlog/ai-log.md`。
 - `src/engine/game.test.ts`：引擎层测试，覆盖关键规则与流程回归。
 

@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
+import { SystemOneAgent } from "../agent/system-one.js";
+import { JevAdvisor } from "../agent/jev-advisor.js";
 import { RoundPromptContext } from "../agent/prompt.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
@@ -15,7 +17,7 @@ type InputMode = "setup" | "action" | "target" | "target-card" | "response" | "d
 
 type SetupStage = "player-count" | "role" | "kingdom" | "general" | "ai-model" | "ollama-model" | "start";
 
-type SetupAiModel = "simple" | AiModelProvider;
+type SetupAiModel = "simple" | "system-one" | "hybrid" | AiModelProvider;
 
 type Kingdom = "魏" | "蜀" | "吴" | "群雄";
 
@@ -71,6 +73,8 @@ export class CliSanGuoApp {
   private readonly aiLoop: GameAiLoop;
 
   private readonly localAiEngine: LocalAiEngine;
+
+  private systemOne: SystemOneAgent | null;
 
   private displayOverlayTitle: string | null;
 
@@ -128,6 +132,7 @@ export class CliSanGuoApp {
     this.rulesLines = this.loadRulesLines();
     this.aiLoop = new GameAiLoop(this.rulesLines.join("\n"));
     this.localAiEngine = new LocalAiEngine(this.rulesLines.join("\n"));
+    this.systemOne = null;
     this.displayOverlayTitle = null;
     this.displayOverlayLines = [];
     this.displayPage = 0;
@@ -450,9 +455,18 @@ export class CliSanGuoApp {
       }
       const snapshot = this.game.getSnapshot();
       const previousRounds = this.getPreviousRoundPromptContexts(snapshot.turn);
-      this.aiLoop.setPreviousRoundContexts(previousRounds);
+      if (this.setupAiModel === "system-one" && this.systemOne) {
+        this.systemOne.syncRounds(previousRounds);
+      } else {
+        this.aiLoop.setPreviousRoundContexts(previousRounds);
+      }
       this.localAiEngine.syncPreviousRounds(previousRounds);
-      const picked = await pickAiTurnDecision(this.game, ai.id, this.setupAiModel === "simple" ? null : this.aiLoop, this.localAiEngine);
+      const picked = await pickAiTurnDecision(
+        this.game,
+        ai.id,
+        this.setupAiModel === "simple" ? null : this.setupAiModel === "system-one" ? (this.systemOne ?? null) : this.aiLoop,
+        this.localAiEngine,
+      );
       const normalizedDecision = picked.decision;
       if (!normalizedDecision) {
         const forcedEndAction = this.game.getPlayableActions(ai.id).find((action) => action.type === "end");
@@ -474,8 +488,9 @@ export class CliSanGuoApp {
       await this.playAndAppendLogs(ai.id, normalizedDecision.action, normalizedDecision.targetId, 200);
       actionsTaken += 1;
       // AI 回合结束：以高推理等级做一次策略博弈，后台并行执行不阻塞后续出牌
+      // System-One / simple 无复盘记忆，直接跳过
       if (this.game.getCurrentPlayer().id !== ai.id || !this.game.getCurrentPlayer().alive) {
-        if (this.setupAiModel !== "simple") {
+        if (this.setupAiModel !== "simple" && this.setupAiModel !== "system-one") {
           const reviewSnapshot = this.game.getSnapshot();
           this.logs.push(`[AI] ${ai.name} 正在复盘局势...`);
           void this.aiLoop.reviewStrategy(this.game, ai.id, reviewSnapshot).catch(() => {
@@ -576,6 +591,9 @@ export class CliSanGuoApp {
   private restart(): void {
     this.aiLoop.stop();
     this.localAiEngine.reset();
+    if (this.systemOne) {
+      this.systemOne.reset();
+    }
     this.logs = [];
     this.pendingAction = null;
     this.pendingTargetId = null;
@@ -900,7 +918,8 @@ export class CliSanGuoApp {
         return;
       }
       this.setupAiModel = model;
-      if (model === "ollama") {
+      // hybrid 默认走云端 qwen 做慢思考（也可在开始游戏后切 ollama）；选 ollama 才进模型列表页
+      if (model === "ollama" || model === "hybrid") {
         this.setupStage = "ollama-model";
         this.refresh();
         await this.loadOllamaModelsForSetup();
@@ -923,7 +942,10 @@ export class CliSanGuoApp {
         await this.loadOllamaModelsForSetup();
         return;
       }
-      if (selected === "使用默认模型（gemma4:latest）") {
+      // hybrid 下多一个"云端慢思考"入口：不强制走 ollama，慢思考走 qwen
+      if (this.setupAiModel === "hybrid" && selected === "云端慢思考（Qwen，不用本地模型）") {
+        this.setupOllamaModel = "";
+      } else if (selected === "使用默认模型（gemma4:latest）") {
         this.setupOllamaModel = "gemma4:latest";
       } else {
         this.setupOllamaModel = selected;
@@ -955,7 +977,16 @@ export class CliSanGuoApp {
     }
     if (this.setupStage === "ai-model") {
       return this.getAiModelOptions().map((model) => {
-        const desc = model === "simple" ? "本地简单逻辑引擎" : model === "ollama" ? "本地 Ollama 模型" : "云端 Qwen 模型";
+        const desc =
+          model === "simple"
+            ? "本地简单逻辑引擎"
+            : model === "system-one"
+              ? "System-One 快思考（本地打分，无需网络）"
+              : model === "hybrid"
+                ? "Hybrid（LLM + Jev 判断，需配置 JEV_*）"
+                : model === "ollama"
+                  ? "本地 Ollama 模型"
+                  : "云端 Qwen 模型";
         return `${this.getAiModelLabel(model)}（${desc}）`;
       });
     }
@@ -963,13 +994,15 @@ export class CliSanGuoApp {
       if (this.setupOllamaLoading) {
         return ["正在读取本地 Ollama 模型..."];
       }
+      // hybrid 下首选云端慢思考：本地没装 ollama 也能玩
+      const hybridExtra = this.setupAiModel === "hybrid" ? ["云端慢思考（Qwen，不用本地模型）"] : [];
       if (this.setupOllamaLoadError) {
-        return ["重新读取本地模型列表", "使用默认模型（gemma4:latest）"];
+        return [...hybridExtra, "重新读取本地模型列表", "使用默认模型（gemma4:latest）"];
       }
       if (this.setupOllamaModels.length <= 0) {
-        return ["重新读取本地模型列表", "使用默认模型（gemma4:latest）"];
+        return [...hybridExtra, "重新读取本地模型列表", "使用默认模型（gemma4:latest）"];
       }
-      return this.setupOllamaModels;
+      return [...hybridExtra, ...this.setupOllamaModels];
     }
     return ["开始游戏"];
   }
@@ -1020,12 +1053,18 @@ export class CliSanGuoApp {
   }
 
   private getAiModelOptions(): SetupAiModel[] {
-    return ["simple", "ollama", "qwen"];
+    return ["hybrid", "system-one", "simple", "ollama", "qwen"];
   }
 
   private getAiModelLabel(model: SetupAiModel): string {
     if (model === "simple") {
       return "Simple AI";
+    }
+    if (model === "system-one") {
+      return "System-One";
+    }
+    if (model === "hybrid") {
+      return "Hybrid";
     }
     return model === "ollama" ? "Ollama" : "Qwen";
   }
@@ -1049,12 +1088,26 @@ export class CliSanGuoApp {
   private async startConfiguredGame(): Promise<void> {
     this.aiLoop.stop();
     this.localAiEngine.reset();
-    if (this.setupAiModel === "ollama" || this.setupAiModel === "qwen") {
+    this.systemOne = SystemOneAgent.createFromEnv();
+    const hybridEnabled = this.setupAiModel === "hybrid" ? process.env.SG_AI_HYBRID !== "false" : false;
+    if (this.setupAiModel === "system-one") {
+      this.aiLoop.setFastAdvisor(null);
+    } else if (this.setupAiModel === "hybrid") {
+      // hybrid 慢思考默认走本地 ollama 列表选的模型；选了"云端慢思考"（setupOllamaModel 为空）则走 qwen
+      const slowProvider: AiModelProvider = this.setupOllamaModel ? "ollama" : "qwen";
+      this.aiLoop.setPreferredProvider(slowProvider);
+      this.aiLoop.setPreferredOllamaModel(slowProvider === "ollama" ? this.setupOllamaModel : null);
+      // 判断层：LLM + Jev（不再使用本地决策模型）；未配置 JEV_* 则退回纯 LLM
+      const advisor = hybridEnabled && JevAdvisor.isConfigured() ? new JevAdvisor(this.rulesLines.join("\n")) : null;
+      this.aiLoop.setFastAdvisor(advisor);
+    } else if (this.setupAiModel === "ollama" || this.setupAiModel === "qwen") {
       this.aiLoop.setPreferredProvider(this.setupAiModel);
       this.aiLoop.setPreferredOllamaModel(this.setupAiModel === "ollama" ? this.setupOllamaModel : null);
+      this.aiLoop.setFastAdvisor(null);
     } else {
       this.aiLoop.setPreferredProvider("ollama");
       this.aiLoop.setPreferredOllamaModel(null);
+      this.aiLoop.setFastAdvisor(null);
     }
     this.logs = [];
     this.pendingAction = null;
@@ -1077,16 +1130,22 @@ export class CliSanGuoApp {
       humanGeneral: this.setupGeneralName,
     });
     this.logs.push(...initLogs);
-    const subAgentCount = this.aiLoop.start(this.game.getSnapshot());
+    const subAgentCount = this.setupAiModel === "system-one" ? this.game.getSnapshot().players.filter((p) => p.isAI).length : this.aiLoop.start(this.game.getSnapshot());
     const providerText =
       this.setupAiModel === "ollama"
         ? `Ollama(${this.setupOllamaModel})`
         : this.setupAiModel === "simple"
           ? "Simple AI(本地逻辑引擎)"
-          : this.getAiModelLabel(this.setupAiModel);
+          : this.setupAiModel === "system-one"
+            ? "System-One(快思考本地打分)"
+            : this.setupAiModel === "hybrid"
+              ? `Hybrid(${this.setupOllamaModel ? `Ollama(${this.setupOllamaModel})` : "Qwen"}+Jev${hybridEnabled ? "" : "(已关闭)"})`
+              : this.getAiModelLabel(this.setupAiModel);
     this.logs.push(`AI 决策环已启动，默认模型 ${providerText}，创建 ${subAgentCount} 个 subagent`);
     if (this.setupAiModel === "simple") {
       this.logs.push(`AI 驱动: 使用本地AI（${this.localAiEngine.getMemorySummary()}）`);
+    } else if (this.setupAiModel === "system-one") {
+      this.logs.push("AI 驱动: System-One 已就绪（本地同步决策，无需网络）");
     } else {
       void this.logAiLoopStatus();
     }
@@ -1107,6 +1166,9 @@ export class CliSanGuoApp {
         this.game.setDecisionHandler(aiId, async (request) => {
           if (request.kind === "choose-suit") {
             return null;
+          }
+          if (this.setupAiModel === "system-one" && this.systemOne) {
+            return this.systemOne.decideInteraction(this.game.getSnapshot(), aiId, request)?.decision ?? null;
           }
           return this.aiLoop.decideInteraction(this.game, aiId, request);
         });

@@ -14,6 +14,7 @@ import { GameAction, GameSnapshot, SanGuoGame } from "../engine/game.js";
 import { CardSuit, InteractionDecision, InteractionRequest } from "../engine/interaction.js";
 import { writeAiLog } from "../devlog/ailog.js";
 import { parseStrategyReview, StrategyMemory } from "./strategy-memory.js";
+import { FastAdvisor } from "./system-one.js";
 
 export type AiModelProvider = "ollama" | "qwen";
 
@@ -162,6 +163,16 @@ export class GameAiLoop {
   /** 联机断线托管：允许驱动 isAI=false 的人类座位（玩家掉线后由 AI 代打）。 */
   private allowNonAiSeats = false;
 
+  /**
+   * Hybrid 快慢结合：出牌前先用快思考层（本地 System-One 或远端 Jev 判断模型）预打分。
+   * 作用有二：1) prompt 里带上候选排名，LLM 只做"选择/否决"，输出更快更稳；
+   * 2) LLM 返回后用 Judge 门控校验，分差过大说明 LLM 在乱来，直接否决用快的。
+   */
+  private fastAdvisor: FastAdvisor | null = null;
+
+  /** 上一次 LLM 决策被 Judge 否决的原因（供 turn-decision 日志展示）。 */
+  private lastJudgeVetoReason: string | null = null;
+
   constructor(rulesText: string, preferredProvider: AiModelProvider = "qwen") {
     this.rulesText = rulesText;
     this.started = false;
@@ -277,8 +288,25 @@ export class GameAiLoop {
     this.lastFailureReason = null;
   }
 
+  /** Hybrid 开关：传入实例即开启（LLM+快思考/Jev 判断层），传 null 关闭回到纯 LLM。 */
+  setFastAdvisor(advisor: FastAdvisor | null): void {
+    this.fastAdvisor = advisor;
+  }
+
+  getFastAdvisor(): FastAdvisor | null {
+    return this.fastAdvisor;
+  }
+
+  /** 上一次 LLM 决策是否被 Judge 否决（turn-decision 用来打日志/选 driverLabel）。 */
+  consumeJudgeVeto(): string | null {
+    const reason = this.lastJudgeVetoReason;
+    this.lastJudgeVetoReason = null;
+    return reason;
+  }
+
   setPreviousRoundContexts(contexts: RoundPromptContext[]): void {
     this.previousRoundContexts = contexts.slice(-this.maxContextRounds);
+    this.fastAdvisor?.syncRounds(contexts);
   }
 
   getLastFailureReason(): string | null {
@@ -554,8 +582,20 @@ export class GameAiLoop {
     if (actions.length <= 0) {
       return null;
     }
-    const level = this.resolveLevel(snapshot, agent.playerId);
+    const level = this.fastAdvisor ? "fast" : this.resolveLevel(snapshot, agent.playerId);
     await this.think(level);
+    const fastRanked = (await this.fastAdvisor?.rankTurnActions(snapshot, playerId, actions)) ?? [];
+    const fastBest = fastRanked[0];
+    const hybridShortlist =
+      fastRanked.length > 0
+        ? {
+            fastShortlist: fastRanked
+              .slice(0, 5)
+              .map((item, index) => `${index + 1}.${item.action.label}${item.targetId ? `->${item.targetId}` : ""} (${item.score.toFixed(1)})`)
+              .join(" | "),
+            ...(fastBest ? { fastBestScore: fastBest.score } : {}),
+          }
+        : {};
     const promptPackage = buildAgentPrompt({
       rulesText: this.rulesText,
       snapshot,
@@ -569,6 +609,7 @@ export class GameAiLoop {
       previousRoundContexts: this.previousRoundContexts,
       reasoningLevel: level,
       ...strategyNoteFor(agent),
+      ...hybridShortlist,
     });
     const messages: AgentMessage[] = [
       { role: "system", content: promptPackage.systemPrompt },
@@ -614,6 +655,23 @@ export class GameAiLoop {
     if (!decisionResult.ok) {
       this.lastFailureReason = decisionResult.reason;
       return null;
+    }
+    // Hybrid Judge 门控：由快思考层（本地启发式或远端 Jev 判断模型）审核 LLM 决策，不通过则回退快的。
+    if (this.fastAdvisor) {
+      const judged = await this.fastAdvisor.judgeTurnDecision(snapshot, playerId, actions, {
+        action: decisionResult.action,
+        ...(decisionResult.targetId ? { targetId: decisionResult.targetId } : {}),
+      });
+      if (!judged.accepted) {
+        const ranked0 = fastRanked[0];
+        const fallback =
+          judged.fallback ?? (ranked0 ? (ranked0.targetId ? { action: ranked0.action, targetId: ranked0.targetId } : { action: ranked0.action }) : null);
+        this.lastJudgeVetoReason = `Judge否决(LLM ${judged.score.toFixed(2)} vs 最优 ${judged.bestScore.toFixed(2)})`;
+        if (!fallback) {
+          return null;
+        }
+        return { ...fallback, driverLabel: this.getPreferredDriverLabel() };
+      }
     }
     const decision: AiDecision = decisionResult.targetId
       ? { action: decisionResult.action, targetId: decisionResult.targetId, driverLabel: this.getPreferredDriverLabel() }
@@ -693,6 +751,12 @@ export class GameAiLoop {
     if (!decision) {
       this.lastFailureReason = "交互决策解析失败";
       return null;
+    }
+    // Hybrid Judge 门控：保命响应（桃/残血杀）必须出牌，LLM 选 pass 时由快思考层（本地或 Jev）否决。
+    if (this.fastAdvisor && !(await this.fastAdvisor.judgeInteractionDecision(snapshot, playerId, request, decision))) {
+      this.lastJudgeVetoReason = "Judge否决(交互与快思考不一致)";
+      const fastFallback = await this.fastAdvisor.decideInteraction(snapshot, playerId, request);
+      return fastFallback?.decision ?? decision;
     }
     return decision;
   }

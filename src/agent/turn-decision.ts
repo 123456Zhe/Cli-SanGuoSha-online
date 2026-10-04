@@ -1,6 +1,10 @@
 import { GameAction, SanGuoGame } from "../engine/game.js";
 import { AiDecision, AiDriverLabel, GameAiLoop } from "./ai.js";
 import { LocalAiEngine } from "./local-engine.js";
+import { SystemOneAgent } from "./system-one.js";
+import { JevAdvisor } from "./jev-advisor.js";
+
+export type AiTurnDriver = GameAiLoop | SystemOneAgent | null;
 
 export type AiTurnDecision = {
   action: GameAction;
@@ -9,7 +13,7 @@ export type AiTurnDecision = {
 
 export type AiTurnDecisionResult = {
   decision: AiTurnDecision | null;
-  driverLabel: AiDriverLabel | "本地AI";
+  driverLabel: AiDriverLabel | "本地AI" | "System-One" | "Hybrid" | "Hybrid(Jev)";
   fallbackReason: string | null;
   localInsight?: string;
   modelUsed: boolean;
@@ -72,20 +76,34 @@ const normalizeAiDecision = (
 };
 
 /**
- * AI 出牌决策链：LLM（GameAiLoop）→ 本地策略引擎（LocalAiEngine）→ 引擎内置启发式。
+ * AI 出牌决策链：LLM（GameAiLoop）/ System-One → 本地策略引擎（LocalAiEngine）→ 引擎内置启发式。
  * 返回经过校验的决策与驱动信息；LLM 不可用时 modelUsed=false 并携带回退原因。
  * aiLoop 传 null 表示强制只用本地策略（simple 模式）。
  */
 export const pickAiTurnDecision = async (
   game: SanGuoGame,
   playerId: string,
-  aiLoop: GameAiLoop | null,
+  aiLoop: AiTurnDriver,
   localAiEngine: LocalAiEngine,
 ): Promise<AiTurnDecisionResult> => {
   // LLM 决策的任何意外异常（网络、解析、日志副作用等）都不得中断对局：
   // 捕获后回退本地策略，并把失败原因交给上层记录。
   let modelDecision: AiDecision | null = null;
-  if (aiLoop) {
+  let systemOneInsight: string | undefined;
+  if (aiLoop instanceof SystemOneAgent) {
+    try {
+      const snapshot = game.getSnapshot();
+      const decided = aiLoop.decideTurn(snapshot, playerId, game.getPlayableActions(playerId));
+      if (decided) {
+        modelDecision = decided.targetId
+          ? { action: decided.action, targetId: decided.targetId, driverLabel: "System-One" as AiDriverLabel }
+          : { action: decided.action, driverLabel: "System-One" as AiDriverLabel };
+        systemOneInsight = decided.reason;
+      }
+    } catch (error) {
+      systemOneInsight = error instanceof Error ? error.message : String(error);
+    }
+  } else if (aiLoop) {
     try {
       modelDecision = await aiLoop.decide(game, playerId);
     } catch (error) {
@@ -99,14 +117,25 @@ export const pickAiTurnDecision = async (
       : { action: localDecision.action }
     : game.getBestAiDecision(playerId);
   const decision = modelDecision ?? fallbackDecision;
-  const driverLabel: AiDriverLabel | "本地AI" = modelDecision?.driverLabel ?? "本地AI";
-  const fallbackReason = !modelDecision && aiLoop ? aiLoop.getLastFailureReason() : null;
+  // Hybrid（LLM + Judge 门控）：LLM 跑过即标 Hybrid；Jev 判断层标 Hybrid(Jev)；被否决则日志写明原因。
+  const judgeVeto = aiLoop && !(aiLoop instanceof SystemOneAgent) ? aiLoop.consumeJudgeVeto() : null;
+  const advisor = aiLoop && !(aiLoop instanceof SystemOneAgent) ? aiLoop.getFastAdvisor() : null;
+  const driverLabel: AiTurnDecisionResult["driverLabel"] = modelDecision
+    ? advisor
+      ? advisor instanceof JevAdvisor
+        ? "Hybrid(Jev)"
+        : "Hybrid"
+      : modelDecision.driverLabel
+    : "本地AI";
+  const fallbackReason =
+    !modelDecision && aiLoop && !(aiLoop instanceof SystemOneAgent) ? aiLoop.getLastFailureReason() : null;
   const normalized = normalizeAiDecision(game, playerId, decision);
+  const insight = modelDecision && systemOneInsight ? systemOneInsight : !modelDecision && localDecision ? localDecision.insight : undefined;
   return {
     decision: normalized,
     driverLabel,
-    fallbackReason,
-    ...(!modelDecision && localDecision ? { localInsight: localDecision.insight } : {}),
+    fallbackReason: judgeVeto ?? fallbackReason,
+    ...(insight ? { localInsight: insight } : {}),
     modelUsed: Boolean(modelDecision),
   };
 };

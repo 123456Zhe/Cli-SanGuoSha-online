@@ -4,6 +4,8 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { AiModelProvider, GameAiLoop, ReasoningMode } from "../agent/ai.js";
 import { LocalAiEngine } from "../agent/local-engine.js";
+import { SystemOneAgent } from "../agent/system-one.js";
+import { JevAdvisor } from "../agent/jev-advisor.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
@@ -30,7 +32,13 @@ export type GameServerOptions = {
   /** rules.md 的显式路径（嵌入到其他进程/仓库时 cwd 不可靠），缺省回落 process.cwd()/rules.md。 */
   rulesPath?: string;
   aiCount?: number;
-  aiDriver?: AiModelProvider | "simple";
+  aiDriver?: AiModelProvider | "simple" | "system-one";
+  /**
+   * Hybrid 快慢结合开关（默认 true）：LLM 出牌前先用 System-One 预打分，
+   * prompt 只做"选择/否决"（更快更稳），返回后再用 Judge 门控校验（防乱打）。
+   * simple / system-one 驱动下该开关无意义（本来就没有 LLM）。
+   */
+  hybrid?: boolean;
   aiThinkingMs?: number;
   aiContextRounds?: number;
   aiReasoning?: ReasoningMode;
@@ -72,7 +80,7 @@ export class GameServer {
   private server: Server | null = null;
   private restarting = false;
   private closing = false;
-  private readonly aiLoop: GameAiLoop | null;
+  private readonly aiLoop: GameAiLoop | SystemOneAgent | null;
   private readonly localAiEngine: LocalAiEngine | null;
   private aiPlayerIds: string[] = [];
   private readonly roundBattlefieldHistory = new Map<number, string[]>();
@@ -95,6 +103,8 @@ export class GameServer {
     const driver = options.aiDriver ?? "qwen";
     if (driver === "simple") {
       this.aiLoop = null;
+    } else if (driver === "system-one") {
+      this.aiLoop = SystemOneAgent.createFromEnv();
     } else {
       this.aiLoop = new GameAiLoop(rulesText, driver);
       this.aiLoop.setAllowNonAiSeats(true);
@@ -103,6 +113,15 @@ export class GameServer {
       if (options.aiReasoning) {
         this.aiLoop.setReasoningMode(options.aiReasoning);
       }
+      // Hybrid：LLM + Jev 判断层（不再使用本地决策模型）。
+      // 配置 JEV_* 才启用 Jev 判断；未配置则退回纯 LLM。--hybrid=false / SG_AI_HYBRID=false 同样关闭。
+      const hybridEnabled = options.hybrid ?? process.env.SG_AI_HYBRID !== "false";
+      if (hybridEnabled && JevAdvisor.isConfigured()) {
+        this.aiLoop.setFastAdvisor(new JevAdvisor(rulesText));
+      }
+    }
+    if (this.aiLoop instanceof SystemOneAgent) {
+      this.aiLoop.reset();
     }
   }
 
@@ -242,7 +261,12 @@ export class GameServer {
       this.game.setDecisionHandler(peer.id, (request) => this.requestPeerDecision(peer.id, request));
     }
     this.registerAiDecisionHandlers();
-    this.aiLoop?.start(this.game.getSnapshot());
+    if (this.aiLoop instanceof SystemOneAgent) {
+      this.aiLoop.reset();
+    } else if (this.aiLoop) {
+      this.aiLoop.start(this.game.getSnapshot());
+      this.aiLoop.getFastAdvisor()?.reset();
+    }
     this.logs = [];
     this.started = true;
     this.broadcast({ type: "game_restarting", message: "新一局即将开始" });
@@ -514,7 +538,12 @@ export class GameServer {
         this.game.setDecisionHandler(peer.id, (request) => this.requestPeerDecision(peer.id, request));
       }
       this.registerAiDecisionHandlers();
-      this.aiLoop?.start(this.game.getSnapshot());
+      if (this.aiLoop instanceof SystemOneAgent) {
+        this.aiLoop.reset();
+      } else if (this.aiLoop) {
+        this.aiLoop.start(this.game.getSnapshot());
+        this.aiLoop.getFastAdvisor()?.reset();
+      }
       this.beginTurn();
     })();
   }
@@ -530,6 +559,9 @@ export class GameServer {
     if (request.kind === "choose-suit") {
       return null; // 纯概率响应走引擎自动决策
     }
+    if (this.aiLoop instanceof SystemOneAgent) {
+      return this.aiLoop.decideInteraction(this.game.getSnapshot(), playerId, request)?.decision ?? null;
+    }
     if (this.aiLoop) {
       return (await this.aiLoop.decideInteraction(this.game, playerId, request)) ?? null;
     }
@@ -538,6 +570,10 @@ export class GameServer {
 
   /** 断线托管：把人类座位的交互决策改路由给 AI，并为 LLM 驱动注册子代理。 */
   private registerTakeoverSeat(playerId: string, player?: GameSnapshot["players"][number]): void {
+    if (this.aiLoop instanceof SystemOneAgent) {
+      this.game.setDecisionHandler(playerId, (request) => this.decideInteractionAi(playerId, request));
+      return;
+    }
     const seat = player ?? this.game.getSnapshot().players.find((item) => item.id === playerId);
     if (seat) {
       this.aiLoop?.registerSeatForTakeover(playerId, seat.name, seat.role, seat.general);
@@ -698,7 +734,11 @@ export class GameServer {
         }
         this.trackBattlefield();
         const previousRounds = buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds);
-        this.aiLoop?.setPreviousRoundContexts(previousRounds);
+        if (!(this.aiLoop instanceof SystemOneAgent)) {
+          this.aiLoop?.setPreviousRoundContexts(previousRounds);
+        } else {
+          this.aiLoop.syncRounds(previousRounds);
+        }
         this.localAiEngine.syncPreviousRounds(previousRounds);
         this.log(`${seatLabel} ${current.name} 正在思考...`);
         this.broadcastInterimState();
@@ -862,9 +902,10 @@ export class GameServer {
 
   /**
    * 回合末策略复盘：捕获当前快照后在后台并行执行，不阻塞下一玩家出牌。
+   * System-One 无复盘记忆，直接跳过。
    */
   private reviewStrategiesForTurnEnd(enderId: string): void {
-    if (!this.aiLoop || this.aiPlayerIds.length === 0) {
+    if (!this.aiLoop || this.aiLoop instanceof SystemOneAgent || this.aiPlayerIds.length === 0) {
       return;
     }
     const mode = this.options.aiStrategy ?? "own";

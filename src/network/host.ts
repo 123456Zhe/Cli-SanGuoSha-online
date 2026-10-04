@@ -7,15 +7,17 @@ const openingHandCount = Number.parseInt(valueOf("opening-hand", "4"), 10);
 const aiCount = Number.parseInt(valueOf("ai", "0"), 10);
 const aiThinkingMs = Number.parseInt(valueOf("ai-thinking-ms", "1200"), 10);
 const aiContextRounds = Number.parseInt(valueOf("ai-context-rounds", "30"), 10);
-const aiDriverValue = valueOf("ai-driver", "qwen");
-const aiReasoningValue = valueOf("ai-reasoning", "auto");
-const aiStrategyValue = valueOf("ai-strategy", "own");
-const logLevelValue = valueOf("log-level", "info");
+const aiDriverRaw = valueOf("ai-driver", "qwen");
+const aiReasoningValue = valueOf("ai-reasoning", "auto") as NonNullable<GameServerOptions["aiReasoning"]>;
+const aiStrategyValue = valueOf("ai-strategy", "own") as NonNullable<GameServerOptions["aiStrategy"]>;
+const logLevelValue = valueOf("log-level", "info") as NonNullable<GameServerOptions["logLevel"]>;
+const hybridValue = valueOf("hybrid", process.env.SG_AI_HYBRID ?? "true");
 const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
+if (hybridValue !== "true" && hybridValue !== "false") throw new Error("--hybrid 必须为 true/false");
 if (!Number.isInteger(playerCount) || playerCount < 2 || playerCount > 6) throw new Error("--players 必须为 2 到 6");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port 无效");
 if (!Number.isInteger(aiCount) || aiCount < 0 || aiCount >= playerCount) throw new Error("--ai 必须为 0 到 players-1（至少保留 1 个人类玩家）");
-if (aiDriverValue !== "qwen" && aiDriverValue !== "ollama" && aiDriverValue !== "simple") throw new Error("--ai-driver 必须为 qwen/ollama/simple");
+if (aiDriverRaw !== "qwen" && aiDriverRaw !== "ollama" && aiDriverRaw !== "simple" && aiDriverRaw !== "system-one" && aiDriverRaw !== "hybrid") throw new Error("--ai-driver 必须为 qwen/ollama/simple/system-one/hybrid");
 if (aiReasoningValue !== "auto" && aiReasoningValue !== "fast" && aiReasoningValue !== "normal" && aiReasoningValue !== "deep") throw new Error("--ai-reasoning 必须为 auto/fast/normal/deep");
 if (aiStrategyValue !== "own" && aiStrategyValue !== "always") throw new Error("--ai-strategy 必须为 own/always");
 if (logLevelValue !== "info" && logLevelValue !== "debug") throw new Error("--log-level 必须为 info/debug");
@@ -27,7 +29,9 @@ const options: GameServerOptions = {
   autoRestartAfterGameOver: true,
   allowMultiConnectionsPerSource: allowMultiSource,
   aiCount,
-  aiDriver: aiDriverValue,
+  aiDriver: (aiDriverRaw === "hybrid" ? "qwen" : aiDriverRaw) as NonNullable<GameServerOptions["aiDriver"]>,
+  /** hybrid 开关：--ai-driver=hybrid 或 --hybrid=true 开启 LLM+Judge 快慢结合，回到纯 LLM 用 --hybrid=false。 */
+  hybrid: aiDriverRaw === "hybrid" ? true : hybridValue === "true",
   aiThinkingMs,
   aiContextRounds,
   aiReasoning: aiReasoningValue,

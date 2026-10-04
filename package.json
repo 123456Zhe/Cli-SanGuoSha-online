@@ -19,7 +19,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@opentui/core": "^0.1.96",
+    "@opentui/core": "^0.5.10",
     "ws": "^8.21.3"
   },
   "devDependencies": {
@@ -30,5 +30,8 @@
     "eslint": "^9.39.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

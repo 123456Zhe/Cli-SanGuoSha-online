@@ -73,13 +73,18 @@ export class JevAdvisor implements FastAdvisor {
   }
 
   /** 无 LLM 时的兜底出牌：交给 Jev 的 choice 结果（不依赖本地模型）。 */
-  async decideTurn(snapshot: GameSnapshot, playerId: string, actions: GameAction[]): Promise<SystemOneTurnDecision | null> {
+  async decideTurn(
+    snapshot: GameSnapshot,
+    playerId: string,
+    actions: GameAction[],
+    plan?: string,
+  ): Promise<SystemOneTurnDecision | null> {
     const candidates = actions.slice(0, this.maxCandidates);
     if (candidates.length === 0) {
       return null;
     }
     const criteria = buildActionCriteria(candidates);
-    const answers = await this.askJev(decisionsState(snapshot, playerId, candidates), {
+    const answers = await this.askJev(decisionsState(snapshot, playerId, candidates, undefined, plan), {
       best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
     });
     const picked = pickActionFromAnswer(answers?.best_action, candidates, criteria);
@@ -100,11 +105,12 @@ export class JevAdvisor implements FastAdvisor {
     snapshot: GameSnapshot,
     playerId: string,
     request: InteractionRequest,
+    plan?: string,
   ): Promise<SystemOneInteractionDecision | null> {
     if (request.kind === "choose-suit") {
       return null;
     }
-    const answers = await this.askJev(interactionState(snapshot, playerId, request), {
+    const answers = await this.askJev(interactionState(snapshot, playerId, request, plan), {
       should_respond: { type: "noul", instructions: interactionInstruction },
     });
     const answer = answers?.should_respond;
@@ -291,14 +297,21 @@ const decisionsState = (
   playerId: string,
   candidates: GameAction[],
   proposed?: string,
+  plan?: string,
 ): Record<string, unknown> => ({
   acting_player: describePlayerContext(snapshot, playerId),
   players: snapshot.players.map((player) => describePlayer(player, playerId)),
   legal_actions: candidates.map((action, index) => ({ id: `action_${index + 1}`, action: describeAction(action) })),
   ...(proposed ? { proposed_decision: proposed } : {}),
+  ...(plan ? { strategic_plan: plan } : {}),
 });
 
-const interactionState = (snapshot: GameSnapshot, playerId: string, request: InteractionRequest): Record<string, unknown> => ({
+const interactionState = (
+  snapshot: GameSnapshot,
+  playerId: string,
+  request: InteractionRequest,
+  plan?: string,
+): Record<string, unknown> => ({
   response_player: describePlayerContext(snapshot, playerId),
   players: snapshot.players.map((player) => describePlayer(player, playerId)),
   interaction: {
@@ -307,6 +320,7 @@ const interactionState = (snapshot: GameSnapshot, playerId: string, request: Int
     reason: request.reason,
     available_sources: "sources" in request ? request.sources.map((source) => source.label).join(", ") : "none",
   },
+  ...(plan ? { strategic_plan: plan } : {}),
 });
 
 const describePlayerContext = (snapshot: GameSnapshot, playerId: string): string => {

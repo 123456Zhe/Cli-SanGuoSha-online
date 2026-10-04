@@ -2,7 +2,6 @@ import { callOllamaChatDetailed, listOllamaModels, OllamaCallResult, probeOllama
 import {
   buildAgentPrompt,
   buildInteractionPrompt,
-  buildPlanPrompt,
   buildStrategyPrompt,
   pickReasoningLevel,
   REASONING_EFFORT,
@@ -166,24 +165,27 @@ export class GameAiLoop {
   private allowNonAiSeats = false;
 
   /**
-   * Hybrid 快慢结合：出牌前先用快思考层（本地 System-One 或远端 Jev 判断模型）预打分。
-   * 作用有二：1) prompt 里带上候选排名，LLM 只做"选择/否决"，输出更快更稳；
-   * 2) LLM 返回后用 Judge 门控校验，分差过大说明 LLM 在乱来，直接否决用快的。
-   *
-   * 新版 hybrid（JevAdvisor）：LLM 只做总规划，局内出牌与响应全部由 Jev 快速决策，
-   * 规划文本随每次 Jev 请求下发，Jev 在规划指导下做战术选择。
+   * Hybrid 快慢结合：LLM 做策略规划（回合末复盘积累的 strategy note），
+   * Jev 做局内快决策（出牌 + 响应），规划以 strategic_plan 下发。
+   * 旧版"LLM 出牌 → Jev Judge 门控"仅本地 SystemOneAgent 做 FastAdvisor 时保留。
    */
   private fastAdvisor: FastAdvisor | null = null;
 
   /** 上一次 LLM 决策被 Judge 否决的原因（供 turn-decision 日志展示）。 */
   private lastJudgeVetoReason: string | null = null;
 
-  /** Hybrid 总规划缓存：playerId -> { turn, plan }，每回合刷新一次。 */
-  private planCache = new Map<string, { turn: number; plan: string }>();
-
-  /** 是否为新版 hybrid（LLM 总规划 + Jev 局内快决策）。 */
+  /** 是否为新版 hybrid（LLM 策略规划 + Jev 局内快决策）。 */
   private isHybridJev(): boolean {
     return this.fastAdvisor instanceof JevAdvisor;
+  }
+
+  /**
+   * Hybrid 策略规划（沿用原有架构）：取子代理的策略记忆（回合末复盘积累），
+   * 作为 strategic_plan 传给 Jev，指导其局内快决策。
+   */
+  private getHybridPlan(agent: SubAgent): string | undefined {
+    const note = strategyNoteFor(agent);
+    return "strategyNote" in note ? note.strategyNote : undefined;
   }
 
   constructor(rulesText: string, preferredProvider: AiModelProvider = "qwen") {
@@ -579,53 +581,7 @@ export class GameAiLoop {
   }
 
   /**
-   * Hybrid 总规划：LLM 为玩家制定本回合战略规划（缓存到本回合结束）。
-   * 规划失败时返回 null，上层用 Jev 无规划决策兜底。
-   */
-  private async getHybridPlan(snapshot: GameSnapshot, agent: SubAgent): Promise<string | null> {
-    const cached = this.planCache.get(agent.playerId);
-    if (cached && cached.turn === snapshot.turn) {
-      return cached.plan;
-    }
-    const promptPackage = buildPlanPrompt({
-      rulesText: this.rulesText,
-      snapshot,
-      agent: {
-        playerId: agent.playerId,
-        name: agent.name,
-        role: agent.role,
-        general: agent.general,
-      },
-      previousRoundContexts: this.previousRoundContexts,
-      reasoningLevel: "fast",
-      ...strategyNoteFor(agent),
-    });
-    const messages: AgentMessage[] = [
-      { role: "system", content: promptPackage.systemPrompt },
-      { role: "user", content: promptPackage.userPrompt },
-    ];
-    const callResult = await this.requestDecisionWithRetry(messages, "fast");
-    if (!callResult) {
-      return cached?.plan ?? null;
-    }
-    this.writeDecisionLog({
-      callResult,
-      stage: "hybrid-plan",
-      playerId: agent.playerId,
-      playerName: agent.name,
-      prompt: messages,
-      responseText: callResult.content,
-    });
-    const plan = callResult.content.trim().slice(0, 500);
-    if (plan) {
-      this.planCache.set(agent.playerId, { turn: snapshot.turn, plan });
-      return plan;
-    }
-    return cached?.plan ?? null;
-  }
-
-  /**
-   * 新版 hybrid 出牌：LLM 总规划 + Jev 局内快决策。
+   * 新版 hybrid 出牌：LLM 策略规划 + Jev 局内快决策。
    * Jev 不可用时返回 null，由上层 pickAiTurnDecision 走本地回退。
    */
   private async decideHybridTurn(
@@ -638,8 +594,8 @@ export class GameAiLoop {
     if (!(advisor instanceof JevAdvisor)) {
       return null;
     }
-    const plan = await this.getHybridPlan(snapshot, agent);
-    const picked = await advisor.decideTurn(snapshot, playerId, actions, plan ?? undefined);
+    const plan = this.getHybridPlan(agent);
+    const picked = await advisor.decideTurn(snapshot, playerId, actions, plan);
     if (!picked) {
       return null;
     }
@@ -780,14 +736,14 @@ export class GameAiLoop {
     if (!current || !current.alive) {
       return null;
     }
-    // 新版 hybrid：局内响应由 Jev 快速决策（带 LLM 总规划），不再走 LLM。
+    // 新版 hybrid：局内响应由 Jev 快速决策（带 LLM 策略规划），不再走 LLM。
     if (this.isHybridJev()) {
       const advisor = this.fastAdvisor;
       if (!(advisor instanceof JevAdvisor)) {
         return null;
       }
-      const plan = await this.getHybridPlan(snapshot, agent);
-      const fast = await advisor.decideInteraction(snapshot, playerId, request, plan ?? undefined);
+      const plan = this.getHybridPlan(agent);
+      const fast = await advisor.decideInteraction(snapshot, playerId, request, plan);
       return fast?.decision ?? null;
     }
     const level = this.resolveLevel(snapshot, agent.playerId);

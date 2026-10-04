@@ -2,6 +2,7 @@ import { callOllamaChatDetailed, listOllamaModels, OllamaCallResult, probeOllama
 import {
   buildAgentPrompt,
   buildInteractionPrompt,
+  buildPlanPrompt,
   buildStrategyPrompt,
   pickReasoningLevel,
   REASONING_EFFORT,
@@ -179,11 +180,61 @@ export class GameAiLoop {
     return this.fastAdvisor instanceof JevAdvisor;
   }
 
+  /** Hybrid 回合开始策略规划缓存：playerId -> { turn, plan }，每回合刷新一次。 */
+  private planCache = new Map<string, { turn: number; plan: string }>();
+
   /**
-   * Hybrid 策略规划（沿用原有架构）：取子代理的策略记忆（回合末复盘积累），
-   * 作为 strategic_plan 传给 Jev，指导其局内快决策。
+   * Hybrid 回合开始策略规划：LLM 为玩家制定本回合战略（结合策略记忆），缓存到本回合结束。
+   * 规划失败时回退策略记忆，无记忆则返回 undefined（Jev 无规划决策）。
    */
-  private getHybridPlan(agent: SubAgent): string | undefined {
+  private async getHybridPlan(snapshot: GameSnapshot, agent: SubAgent): Promise<string | undefined> {
+    const cached = this.planCache.get(agent.playerId);
+    if (cached && cached.turn === snapshot.turn) {
+      return cached.plan;
+    }
+    const promptPackage = buildPlanPrompt({
+      rulesText: this.rulesText,
+      snapshot,
+      agent: {
+        playerId: agent.playerId,
+        name: agent.name,
+        role: agent.role,
+        general: agent.general,
+      },
+      previousRoundContexts: this.previousRoundContexts,
+      reasoningLevel: "fast",
+      ...strategyNoteFor(agent),
+    });
+    const messages: AgentMessage[] = [
+      { role: "system", content: promptPackage.systemPrompt },
+      { role: "user", content: promptPackage.userPrompt },
+    ];
+    const callResult = await this.requestDecisionWithRetry(messages, "fast");
+    const fallback = this.getStrategyNotePlan(agent) ?? cached?.plan;
+    if (!callResult) {
+      return fallback;
+    }
+    this.writeDecisionLog({
+      callResult,
+      stage: "hybrid-plan",
+      playerId: agent.playerId,
+      playerName: agent.name,
+      prompt: messages,
+      responseText: callResult.content,
+    });
+    const plan = callResult.content.trim().slice(0, 500);
+    if (plan) {
+      this.planCache.set(agent.playerId, { turn: snapshot.turn, plan });
+      return plan;
+    }
+    return fallback;
+  }
+
+  /**
+   * 策略记忆规划（原有架构）：取子代理的策略记忆（回合末复盘积累），
+   * 在 LLM 回合规划失败时作为兜底。
+   */
+  private getStrategyNotePlan(agent: SubAgent): string | undefined {
     const note = strategyNoteFor(agent);
     return "strategyNote" in note ? note.strategyNote : undefined;
   }
@@ -594,7 +645,7 @@ export class GameAiLoop {
     if (!(advisor instanceof JevAdvisor)) {
       return null;
     }
-    const plan = this.getHybridPlan(agent);
+    const plan = await this.getHybridPlan(snapshot, agent);
     const picked = await advisor.decideTurn(snapshot, playerId, actions, plan);
     if (!picked) {
       return null;
@@ -736,13 +787,13 @@ export class GameAiLoop {
     if (!current || !current.alive) {
       return null;
     }
-    // 新版 hybrid：局内响应由 Jev 快速决策（带 LLM 策略规划），不再走 LLM。
+    // 新版 hybrid：局内响应由 Jev 快速决策（带 LLM 回合规划），不再走 LLM。
     if (this.isHybridJev()) {
       const advisor = this.fastAdvisor;
       if (!(advisor instanceof JevAdvisor)) {
         return null;
       }
-      const plan = this.getHybridPlan(agent);
+      const plan = await this.getHybridPlan(snapshot, agent);
       const fast = await advisor.decideInteraction(snapshot, playerId, request, plan);
       return fast?.decision ?? null;
     }

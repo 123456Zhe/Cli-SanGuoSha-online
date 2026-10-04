@@ -18,6 +18,8 @@ import { CardSource, GameAction, GameSnapshot, InteractionDecision, InteractionR
  * - 否决时用 Jev 的 `best_action` 作为回退，绝不回退本地启发式。
  *
  * 可用性兜底：Jev 调用失败时放行 LLM 的决策（不否决、不阻塞），对局继续。
+ * 决定层（decideTurn / decideInteraction）在 Jev 不可用时一律返回 null，
+ * 由上层回退本地策略——绝不把"失败"当成一个决策结果返回（否则 AI 会假装正常、濒死时不求桃）。
  * 说明：Jev 官方标注英文准确率最高、CJK 可用但需自行验证，因此 instructions 用英文，
  * state 里的对局数据保持中文原名（武将/卡牌名无法翻译）。
  */
@@ -87,10 +89,15 @@ export class JevAdvisor implements FastAdvisor {
     const answers = await this.askJev(decisionsState(snapshot, playerId, candidates, undefined, plan), {
       best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
     });
-    const picked = pickActionFromAnswer(answers?.best_action, candidates, criteria);
-    // Jev 不可用时退回引擎自动决策（由上层 pickAiTurnDecision 处理）
+    if (!answers) {
+      // Jev 不可用：返回 null，由上层回退本地策略/启发式。
+      // 绝不能在这里随便挑一个动作——否则失败会被当成"Jev 的决策"，日志与 modelUsed 都会说谎。
+      return null;
+    }
+    const picked = pickActionFromAnswer(answers.best_action, candidates, criteria);
     if (!picked) {
-      return { action: candidates[0] as GameAction, confidence: 0, reason: "Jev 不可用" };
+      // Jev 有响应但解析不出可用动作，同样交回上层决定。
+      return null;
     }
     return {
       action: picked.action,
@@ -113,13 +120,23 @@ export class JevAdvisor implements FastAdvisor {
     const answers = await this.askJev(interactionState(snapshot, playerId, request, plan), {
       should_respond: { type: "noul", instructions: interactionInstruction },
     });
-    const answer = answers?.should_respond;
-    if (answer?.type === "noul" && answer.noul >= this.acceptThreshold && "sources" in request) {
+    if (!answers) {
+      // Jev 不可用：返回 null 让上层走本地策略/默认响应。
+      // 这里曾经固定返回 pass——那会让 AI 在濒死求桃、必闪时"主动放弃"，比引擎默认行为更差。
+      return null;
+    }
+    const answer = answers.should_respond;
+    if (!answer) {
+      // 响应缺少 should_respond 字段：视为不可用，交回上层。
+      return null;
+    }
+    if (answer.type === "noul" && answer.noul >= this.acceptThreshold && "sources" in request) {
       const source = (request.sources as CardSource[])[0];
       if (source) {
         return { decision: { choice: "card", sourceId: source.sourceId }, confidence: answer.noul, reason: "Jev noul" };
       }
     }
+    // 这是 Jev 给出的明确判断（noul 低于阈值），不是调用失败：按不出牌处理。
     return { decision: { choice: "pass" }, confidence: 0.5, reason: "Jev 默认放弃" };
   }
 

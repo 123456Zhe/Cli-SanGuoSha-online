@@ -54,6 +54,30 @@ void test("Jev 不可达时放行 LLM 决策，不否决也不抛异常", async 
   assert.equal(interactionOk, true, "Jev 不可用时交互决策应放行");
 });
 
+void test("Jev 不可达时决定层返回 null，不假装决策成功", async () => {
+  const advisor = new JevAdvisor("rules", { baseUrl: "http://127.0.0.1:1/v1", model: "jev-test", timeoutMs: 200 });
+  const { game, aiId } = setupPlayTurn();
+  const snapshot = game.getSnapshot();
+  const actions = game.getPlayableActions(aiId);
+  assert.ok(actions.length > 0);
+
+  const turn = await advisor.decideTurn(snapshot, aiId, actions);
+  assert.equal(turn, null, "Jev 不可用时出牌决定层必须返回 null，交给上层回退本地策略");
+
+  const interaction = await advisor.decideInteraction(snapshot, aiId, {
+    kind: "respond",
+    requestId: 1,
+    responderId: aiId,
+    trigger: { cardName: "杀", actorId: "human" },
+    responseKind: "peach",
+    sources: [{ sourceId: "hand:1", origin: "hand", label: "桃" }],
+    allowPass: true,
+    reason: "求桃",
+  });
+  assert.equal(interaction, null, "Jev 不可用时响应决定层必须返回 null，而不是固定放弃（濒死时会白送）");
+  assert.ok(advisor.getLastFailureReason(), "应记录 Jev 调用失败原因");
+});
+
 void test("JevAdvisor 不做本地预排序，出牌 prompt 不注入快思考摘要", () => {
   const advisor = new JevAdvisor("rules", { baseUrl: "http://127.0.0.1:1/v1" });
   const { game, aiId } = setupPlayTurn();

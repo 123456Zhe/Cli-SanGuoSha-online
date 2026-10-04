@@ -2,4 +2,9 @@
 - Prefers AI decision-making to be backed by a real external model API (e.g. TypeSafe Jev / "System One" structured decision model — not necessarily a chat model; configured via env vars) rather than relying on built-in local heuristics; expects model integrations to be pluggable behind a shared interface. Confidence: 0.75
 - Expects third-party models/APIs to be researched against their real, current documentation (web search + official docs) before coding against them, instead of assuming a familiar shape such as OpenAI-compatible `/chat/completions`; wants the adapter, `.env.example`, and README to describe the API's actual semantics. Confidence: 0.7
  When removing/decommissioning a code path or feature, keep the related configuration and environment variables in place rather than deleting them; only adjust docs/comments to note the new scope. Confidence: 0.6
+- Communicates in Chinese (Simplified); expects responses in Chinese. Confidence: 0.6
+- Keeps planning/spec documents as markdown under `docs/` (e.g. `docs/<feature>-plan.md`) and expects the agent to read and work from those plan files. Confidence: 0.65
 - Values fast turnaround and minimal ceremony — prefers quick, direct implementation over lengthy process or excessive deliberation. Confidence: 0.5
+- When handing work off to another agent, expects a single self-contained written handoff document that a fresh agent with no prior context can pick up — covering current status, an ordered reading list of the key docs, which changes are uncommitted, the next planned step, and known environment gotchas. Confidence: 0.7
+- For non-trivial work, expects the agent to write out a plan for review first (explicitly asks "先写计划") rather than diving straight into implementation. Confidence: 0.6
+- When a refactor and directly related bug/rule fixes are both pending, prefers batching them into a single delivery pass instead of doing them as separate milestones. Confidence: 0.5

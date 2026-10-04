@@ -17,7 +17,7 @@ export type Player = {
   role: PlayerRole;
   gender: "男" | "女";
   general: string;
-  skills: SkillName[];
+  skills: SkillId[];
   isAI: boolean;
   hp: number;
   maxHp: number;
@@ -35,53 +35,71 @@ export type Player = {
   chained: boolean;
 };
 
-export enum SkillName {
-  Heroic = "英姿",
-  Roar = "咆哮",
-  Assault = "强袭",
-  JuShou = "据守",
-  JieWei = "解围",
-  JianXiong = "奸雄",
-  HuJia = "护驾",
-  QingGuo = "倾国",
-  LuoShen = "洛神",
-  GangLie = "刚烈",
-  LuoYi = "裸衣",
-  TuXi = "突袭",
-  TianDu = "天妒",
-  YiJi = "遗计",
-  FanKui = "反馈",
-  GuiCai = "鬼才",
-  RenDe = "仁德",
-  JiJiang = "激将",
-  WuSheng = "武圣",
-  LongDan = "龙胆",
-  MaShu = "马术",
-  TieQi = "铁骑",
-  GuanXing = "观星",
-  KongCheng = "空城",
-  JiZhi = "集智",
-  QiCai = "奇才",
-  ZhiHeng = "制衡",
-  JiuYuan = "救援",
-  FanJian = "反间",
-  KuRou = "苦肉",
-  QianXun = "谦逊",
-  LianYing = "连营",
-  GuoSe = "国色",
-  LiuLi = "流离",
-  JieYin = "结姻",
-  XiaoJi = "枭姬",
-  WuShuang = "无双",
-  LiJian = "离间",
-  BiYue = "闭月",
-  QingNang = "青囊",
-  JiJiu = "急救",
-  JiAng = "激昂",
-  HunZi = "魂姿",
-  YingHun = "英魂",
-  ZhiBa = "制霸",
-}
+export const SkillName = {
+  Heroic: "英姿",
+  Roar: "咆哮",
+  Assault: "强袭",
+  JuShou: "据守",
+  JieWei: "解围",
+  JianXiong: "奸雄",
+  HuJia: "护驾",
+  QingGuo: "倾国",
+  LuoShen: "洛神",
+  GangLie: "刚烈",
+  LuoYi: "裸衣",
+  TuXi: "突袭",
+  TianDu: "天妒",
+  YiJi: "遗计",
+  FanKui: "反馈",
+  GuiCai: "鬼才",
+  RenDe: "仁德",
+  JiJiang: "激将",
+  WuSheng: "武圣",
+  LongDan: "龙胆",
+  MaShu: "马术",
+  TieQi: "铁骑",
+  GuanXing: "观星",
+  KongCheng: "空城",
+  JiZhi: "集智",
+  QiCai: "奇才",
+  ZhiHeng: "制衡",
+  JiuYuan: "救援",
+  FanJian: "反间",
+  KuRou: "苦肉",
+  QianXun: "谦逊",
+  LianYing: "连营",
+  GuoSe: "国色",
+  LiuLi: "流离",
+  JieYin: "结姻",
+  XiaoJi: "枭姬",
+  WuShuang: "无双",
+  LiJian: "离间",
+  BiYue: "闭月",
+  QingNang: "青囊",
+  JiJiu: "急救",
+  JiAng: "激昂",
+  HunZi: "魂姿",
+  YingHun: "英魂",
+  ZhiBa: "制霸",
+} as const;
+
+/** 技能身份：内置技能名，或外部武将包的命名空间 id（如 `吕蒙/克己`）。 */
+export type SkillId = string;
+
+/** 兼容旧写法：类型位置仍可用 `SkillName` / `SkillName[]`（等价 `SkillId`）。 */
+export type SkillName = SkillId;
+
+/** 内置技能的字面量联合（用于注册表穷尽性校验）。 */
+export type BuiltinSkillId = (typeof SkillName)[keyof typeof SkillName];
+
+/** 势力常量。外部包可用自定义势力字符串。 */
+export const KINGDOM = {
+  Wei: "魏",
+  Shu: "蜀",
+  Wu: "吴",
+  Qun: "群雄",
+} as const;
+
 
 export type GameAction =
   | {
@@ -95,7 +113,7 @@ export type GameAction =
     }
   | {
       type: "skill";
-      skill: SkillName;
+      skill: SkillId;
       label: string;
       requiresTarget: boolean;
       targets: string[];
@@ -133,11 +151,11 @@ export type NetworkPlayerConfig = {
 };
 
 export type GeneralDefinition = {
-  kingdom: "魏" | "蜀" | "吴" | "群雄";
+  kingdom: string;
   name: string;
   gender: "男" | "女";
   maxHp: number;
-  skills: SkillName[];
+  skills: SkillId[];
 };
 
 export type SkillTrigger = "turn_start" | "before_draw" | "before_damage" | "after_damage";

@@ -1,7 +1,9 @@
 import { createInterface } from "node:readline/promises";
+import { loadGeneralPacks } from "../engine/general-pack.js";
 import { GameServer, GameServerOptions } from "./server.js";
 
 const valueOf = (name: string, fallback: string): string => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
+const hasFlag = (name: string): boolean => process.argv.some((arg) => arg === `--${name}` || arg === `--${name}=true`);
 const playerCount = Number.parseInt(valueOf("players", "2"), 10);
 const port = Number.parseInt(valueOf("port", "9527"), 10);
 const openingHandCount = Number.parseInt(valueOf("opening-hand", "4"), 10);
@@ -16,6 +18,11 @@ const hybridValue = valueOf("hybrid", process.env.SG_AI_HYBRID ?? "true");
 const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
 const interactionTimeoutSeconds = Number.parseInt(valueOf("interaction-timeout", "120"), 10);
 const maxConnections = Number.parseInt(valueOf("max-connections", "32"), 10);
+// 武将包：host 默认只内置（外部包是任意代码执行，联机主机需显式 --generals-pool=all 才加载他人包）。
+const generalsDir = valueOf("generals-dir", "generals");
+const generalsPool = valueOf("generals-pool", "builtin");
+const generalsJsonOnly = hasFlag("generals-json-only");
+const strictGenerals = hasFlag("strict-generals");
 if (hybridValue !== "true" && hybridValue !== "false") throw new Error("--hybrid 必须为 true/false");
 if (!Number.isInteger(playerCount) || playerCount < 2 || playerCount > 6) throw new Error("--players 必须为 2 到 6");
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port 无效");
@@ -26,6 +33,7 @@ if (aiDriverRaw !== "qwen" && aiDriverRaw !== "ollama" && aiDriverRaw !== "simpl
 if (aiReasoningValue !== "auto" && aiReasoningValue !== "fast" && aiReasoningValue !== "normal" && aiReasoningValue !== "deep") throw new Error("--ai-reasoning 必须为 auto/fast/normal/deep");
 if (aiStrategyValue !== "own" && aiStrategyValue !== "always") throw new Error("--ai-strategy 必须为 own/always");
 if (logLevelValue !== "info" && logLevelValue !== "debug") throw new Error("--log-level 必须为 info/debug");
+if (generalsPool !== "all" && generalsPool !== "builtin") throw new Error("--generals-pool 必须为 all/builtin");
 const options: GameServerOptions = {
   host: valueOf("host", "0.0.0.0"),
   port,
@@ -34,7 +42,7 @@ const options: GameServerOptions = {
   autoRestartAfterGameOver: true,
   allowMultiConnectionsPerSource: allowMultiSource,
   aiCount,
-  aiDriver: (aiDriverRaw === "hybrid" ? "qwen" : aiDriverRaw) as NonNullable<GameServerOptions["aiDriver"]>,
+  aiDriver: aiDriverRaw === "hybrid" ? "qwen" : aiDriverRaw,
   /** hybrid 开关：--ai-driver=hybrid 或 --hybrid=true 开启 LLM+Judge 快慢结合，回到纯 LLM 用 --hybrid=false。 */
   hybrid: aiDriverRaw === "hybrid" ? true : hybridValue === "true",
   aiThinkingMs,
@@ -46,6 +54,17 @@ const options: GameServerOptions = {
   interactionTimeoutMs: interactionTimeoutSeconds * 1000,
   maxConnections,
 };
+// 外部武将包必须在构造 GameServer（进而读取武将池）之前预载完成。
+const generalsReport = await loadGeneralPacks({
+  dir: generalsDir,
+  pool: generalsPool,
+  jsonOnly: generalsJsonOnly,
+  strict: strictGenerals,
+  log: (line) => console.log(line),
+});
+for (const error of generalsReport.errors) {
+  console.warn(`[generals] ${error.pack}：${error.message}`);
+}
 const server = new GameServer(options);
 await server.listen();
 

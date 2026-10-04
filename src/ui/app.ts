@@ -7,6 +7,7 @@ import { SystemOneAgent } from "../agent/system-one.js";
 import { JevAdvisor } from "../agent/jev-advisor.js";
 import { RoundPromptContext } from "../agent/prompt.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
+import { stripGeneralsSections } from "../agent/match-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { CardType } from "../engine/cards.js";
 import { GameAction, GameInitOptions, InteractionDecision, InteractionRequest, Player, PlayerRole, RemovableCardOption, SanGuoGame } from "../engine/game.js";
@@ -70,6 +71,9 @@ export class CliSanGuoApp {
 
   private readonly rulesLines: string[];
 
+  /** 供 AI 使用的基础规则（剔除 §14/§16.3 武将章节，技能按本局动态注入）；rulesLines 仍保留全文供 /help 展示。 */
+  private readonly baseRulesText: string;
+
   private readonly aiLoop: GameAiLoop;
 
   private readonly localAiEngine: LocalAiEngine;
@@ -130,8 +134,9 @@ export class CliSanGuoApp {
     this.commandBuffer = null;
     this.generalLibrary = this.game.getGeneralLibrary();
     this.rulesLines = this.loadRulesLines();
-    this.aiLoop = new GameAiLoop(this.rulesLines.join("\n"));
-    this.localAiEngine = new LocalAiEngine(this.rulesLines.join("\n"));
+    this.baseRulesText = stripGeneralsSections(this.rulesLines.join("\n"));
+    this.aiLoop = new GameAiLoop(this.baseRulesText);
+    this.localAiEngine = new LocalAiEngine(this.baseRulesText);
     this.systemOne = null;
     this.displayOverlayTitle = null;
     this.displayOverlayLines = [];
@@ -1098,7 +1103,7 @@ export class CliSanGuoApp {
       this.aiLoop.setPreferredProvider(slowProvider);
       this.aiLoop.setPreferredOllamaModel(slowProvider === "ollama" ? this.setupOllamaModel : null);
       // 判断层：LLM + Jev（不再使用本地决策模型）；未配置 JEV_* 则退回纯 LLM
-      const advisor = hybridEnabled && JevAdvisor.isConfigured() ? new JevAdvisor(this.rulesLines.join("\n")) : null;
+      const advisor = hybridEnabled && JevAdvisor.isConfigured() ? new JevAdvisor(this.baseRulesText) : null;
       this.aiLoop.setFastAdvisor(advisor);
     } else if (this.setupAiModel === "ollama" || this.setupAiModel === "qwen") {
       this.aiLoop.setPreferredProvider(this.setupAiModel);

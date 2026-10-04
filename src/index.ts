@@ -1,9 +1,11 @@
 import { GameInitOptions, SanGuoGame } from "./engine/game.js";
+import { GeneralPackLoadOptions, loadGeneralPacks } from "./engine/general-pack.js";
 import { CliSanGuoApp } from "./ui/app.js";
 
 type RuntimeOptions = {
   seed: number | null;
   initOptions: Partial<GameInitOptions>;
+  generals: GeneralPackLoadOptions;
 };
 
 const toNumber = (raw: string | undefined): number | null => {
@@ -31,6 +33,8 @@ const parseRuntimeOptions = (args: string[], env: NodeJS.ProcessEnv): RuntimeOpt
   const parsed: RuntimeOptions = {
     seed: seedFromEnv,
     initOptions,
+    // dev（npm run dev）默认加载项目根的 generals/ 外部武将包。
+    generals: { dir: "generals", pool: "all" },
   };
   for (const arg of args) {
     if (arg.startsWith("--ai=")) {
@@ -45,6 +49,18 @@ const parseRuntimeOptions = (args: string[], env: NodeJS.ProcessEnv): RuntimeOpt
       }
     } else if (arg.startsWith("--seed=")) {
       parsed.seed = toNumber(arg.slice("--seed=".length));
+    } else if (arg.startsWith("--generals-dir=")) {
+      parsed.generals.dir = arg.slice("--generals-dir=".length);
+    } else if (arg.startsWith("--generals-pool=")) {
+      const pool = arg.slice("--generals-pool=".length);
+      if (pool !== "all" && pool !== "builtin") {
+        throw new Error("--generals-pool 必须为 all/builtin");
+      }
+      parsed.generals.pool = pool;
+    } else if (arg === "--generals-json-only" || arg === "--generals-json-only=true") {
+      parsed.generals.jsonOnly = true;
+    } else if (arg === "--strict-generals" || arg === "--strict-generals=true") {
+      parsed.generals.strict = true;
     }
   }
   return parsed;
@@ -63,6 +79,11 @@ const createSeededRng = (seed: number): (() => number) => {
 
 const main = async (): Promise<void> => {
   const options = parseRuntimeOptions(process.argv.slice(2), process.env);
+  // 外部武将包必须在构造 SanGuoGame（进而读取武将池）之前预载完成。
+  const report = await loadGeneralPacks({ ...options.generals, log: (line) => console.log(line) });
+  for (const error of report.errors) {
+    console.warn(`[generals] ${error.pack}：${error.message}`);
+  }
   const game = options.seed === null ? new SanGuoGame() : new SanGuoGame(createSeededRng(options.seed));
   const app = new CliSanGuoApp(game, { initOptions: options.initOptions });
   await app.start();

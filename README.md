@@ -118,6 +118,9 @@ npm run webui
 - `src/index.ts`：程序入口，解析运行参数与环境变量，创建 `SanGuoGame` 与 `CliSanGuoApp` 并启动。
 - `src/ui/app.ts`：CLI 交互层，负责界面分区渲染、键盘事件处理、游戏设置流程、用户行动输入、AI 回合驱动。
 - `src/engine/game.ts`：核心引擎，负责牌堆与玩家状态、阶段推进、卡牌与技能结算、胜负判定。
+- `src/engine/general-pack.ts`：外部武将包 loader（扫描 `generals/*/general.json`、schema 校验、技能文件加载、命名空间 id、每包 try/catch 隔离）。
+- `src/engine/skill-module.ts`：外部技能运行时契约（`SkillModule`）与全局注册表（挂 `globalThis`，热重载后存活）。
+- `src/engine/skill-registry.ts`：内置技能元数据注册表（45 技能）+ 统一查询 `resolveSkillDescriptor`。
 - `src/engine/cards.ts`：卡牌枚举与牌库构成，提供洗牌/建立牌堆能力。
 - `src/agent/ai.ts`：AI 决策循环，维护每个 AI 角色的子代理，调用模型并把 JSON 决策映射为引擎动作。
 - `src/agent/local-engine.ts`：本地简单策略引擎（Simple AI），用于离线决策与模型失败回退。
@@ -198,7 +201,8 @@ npm run webui
 
 - 静态部分：
   - AI 角色定位：三国杀对局高手、以阵营胜利为目标。
-  - 规则上下文：来自 `rules.md` 的规则文本。
+  - 规则上下文：来自 `rules.md` 的规则文本，但**加载时剔除 §14（武将与技能说明）与 §16.3（武将速查）**（`agent/match-context.ts` 的 `stripGeneralsSections`）。
+  - 本局武将技能：按快照 `player.skills` 动态生成（`buildMatchGeneralsText`），只注入本场出现的武将技能说明（含魂姿觉醒等临时获得的技能），有总长上限；见 `engine/skill-registry.ts`。
 - 动态部分：
   - 最近多轮上下文（默认 30 轮，`SG_AI_CONTEXT_ROUNDS` / `--ai-context-rounds` 可调，适配长上下文模型）：
     - 每轮显示区的出牌/结算内容。
@@ -233,3 +237,35 @@ npm run webui
 - 观察 AI 行为先看 `devlog/ai-log.md`：可快速定位是提示词问题、模型输出问题还是解析问题。
 - 处理交互类问题时，先区分 UI 模式（`setup/game/response/discard/command`）再排查事件分支。
 - 引擎改动后优先补 `game.test.ts` 场景，保证回归安全。
+
+## 11. 外部武将包
+
+放一个文件夹即可新增武将，无需改 `src/`、无需重新编译：
+
+```
+generals/<武将名>/
+  general.json          # 元数据 + 技能名列表
+  <技能名>.skill.json   # 声明式技能
+  <技能名>.skill.ts     # 或 代码技能（.skill.mjs 跨环境）
+```
+
+- 技能身份 = `<文件夹名>/<技能名>`（命名空间 id），展示用 `displayName`。
+- 完整文件格式、`SkillModule` 契约、Context 能力清单与隐式约定见 `docs/generals-pack-api.md`。
+- 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）。
+
+```bash
+# 复制示例到项目根 generals/ 后，npm run dev 选将出现吕蒙
+cp -r examples/generals/吕蒙 generals/吕蒙 && npm run dev
+# 或直接把示例目录当武将包目录
+npm run dev -- --generals-dir=examples/generals
+
+# 联机主机默认只内置（外部包等价任意代码执行），需显式开启：
+npm run host -- --players=3 --generals-pool=all
+# 只信任声明式 JSON / 任一包失败即退出：
+npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-generals
+```
+
+- `dev`（`npm run dev`）默认加载 `generals/`；`host`（`npm run host`）默认 `builtin`，必须显式 `--generals-pool=all`。
+- `.ts` 技能依赖 bun/tsx 运行时；跨环境分发用 `.mjs`，或用 `--generals-json-only` 只放行声明式 JSON。
+- 声明式技能的 `rules`（`SkillRules` 词汇表：距离/杀次数/伤害/目标免疫等）经谓词层参与结算，内置与外部包统一；非词汇表可表达的效果留 Phase 6。详见 `docs/generals-pack-api.md`「规则词汇表」。
+- AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）。

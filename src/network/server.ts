@@ -7,6 +7,7 @@ import { LocalAiEngine } from "../agent/local-engine.js";
 import { SystemOneAgent } from "../agent/system-one.js";
 import { JevAdvisor } from "../agent/jev-advisor.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
+import { stripGeneralsSections } from "../agent/match-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
 import { hotReloadEngine } from "../engine/hot-reload.js";
@@ -209,7 +210,8 @@ export class GameServer {
   private loadRules(): string {
     const path = this.options.rulesPath ?? resolve(process.cwd(), "rules.md");
     try {
-      return readFileSync(path, "utf-8");
+      // 武将技能改为按本局动态注入（见 agent/match-context.ts），基础规则里剔除 §14/§16.3 避免全量武将知识进入上下文。
+      return stripGeneralsSections(readFileSync(path, "utf-8"));
     } catch {
       return "";
     }

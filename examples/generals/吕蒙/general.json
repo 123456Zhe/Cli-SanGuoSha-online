@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "吕蒙",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["克己", "涉猎"],
+  "description": "吴国武将，善于据守与突袭。"
+}

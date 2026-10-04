@@ -35,7 +35,35 @@ const commonGeneralPool: GeneralDefinition[] = [
   { kingdom: "群雄", name: "华佗", gender: "男", maxHp: 3, skills: [SkillName.QingNang, SkillName.JiJiu] },
 ];
 
-export const GENERAL_LIBRARY: GeneralDefinition[] = [humanGeneral, ...commonGeneralPool];
+const BUILTIN_GENERALS: GeneralDefinition[] = [humanGeneral, ...commonGeneralPool];
+
+/**
+ * 已加载的武将池（内置 + 外部武将包）。
+ * loader（`general-pack.ts`）通过 `setLoadedGenerals` 原地替换数组内容，保持本引用稳定，
+ * 这样 `game.ts` 的 re-export 与既有 `import { GENERAL_LIBRARY }` 都能看到最新池。
+ */
+export const GENERAL_LIBRARY: GeneralDefinition[] = [...BUILTIN_GENERALS];
+
+const cloneGeneral = (general: GeneralDefinition): GeneralDefinition => ({
+  kingdom: general.kingdom,
+  name: general.name,
+  gender: general.gender,
+  maxHp: general.maxHp,
+  skills: [...general.skills],
+});
+
+export function getBuiltinGenerals(): GeneralDefinition[] {
+  return BUILTIN_GENERALS.map(cloneGeneral);
+}
+
+export function setLoadedGenerals(list: GeneralDefinition[]): void {
+  GENERAL_LIBRARY.length = 0;
+  GENERAL_LIBRARY.push(...list);
+}
+
+export function resetLoadedGenerals(): void {
+  setLoadedGenerals(BUILTIN_GENERALS);
+}
 
 export function buildRoleList(playerCount: number): PlayerRole[] {
   if (playerCount === 2) {
@@ -81,10 +109,10 @@ export function getRoleDistribution(roles: PlayerRole[]): { rebel: number; loyal
 
 export function resolveGeneralByName(generalName: string): GeneralDefinition {
   const found = GENERAL_LIBRARY.find((item) => item.name === generalName);
-  if (found) {
-    return found;
+  if (!found) {
+    throw new Error(`未知武将：${generalName}（不在已加载的武将池中）`);
   }
-  return humanGeneral;
+  return found;
 }
 
 export function getAiName(index: number): string {

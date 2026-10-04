@@ -31,6 +31,7 @@ export type PromptAgentIdentity = {
 
 export type AgentPromptInput = {
   rulesText: string;
+  matchGeneralsText?: string;
   snapshot: GameSnapshot;
   agent: PromptAgentIdentity;
   actions: GameAction[];
@@ -49,6 +50,7 @@ export type AgentPromptInput = {
 /** Hybrid 回合开始策略规划用输入：与 AgentPromptInput 相同，但不需要 actions（规划不指定具体动作）。 */
 export type PlanPromptInput = {
   rulesText: string;
+  matchGeneralsText?: string;
   snapshot: GameSnapshot;
   agent: PromptAgentIdentity;
   previousRoundContexts: RoundPromptContext[];
@@ -151,8 +153,10 @@ const buildSystemPrompt = (
   agent: PromptAgentIdentity,
   level: ReasoningLevel,
   extraInstructions: string[],
+  matchGeneralsText?: string,
 ): string => {
   const jsonContract = extraInstructions.length > 0 ? `\n${extraInstructions.join("\n")}` : "";
+  const matchBlock = matchGeneralsText ? ["", "本局武将技能：", matchGeneralsText] : [];
   return [
     "你是三国杀游戏高手。",
     `你在本局中负责角色 ${agent.name}。`,
@@ -165,6 +169,7 @@ const buildSystemPrompt = (
     "",
     "三国杀游戏rules：",
     rulesText,
+    ...matchBlock,
   ].join("\n");
 };
 
@@ -190,7 +195,7 @@ export const buildAgentPrompt = (input: AgentPromptInput): AgentPromptPackage =>
   const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
   const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [
     '输出JSON格式：{"actionIndex":数字,"targetId":"可选"}，例如 {"actionIndex":1} 或 {"actionIndex":2,"targetId":"human"}。',
-  ]);
+  ], input.matchGeneralsText);
   const userPrompt = [
     `游戏之前轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
     previousRoundsText,
@@ -224,7 +229,7 @@ export const buildPlanPrompt = (input: PlanPromptInput): AgentPromptPackage => {
   const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [
     "你现在是战略规划师，只负责制定本回合的总体战略，不负责具体出牌。",
     "直接输出战略规划文本（200字以内），不要输出JSON，不要解释格式。",
-  ]);
+  ], input.matchGeneralsText);
   const userPrompt = [
     `游戏之前轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
     previousRoundsText,
@@ -301,6 +306,7 @@ const buildInteractionJsonContract = (request: InteractionRequest): string => {
 
 export const buildInteractionPrompt = (input: {
   rulesText: string;
+  matchGeneralsText?: string;
   snapshot: GameSnapshot;
   agent: PromptAgentIdentity;
   request: InteractionRequest;
@@ -311,7 +317,7 @@ export const buildInteractionPrompt = (input: {
   const level = input.reasoningLevel ?? "normal";
   const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
   const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
-  const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [buildInteractionJsonContract(input.request)]);
+  const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [buildInteractionJsonContract(input.request)], input.matchGeneralsText);
   const userPrompt = [
     `游戏之前轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
     previousRoundsText,
@@ -330,6 +336,7 @@ export const buildInteractionPrompt = (input: {
 
 export const buildStrategyPrompt = (input: {
   rulesText: string;
+  matchGeneralsText?: string;
   snapshot: GameSnapshot;
   agent: PromptAgentIdentity;
   previousRoundContexts: RoundPromptContext[];
@@ -340,18 +347,12 @@ export const buildStrategyPrompt = (input: {
   const strategyBlock = input.previousStrategyBlock
     ? `\n你上次复盘形成的策略记忆：\n${input.previousStrategyBlock}\n`
     : "\n你还没有形成策略记忆（首次复盘）。\n";
-  const systemPrompt = [
-    "你是三国杀游戏高手。",
-    `你在本局中负责角色 ${input.agent.name}，身份是${input.agent.role}，武将是${input.agent.general}。`,
-    "你的目标是尽最大可能让自己的身份阵营获胜。",
+  const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, "deep", [
     "现在请以真人复盘与筹划的口吻，深度推理当前局势，制定接下来几轮的打法思路。",
     "要求：先评估上次策略的执行情况与得失（若为首次复盘则写 无）；再提炼一句经验教训（可为空字符串）；再制定下一回合的战术笔记；最后给出对跨回合战略方针的增量更新（新推断或修正，若无更新写 不变）。",
     "输出必须是JSON对象，禁止输出其他文本，格式：",
     '{"execution":"上轮计划执行情况一句话评价（首次写 无）","lesson":"一句话教训（可为空字符串）","tactical":"下回合战术：首动倾向、保留关键牌、主要防范点，300字内","doctrineUpdate":"战略方针增量更新（身份推断/阵营目标/资源纪律），若无更新写 不变"}',
-    "",
-    "三国杀游戏rules：",
-    input.rulesText,
-  ].join("\n");
+  ], input.matchGeneralsText);
   const userPrompt = [
     `最近轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
     previousRoundsText,

@@ -7,6 +7,7 @@ import {
   SystemOneTurnDecision,
 } from "./system-one.js";
 import { CardSource, GameAction, GameSnapshot, InteractionDecision, InteractionRequest, Player, PlayerRole } from "../engine/game.js";
+import { buildMatchGeneralsText } from "./match-context.js";
 
 /**
  * JevAdvisor：hybrid 的判断层 = LLM + Jev（TypeSafe System One 决策模型）。
@@ -86,9 +87,15 @@ export class JevAdvisor implements FastAdvisor {
       return null;
     }
     const criteria = buildActionCriteria(candidates);
-    const answers = await this.askJev(decisionsState(snapshot, playerId, candidates, undefined, plan), {
-      best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
-    });
+    const answers = await this.askJev(
+      {
+        ...decisionsState(snapshot, playerId, candidates, undefined, plan),
+        match_skills: buildMatchGeneralsText(snapshot),
+      },
+      {
+        best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
+      },
+    );
     if (!answers) {
       // Jev 不可用：返回 null，由上层回退本地策略/启发式。
       // 绝不能在这里随便挑一个动作——否则失败会被当成"Jev 的决策"，日志与 modelUsed 都会说谎。
@@ -117,9 +124,15 @@ export class JevAdvisor implements FastAdvisor {
     if (request.kind === "choose-suit") {
       return null;
     }
-    const answers = await this.askJev(interactionState(snapshot, playerId, request, plan), {
-      should_respond: { type: "noul", instructions: interactionInstruction },
-    });
+    const answers = await this.askJev(
+      {
+        ...interactionState(snapshot, playerId, request, plan),
+        match_skills: buildMatchGeneralsText(snapshot),
+      },
+      {
+        should_respond: { type: "noul", instructions: interactionInstruction },
+      },
+    );
     if (!answers) {
       // Jev 不可用：返回 null 让上层走本地策略/默认响应。
       // 这里曾经固定返回 pass——那会让 AI 在濒死求桃、必闪时"主动放弃"，比引擎默认行为更差。
@@ -179,7 +192,13 @@ export class JevAdvisor implements FastAdvisor {
           }
         : {}),
     };
-    const answers = await this.askJev(decisionsState(snapshot, playerId, candidates, proposed), questions);
+    const answers = await this.askJev(
+      {
+        ...decisionsState(snapshot, playerId, candidates, proposed),
+        match_skills: buildMatchGeneralsText(snapshot),
+      },
+      questions,
+    );
     if (!answers) {
       return { accepted: true, score: 0, bestScore: 0 };
     }
@@ -216,7 +235,11 @@ export class JevAdvisor implements FastAdvisor {
       },
     };
     const answers = await this.askJev(
-      { ...interactionState(snapshot, playerId, request), proposed_decision: describeInteractionChoice(decision) },
+      {
+        ...interactionState(snapshot, playerId, request),
+        proposed_decision: describeInteractionChoice(decision),
+        match_skills: buildMatchGeneralsText(snapshot),
+      },
       questions,
     );
     if (!answers) {

@@ -13,11 +13,13 @@ import {
   usableCardCount,
 } from "./card-utils.js";
 import { resolveGeneralByName } from "./generals.js";
+import { getSkillRules, isImmuneTo, sumActivatedRules } from "./skill-rules.js";
 import {
   CardSource,
   EquipCardType,
   InteractionDecision,
   InteractionRequest,
+  KINGDOM,
   Player,
   PlayerRole,
   ResponseKind,
@@ -180,7 +182,7 @@ export function resolveSlash(
         return logs;
       }
     }
-    let requireDodgeCount = ctx.hasSkill(attacker, SkillName.WuShuang) ? 2 : 1;
+    let requireDodgeCount = getSkillRules(attacker).responseMultiplier;
     if (ctx.hasSkill(attacker, SkillName.TieQi) && await ctx.shouldActivateOptionalEffect(attacker, SkillName.TieQi)) {
       const judgment = await ctx.drawJudgmentCard(`${attacker.name} 的${SkillName.TieQi}`, logs, attacker);
       if (judgment?.color === "red") {
@@ -254,9 +256,10 @@ export function resolveSlash(
       damage += 1;
       logs.push(`${attacker.name} 的古锭刀生效，伤害+1`);
     }
-    if (ctx.isSkillUsed(attacker.id, SkillName.LuoYi)) {
-      damage += 1;
-      logs.push(`${attacker.name} 的${SkillName.LuoYi}生效，本次杀伤害+1`);
+    const slashDamageBonus = sumActivatedRules(attacker, "damageDelta", (id) => ctx.isSkillUsed(attacker.id, id));
+    if (slashDamageBonus !== 0) {
+      damage += slashDamageBonus;
+      logs.push(`${attacker.name} 的伤害加成技能生效，本次杀伤害${slashDamageBonus > 0 ? "+" : ""}${slashDamageBonus}`);
     }
     await ctx.applyDamage(attacker, target, damage, "杀", logs, damageCard, kind === "normal" ? null : kind);
     if (attacker.weapon === CardType.KylinBow && await ctx.shouldActivateOptionalEffect(attacker, CardType.KylinBow)) {
@@ -292,7 +295,7 @@ export function resolveDismantle(ctx: ResolveContext, user: Player, target: Play
 export function resolveSnatch(ctx: ResolveContext, user: Player, target: Player, selectedCardId?: string): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 对 ${target.name} 使用顺手牵羊`];
-    if (ctx.hasSkill(target, SkillName.QianXun)) {
+    if (isImmuneTo(target, "snatch")) {
       logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为顺手牵羊的目标`);
       return logs;
     }
@@ -322,7 +325,7 @@ export function resolveSnatch(ctx: ResolveContext, user: Player, target: Player,
 export function resolveDuel(ctx: ResolveContext, user: Player, target: Player, duelCard?: Card): Promise<string[]> {
   return (async () => {
     const logs = [`${user.name} 对 ${target.name} 发起决斗`];
-    await triggerJiAng(ctx, user, target, true, logs);
+    await triggerJiAng(ctx, user, target, duelCard?.color === "red", logs);
     if (ctx.isKongChengProtected(target, CardType.Duel)) {
       logs.push(`${target.name} 的${SkillName.KongCheng}生效，无法成为决斗目标`);
       return logs;
@@ -333,7 +336,7 @@ export function resolveDuel(ctx: ResolveContext, user: Player, target: Player, d
     let attacker = user;
     let defender = target;
     while (true) {
-      const needCount = ctx.hasSkill(attacker, SkillName.WuShuang) ? 2 : 1;
+      const needCount = getSkillRules(attacker).responseMultiplier;
       let valid = true;
       const available = countAvailableSlashResponses(ctx, defender);
       if (available < needCount) {
@@ -351,9 +354,10 @@ export function resolveDuel(ctx: ResolveContext, user: Player, target: Player, d
       }
       if (!valid) {
         let damage = 1;
-        if (ctx.isSkillUsed(attacker.id, SkillName.LuoYi)) {
-          damage += 1;
-          logs.push(`${attacker.name} 的${SkillName.LuoYi}生效，本次决斗伤害+1`);
+        const duelDamageBonus = sumActivatedRules(attacker, "damageDelta", (id) => ctx.isSkillUsed(attacker.id, id));
+        if (duelDamageBonus !== 0) {
+          damage += duelDamageBonus;
+          logs.push(`${attacker.name} 的伤害加成技能生效，本次决斗伤害${duelDamageBonus > 0 ? "+" : ""}${duelDamageBonus}`);
         }
         await ctx.applyDamage(attacker, defender, damage, "决斗", logs, duelCard);
         break;
@@ -592,7 +596,7 @@ export function resolveDelayedTrick(ctx: ResolveContext, user: Player, usedCard:
   return (async () => {
     const target = ctx.mustGetPlayer(targetId);
     const logs = [`${user.name} 对 ${target.name} 使用 ${usedCard.type}`];
-    if (usedCard.type === CardType.Indulgence && ctx.hasSkill(target, SkillName.QianXun)) {
+    if (usedCard.type === CardType.Indulgence && isImmuneTo(target, "indulgence")) {
       logs.push(`${target.name} 的${SkillName.QianXun}生效，不能成为乐不思蜀的目标`);
       return logs;
     }
@@ -786,13 +790,10 @@ export function resolveDeaths(ctx: ResolveContext): Promise<string[]> {
         for (const rescuer of getRescuersInOrder(ctx, player)) {
           while (player.hp <= 0 && (await ctx.consumePeachResponse(rescuer, player.id, logs))) {
             let recovered = 1;
-            if (
-              ctx.hasSkill(player, SkillName.JiuYuan) &&
-              player.role === PlayerRole.Lord &&
-              getPlayerKingdom(ctx, rescuer) === "吴"
-            ) {
-              recovered += 1;
-              logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 1 点体力`);
+            const peachSaveBonus = player.role === PlayerRole.Lord ? getSkillRules(player).peachSaveBonus : 0;
+            if (peachSaveBonus > 0 && getPlayerKingdom(ctx, rescuer) === KINGDOM.Wu) {
+              recovered += peachSaveBonus;
+              logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 ${peachSaveBonus} 点体力`);
             }
             player.hp = Math.min(player.maxHp, player.hp + recovered);
             logs.push(`${rescuer.name} 对${player.name}使用${CardType.Peach}，其体力恢复到 ${player.hp}`);
@@ -862,14 +863,14 @@ export function resolveKillReward(ctx: ResolveContext, victim: Player): string[]
   return logs;
 }
 
-export function getPlayerKingdom(ctx: ResolveContext, player: Player): "魏" | "蜀" | "吴" | "群雄" {
+export function getPlayerKingdom(ctx: ResolveContext, player: Player): string {
   return resolveGeneralByName(player.general).kingdom;
 }
 
 export function getKingdomRespondersInOrder(
   ctx: ResolveContext,
   requester: Player,
-  kingdom: "魏" | "蜀" | "吴" | "群雄",
+  kingdom: string,
 ): Player[] {
   const start = ctx.players.findIndex((item) => item.id === requester.id);
   const ordered: Player[] = [];
@@ -961,7 +962,7 @@ export function canReachForSlash(ctx: ResolveContext, attacker: Player, target: 
  * 奇才是锁定技（使用锦囊无距离限制），有奇才的使用者无视该限制。
  */
 export function canReachForDistanceOneTrick(ctx: ResolveContext, user: Player, target: Player): boolean {
-  if (ctx.hasSkill(user, SkillName.QiCai)) {
+  if (getSkillRules(user).trickDistanceExempt) {
     return true;
   }
   return computeDistance(ctx, user, target) <= 1;
@@ -1014,9 +1015,7 @@ export function computeDistanceBetween(players: Player[], attacker: Player, targ
   if (attacker.attackHorse !== null) {
     distance -= 1;
   }
-  if (attacker.skills.includes(SkillName.MaShu)) {
-    distance -= 1;
-  }
+  distance -= getSkillRules(attacker).distanceDelta;
   if (target.defenseHorse !== null) {
     distance += 1;
   }
@@ -1057,7 +1056,7 @@ export function countDirectDodgeSources(ctx: ResolveContext, player: Player): nu
 export function countAvailableDodgeResponses(ctx: ResolveContext, player: Player): number {
   let count = countDirectDodgeSources(ctx, player);
   if (player.role === PlayerRole.Lord && ctx.hasSkill(player, SkillName.HuJia)) {
-    for (const responder of getKingdomRespondersInOrder(ctx, player, "魏")) {
+    for (const responder of getKingdomRespondersInOrder(ctx, player, KINGDOM.Wei)) {
       count += countDirectDodgeSources(ctx, responder);
     }
   }
@@ -1078,7 +1077,7 @@ export function countDirectSlashSources(ctx: ResolveContext, player: Player): nu
 export function countAvailableSlashResponses(ctx: ResolveContext, player: Player): number {
   let count = countDirectSlashSources(ctx, player);
   if (player.role === PlayerRole.Lord && ctx.hasSkill(player, SkillName.JiJiang)) {
-    for (const responder of getKingdomRespondersInOrder(ctx, player, "蜀")) {
+    for (const responder of getKingdomRespondersInOrder(ctx, player, KINGDOM.Shu)) {
       count += countDirectSlashSources(ctx, responder);
     }
   }
@@ -1129,7 +1128,7 @@ export function consumeDodgeResponse(
     if (player.role !== PlayerRole.Lord || !ctx.hasSkill(player, SkillName.HuJia)) {
       return false;
     }
-    const responders = getKingdomRespondersInOrder(ctx, player, "魏");
+    const responders = getKingdomRespondersInOrder(ctx, player, KINGDOM.Wei);
     for (const responder of responders) {
       if (await ctx.requestCardResponse(responder, "dodge", trigger, logs)) {
         logs.push(`${player.name} 的${SkillName.HuJia}生效，${responder.name}为其提供了${CardType.Dodge}`);
@@ -1157,7 +1156,7 @@ export function consumeSlashResponse(
     if (player.role !== PlayerRole.Lord || !ctx.hasSkill(player, SkillName.JiJiang)) {
       return false;
     }
-    const responders = getKingdomRespondersInOrder(ctx, player, "蜀");
+    const responders = getKingdomRespondersInOrder(ctx, player, KINGDOM.Shu);
     for (const responder of responders) {
       if (await ctx.requestCardResponse(responder, "slash", trigger, logs)) {
         logs.push(`${player.name} 的${SkillName.JiJiang}生效，${responder.name}为其提供了${CardType.Slash}`);

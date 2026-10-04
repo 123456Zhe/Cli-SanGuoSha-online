@@ -2,7 +2,7 @@
 
 > 目标：让**武将 = 一个文件夹**（`generals/<武将名>/`），`general.json` 声明元数据与技能列表，技能各自成文件（JSON 或代码）；新增武将/技能不需要改本项目的 `src/`，也不需要重新编译。同时让**局内 AI 只注入本场出现的武将及其关联技能说明**，取代现在从 `rules.md` 注入全量武将知识的方式。
 
-状态：**待执行**（Phase 0 尚未开始）。附带的两项规则修正已完成，见 §7。
+状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；其余阶段待执行。附带的两项规则修正已完成，见 §7。
 
 ## 一、已确认的决策
 
@@ -147,9 +147,9 @@ type SkillModule = {
 
 | 里程碑 | 阶段 | 产出 | 估时 |
 |---|---|---|---|
-| **M1** 契约 + AI 认识本局武将 | 0 + 4 | 注册表 + 动态技能注入；AI 不再依赖 `rules.md` 武将章节 | 1 天 |
-| **M2** 外部武将包进游戏 | 1 + 2 | 放个文件夹就能选将/对局/触发技能 | 1 天 |
-| **M3** 声明式技能 | 3 | 距离/目标合法性等规则数据化 | 半天 |
+| **M1** 契约 + AI 认识本局武将 | 0 + 4 | ✅ 已完成（见 §12）：注册表 + 动态技能注入；AI 不再依赖 `rules.md` 武将章节 | 1 天 |
+| **M2** 外部武将包进游戏 | 1 + 2 | ✅ 已完成（见 §13）：放个文件夹就能选将/对局/触发技能 | 1 天 |
+| **M3** 声明式技能 | 3 | ✅ 已完成（见 §14）：`SkillRules` 词表 + 谓词层，8 条硬编码规则数据化 | 半天 |
 | **M4** 可批量生成 | 5 | 校验器 + 自对弈 + 文档生成 | 半天 |
 | M5 | 6 | 按需开放更高阶挂载点 | 按需 |
 
@@ -188,6 +188,8 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 | 6 | 决斗触发激昂时未判红色（`resolve.ts` `qualifies` 恒真） | 裁定偏差 |
 | 7 | 魂姿只在 `turn_start` 检查 `hp === 1` | 回合外掉血要等下个回合开始才觉醒 |
 
+**以上 7 项已在 M3 一并处理**（见 §14）：#1 受控常量、#2/#3/#4 文档修正、#5/#6/#7 代码修复。
+
 ## 九、验收门槛（每个阶段）
 
 - `npm run typecheck` 干净
@@ -216,3 +218,44 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 | AI 上下文膨胀 | §6 的总长上限 + 只注本场武将 |
 | `SkillName` 改动波及 20+ 测试 | 保留 `const` 常量对象写法，测试零改动 |
 | 坏包导致服务器崩溃 | 每包 try/catch 隔离 + 报告；CI 用 `--strict-generals` |
+
+## 十二、M1 完成情况（Phase 0 + Phase 4）
+
+已完成，落点：
+
+- `src/engine/skill-registry.ts` — `SkillKind` / `SkillDescriptor` + 45 个技能的元数据（`description` **以代码行为为准**；已知文档漂移按实现写并标 `NOTE(§8歧义N)`：孙策=激昂/魂姿/制霸、遗计=自己摸 2、激昂决斗恒判红）。导出 `SKILL_REGISTRY` / `describeSkill`。
+- `src/engine/skill-registry.test.ts` — 双向校验：①武将声明的技能都有登记 ②无归属技能必须在白名单。白名单当前为 `强袭`（§8 问题 1）与 `英魂`（仅魂姿觉醒获得），把问题 1 变成了受控断言。
+- `src/agent/match-context.ts` — `stripGeneralsSections`（加载时剔除 `rules.md` §14 与 §16.3，文件原件不动，`/help` 仍显示全文）+ `buildMatchGeneralsText`（按快照 `player.skills` 去重生成，总长上限 4000 字符）。
+- `docs/generals-pack-api.md` — 契约与 Context 能力清单骨架（含隐式约定）。
+- 接线：`prompt.ts` 4 个 builder 各加可选 `matchGeneralsText` 注入 systemPrompt；`ai.ts` 4 处调用点每次用快照生成（觉醒获得的技能自动生效）；`jev-advisor.ts` 给 Jev state 加 `match_skills`；`server.ts loadRules()` 与 `app.ts baseRulesText` 改用剥离后的基础规则。
+- 测试 140 → **146**（新增 6 例），`typecheck` 干净，lint 仍 25 个存量错误（无新增）。
+
+M1 明确未做（留给后续阶段）：`local-engine.ts` 仍读静态规则文本；`SkillName` 枚举/`Player.skills` 类型/抽将逻辑未动；`SkillRules` 数据化（Phase 3）与拦截点（Phase 6）未做。
+
+## 十三、M2 完成情况（Phase 1 + Phase 2）
+
+已完成，落点：
+
+- **Phase 1 类型与 kingdom**：`types.ts` 的 `enum SkillName` → `const SkillName = {...} as const`（`SkillName.X` 值与 `SkillName[]` 类型标注零改动）；新增 `SkillId`/`BuiltinSkillId`/`KINGDOM`；`Player.skills`/`GameAction.skill`/`GeneralDefinition.kingdom|skills` 改为字符串；`generals.ts` 的 `GENERAL_LIBRARY` 改为可变池（`getBuiltinGenerals`/`setLoadedGenerals`/`resetLoadedGenerals`），`resolveGeneralByName` 未知名字**改抛错**；`resolve.ts`/`skills.ts` 的硬编码势力名改用 `KINGDOM.*`。
+- **外部技能运行时**：`skill-module.ts`（`SkillModule`/`SkillModuleCtx` + 注册表挂 `globalThis.__sanguoPackRegistry__`）；`skill-hooks.ts` 每个触发点追加包钩子；`game.ts` 在 `getPlayableActions` 枚举外部 `active` 技能；`skills.ts` 的 `useSkillAction` 委托包 `play`（try/catch 不炸对局）；`skill-registry.ts` 加 `resolveSkillDescriptor`（外部→内置→兜底）；`match-context.ts` 改用 `resolveSkillDescriptor`。
+- **loader**：`general-pack.ts`（`loadGeneralPacks`/`resetGeneralPacks`）扫描 `generals/*/general.json`、schema 校验、`.skill.json|.ts|.mjs` 加载、命名空间 id `${文件夹}/${技能}`、每包 try/catch 隔离、重名跳过、`jsonOnly`/`strict`/`pool` 开关。
+- **接线**：`src/index.ts`（dev 默认 `pool:"all"`）与 `src/network/host.ts`（host 默认 `pool:"builtin"`）均在构造 `SanGuoGame`/`GameServer` **之前** `await loadGeneralPacks`；开关 `--generals-dir` / `--generals-pool` / `--generals-json-only` / `--strict-generals`。
+- **示例**：`examples/generals/吕蒙/`（`general.json` + `克己.skill.json` 声明式 + `涉猎.skill.ts` 代码主动技能 + `general.md`）。
+- **测试**：新增 `general-pack.test.ts`（7 例）与 `pack-skill-exec.test.ts`（4 例），146 → **157**，`typecheck` 干净，lint 无新增。
+- **文档**：`docs/generals-pack-api.md` 补全契约/Context/命名空间/开关；`README.md` §11；`AGENTS.md`。
+
+M2 明确未做：声明式 `.skill.json` 的 `rules` 只加载保留、不参与结算（Phase 3）；`local-engine.ts` 仍读静态规则文本；`priority` 钩子顺序未做快照测试（Phase 3/4）。
+
+## 十四、M3 完成情况（Phase 3 谓词层 + §8 规则修复）
+
+已完成，落点：
+
+- **`SkillRules` 词汇表**（`skill-registry.ts`）：`distanceDelta`/`trickDistanceExempt`/`slashLimitExempt`/`responseMultiplier`/`targetImmunity`/`drawPhaseDelta`/`damageDelta`/`peachSaveBonus` + `TargetImmunityCard`；`SkillDescriptor.rules?` 与 `SkillModule.rules?` 改为强类型；内置技能填数值（马术/咆哮/无双/空城/谦逊/奇才/救援/裸衣/英姿）。
+- **谓词层**（新 `skill-rules.ts`）：`getSkillRules(player)`（求和/OR/取最大/并集）、`sumActivatedRules(player, key, isUsed)`（裸衣等「发动后生效」）、`isImmuneTo(player, card)`；经 `resolveSkillDescriptor` 合并，内置与外部包统一。
+- **调用点迁移（行为不变）**：`resolve.ts`（马术距离、奇才锦囊减免、无双响应数、裸衣伤害、空城/谦逊免疫、救援回复、激昂决斗判色）、`game.ts`（咆哮次数豁免 5 处、空城/谦逊目标筛选、主公 +1 体力）、`skills.ts`（`canPlaySlashInTurn`）、`skill-hooks.ts`（英姿/裸衣摸牌数值、魂姿即时觉醒）。
+- **外部 `rules` 校验**（`general-pack.ts validateRules`）：未知键/类型不符/非法 `targetImmunity.cards` → 抛错（隔离进 `report.errors`，`--strict-generals` 整体失败）；`examples/generals/吕蒙/克己.skill.json` 已改为不含无效 rules。
+- **§8 修复**：`UNOWNED_BUILTIN_SKILLS`（强袭/英魂）替代测试白名单；主公 ≥5 人局 +1 体力上限；激昂决斗按牌色判定（无牌来源的技能型决斗不触发）；魂姿掉血到 1 即时觉醒；`rules.md` 孙策/曹仁/遗计条目修正。
+- **测试**：新增 `skill-rules.test.ts`（4）、`m3-rule-fixes.test.ts`（3，覆盖主公体力/激昂判色/魂姿），`general-pack.test.ts` +3（rules 校验），157 → **167**，`typecheck` 干净，lint 无新增。
+
+M3 明确未做：非 `rules` 词汇表可表达的效果（如克己跳弃牌、反击类）仍待 **Phase 6 拦截点**；`local-engine.ts` 仍读静态规则文本；`priority` 钩子顺序快照测试未做（Phase 4）。
+

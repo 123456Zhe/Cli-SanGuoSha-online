@@ -1,6 +1,11 @@
 import { Card, CardType } from "./cards.js";
 import { countRemovableSelfCards, DamageKind } from "./card-utils.js";
+import { getPackHooksFor } from "./skill-module.js";
+import type { SkillModuleCtx } from "./skill-module.js";
+import { resolveSkillDescriptor } from "./skill-registry.js";
 import { InteractionDecision, InteractionRequest, Player, SkillHook, SkillName, SkillTrigger } from "./types.js";
+
+const PACK_TRIGGERS: SkillTrigger[] = ["turn_start", "before_draw", "before_damage", "after_damage"];
 
 export type SkillHooksContext = {
   players: Player[];
@@ -34,8 +39,24 @@ export type SkillHooksContext = {
   ): Promise<void>;
 };
 
+/** 魂姿觉醒：体力降到 1 时（含回合开始）触发，已有英魂则跳过（防重复）。 */
+const tryAwakenHunZi = (ctx: SkillHooksContext, actor: Player | undefined, logs: string[]): void => {
+  if (!actor || !ctx.hasSkill(actor, SkillName.HunZi)) {
+    return;
+  }
+  if (actor.skills.includes(SkillName.YingHun)) {
+    return;
+  }
+  if (actor.hp !== 1) {
+    return;
+  }
+  actor.maxHp = Math.max(1, actor.maxHp - 1);
+  actor.skills.push(SkillName.Heroic, SkillName.YingHun);
+  logs.push(`${actor.name} 的${SkillName.HunZi}觉醒，体力上限-1 并获得${SkillName.Heroic}、${SkillName.YingHun}`);
+};
+
 export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, SkillHook[]> {
-  return {
+  const hooks: Record<SkillTrigger, SkillHook[]> = {
     turn_start: [
       async (payload, logs) => {
         const actor = payload.actor;
@@ -63,20 +84,7 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         if (gained > 0) logs.push(`${actor.name} 的${SkillName.LuoShen}生效，共获得 ${gained} 张牌`);
       },
       (payload, logs) => {
-        const actor = payload.actor;
-        if (!actor || !ctx.hasSkill(actor, SkillName.HunZi)) {
-          return;
-        }
-        if (actor.skills.includes(SkillName.YingHun)) {
-          return;
-        }
-        if (actor.hp !== 1) {
-          return;
-        }
-        const newMax = Math.max(1, actor.maxHp - 1);
-        actor.maxHp = newMax;
-        actor.skills.push(SkillName.Heroic, SkillName.YingHun);
-        logs.push(`${actor.name} 的${SkillName.HunZi}觉醒，体力上限-1 并获得${SkillName.Heroic}、${SkillName.YingHun}`);
+        tryAwakenHunZi(ctx, payload.actor, logs);
       },
       async (payload, logs) => {
         const actor = payload.actor;
@@ -166,7 +174,7 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         if (!ctx.hasSkill(actor, SkillName.Heroic) || !await ctx.shouldActivateOptionalEffect(actor, SkillName.Heroic)) {
           return;
         }
-        payload.drawCount += 1;
+        payload.drawCount += resolveSkillDescriptor(SkillName.Heroic).rules?.drawPhaseDelta ?? 1;
         logs.push(`${actor.name} 的${SkillName.Heroic}生效，额外摸 1 张牌`);
       },
       async (payload, logs) => {
@@ -177,7 +185,7 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         if (!ctx.hasSkill(actor, SkillName.LuoYi) || !await ctx.shouldActivateOptionalEffect(actor, SkillName.LuoYi) || payload.drawCount <= 0) {
           return;
         }
-        payload.drawCount = Math.max(0, payload.drawCount - 1);
+        payload.drawCount = Math.max(0, payload.drawCount + (resolveSkillDescriptor(SkillName.LuoYi).rules?.drawPhaseDelta ?? -1));
         ctx.markSkillUsed(actor.id, SkillName.LuoYi);
         logs.push(`${actor.name} 的${SkillName.LuoYi}生效，本回合少摸 1 张牌且伤害+1`);
       },
@@ -268,6 +276,18 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
           }
         }
       },
+      (payload, logs) => {
+        // 魂姿：回合外掉血到 1 也立即觉醒（原本只在 turn_start 检查）。
+        tryAwakenHunZi(ctx, payload.target, logs);
+      },
     ],
   };
+  // 外部武将包技能：每个触发点在内置钩子之后追加。
+  const packCtx = ctx as unknown as SkillModuleCtx;
+  for (const trigger of PACK_TRIGGERS) {
+    for (const entry of getPackHooksFor(trigger)) {
+      hooks[trigger].push((payload, logs) => entry.onTrigger?.[trigger]?.(packCtx, payload, logs));
+    }
+  }
+  return hooks;
 }

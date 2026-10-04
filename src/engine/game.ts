@@ -54,6 +54,9 @@ import {
   resolveWinner as resolveWinnerImpl,
 } from "./resolve.js";
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
+import { getPackSkills } from "./skill-module.js";
+import type { SkillModuleCtx } from "./skill-module.js";
+import { getSkillRules, isImmuneTo } from "./skill-rules.js";
 import {
   canPlaySlashInTurn as canPlaySlashInTurnImpl,
   canUseAssault as canUseAssaultImpl,
@@ -230,6 +233,7 @@ export class SanGuoGame {
       usedGeneralNames.add(general.name);
       this.players.push(this.createPlayer(`ai-${i + 1}`, `玩家${this.getAiName(i)}`, true, general, role));
     }
+    this.applyLordBonus();
     this.deck = shuffle(createDeck(), this.rng);
     this.discardPile = [];
     this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord && player.alive);
@@ -281,6 +285,7 @@ export class SanGuoGame {
       usedGeneralNames.add(general.name);
       return this.createPlayer(config.id, config.name, config.isAI ?? false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
     });
+    this.applyLordBonus();
     this.deck = shuffle(createDeck(), this.rng);
     this.discardPile = [];
     this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord);
@@ -498,7 +503,7 @@ export class SanGuoGame {
     if (
       player.weapon === CardType.SerpentSpear &&
       player.hand.length >= 2 &&
-      (!this.slashUsedThisTurn || this.hasSkill(player, SkillName.Roar))
+      (!this.slashUsedThisTurn || getSkillRules(player).slashLimitExempt)
     ) {
       const targets = this.findTargetsByCard(player.id, CardType.Slash);
       if (targets.length > 0) {
@@ -670,6 +675,28 @@ export class SanGuoGame {
           targets: maleWounded,
         });
       }
+    }
+    // 外部武将包主动技能（阶段 2）：按玩家已拥有的命名空间技能 id 枚举。
+    const packCtx = this as unknown as SkillModuleCtx;
+    for (const entry of getPackSkills()) {
+      if (entry.kind !== "active" || !player.skills.includes(entry.id)) {
+        continue;
+      }
+      if (entry.canUse && !entry.canUse(packCtx, player)) {
+        continue;
+      }
+      const requiresTarget = entry.requiresTarget ?? false;
+      const targets = requiresTarget ? (entry.getTargets?.(packCtx, player) ?? []) : [];
+      if (requiresTarget && targets.length === 0) {
+        continue;
+      }
+      actions.push({
+        type: "skill",
+        skill: entry.id,
+        label: entry.label ?? `发动${entry.displayName}`,
+        requiresTarget,
+        targets,
+      });
     }
     actions.push({ type: "end", label: "结束出牌阶段" });
     return actions;
@@ -976,7 +1003,7 @@ export class SanGuoGame {
       if (player.weapon !== CardType.SerpentSpear || player.hand.length < 2) {
         return [`${player.name} 当前无法发动丈八蛇矛`];
       }
-      if (this.slashUsedThisTurn && !this.hasSkill(player, SkillName.Roar)) {
+      if (this.slashUsedThisTurn && !getSkillRules(player).slashLimitExempt) {
         return [`${player.name} 本回合已使用过杀`];
       }
       if (!targetId) {
@@ -993,7 +1020,7 @@ export class SanGuoGame {
       }
       this.discardPile.push(first);
       this.discardPile.push(second);
-      if (!this.hasSkill(player, SkillName.Roar)) {
+      if (!getSkillRules(player).slashLimitExempt) {
         this.slashUsedThisTurn = true;
       }
       const logs = [
@@ -1009,7 +1036,7 @@ export class SanGuoGame {
     if (
       this.isSlashCard(card.type) &&
       this.slashUsedThisTurn &&
-      !this.hasSkill(player, SkillName.Roar) &&
+      !getSkillRules(player).slashLimitExempt &&
       player.weapon !== CardType.Crossbow
     ) {
       return [`${player.name} 本回合已使用过杀`];
@@ -1063,7 +1090,7 @@ export class SanGuoGame {
       logs.push(`${player.name} 的${SkillName.JiZhi}生效，摸了 ${drawn} 张牌`);
     }
     if (this.isSlashCard(usedCard.type) && targetId) {
-      if (!this.hasSkill(player, SkillName.Roar)) {
+      if (!getSkillRules(player).slashLimitExempt) {
         this.slashUsedThisTurn = true;
       }
       const slashTargets = await this.expandSlashTargets(player, this.mustGetPlayer(targetId), player.hand.length === 0);
@@ -1937,7 +1964,7 @@ export class SanGuoGame {
       const user = this.mustGetPlayer(playerId);
       return targets.filter((id) => {
         const holder = this.mustGetPlayer(id);
-        if (this.hasSkill(holder, SkillName.QianXun)) {
+        if (isImmuneTo(holder, "snatch")) {
           return false;
         }
         // 顺手牵羊只能对距离 1 以内的角色使用（奇才无视该限制）
@@ -1961,7 +1988,7 @@ export class SanGuoGame {
       const user = this.mustGetPlayer(playerId);
       return targets.filter((id) => {
         const holder = this.mustGetPlayer(id);
-        if (cardType === CardType.Indulgence && this.hasSkill(holder, SkillName.QianXun)) {
+        if (cardType === CardType.Indulgence && isImmuneTo(holder, "indulgence")) {
           return false;
         }
         // 兵粮寸断只能对距离 1 以内的角色使用（奇才无视该限制）；乐不思蜀无距离限制
@@ -2291,13 +2318,13 @@ export class SanGuoGame {
   }
 
   private isKongChengProtected(target: Player, cardType: CardType): boolean {
-    if (!this.hasSkill(target, SkillName.KongCheng)) {
-      return false;
+    if (this.isSlashCard(cardType)) {
+      return isImmuneTo(target, "slash");
     }
-    if (target.hand.length > 0) {
-      return false;
+    if (cardType === CardType.Duel) {
+      return isImmuneTo(target, "duel");
     }
-    return this.isSlashCard(cardType) || cardType === CardType.Duel;
+    return false;
   }
 
   // ===== 以下为从本类拆出到独立模块的方法的薄封装（行为不变） =====
@@ -2324,6 +2351,19 @@ export class SanGuoGame {
 
   private hasSkill(player: Player, skill: SkillName): boolean {
     return playerHasSkill(player, skill);
+  }
+
+  /** 主公 +1 体力上限：标准身份局总人数 ≥ 5 时生效（rules.md §3.4）。 */
+  private applyLordBonus(): void {
+    if (this.players.length < 5) {
+      return;
+    }
+    const lord = this.players.find((player) => player.role === PlayerRole.Lord);
+    if (!lord) {
+      return;
+    }
+    lord.maxHp += 1;
+    lord.hp += 1;
   }
 
   private shouldActivateOptionalEffect(player: Player, effect: SkillName | CardType): Promise<boolean> {

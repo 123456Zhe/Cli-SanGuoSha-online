@@ -101,6 +101,23 @@ const gameActions = (): GameAction[] => [
   { type: "end", label: "结束回合" },
 ];
 
+void test("buildAgentPrompt：matchGeneralsText 注入到 systemPrompt 的规则块之后", async () => {
+  const snapshot = await createSnapshot();
+  const agent = { playerId: "ai-1", name: "电脑", role: PlayerRole.Rebel, general: "孙策" };
+  const prompt = buildAgentPrompt({
+    rulesText: "基础规则内容",
+    matchGeneralsText: "孙策（电脑）：激昂——使用红色杀时摸牌",
+    snapshot,
+    agent,
+    actions: gameActions(),
+    previousRoundContexts: [],
+    reasoningLevel: "normal",
+  });
+  assert.ok(prompt.systemPrompt.includes("本局武将技能："));
+  assert.ok(prompt.systemPrompt.includes("孙策（电脑）：激昂"));
+  assert.ok(prompt.systemPrompt.indexOf("基础规则内容") < prompt.systemPrompt.indexOf("本局武将技能："));
+});
+
 void test("身份遮蔽：他人身份对 AI 显示未知，自己/主公/阵亡可见", async () => {
   // 3 人局：human(主公) + ai-1 + ai-2，确保存在隐藏身份玩家
   const game = new SanGuoGame(() => 0.5);

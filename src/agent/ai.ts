@@ -17,6 +17,7 @@ import { writeAiLog } from "../devlog/ailog.js";
 import { parseStrategyReview, StrategyMemory } from "./strategy-memory.js";
 import { FastAdvisor } from "./system-one.js";
 import { JevAdvisor } from "./jev-advisor.js";
+import { buildMatchGeneralsText } from "./match-context.js";
 
 export type AiModelProvider = "ollama" | "qwen";
 
@@ -194,6 +195,7 @@ export class GameAiLoop {
     }
     const promptPackage = buildPlanPrompt({
       rulesText: this.rulesText,
+      matchGeneralsText: buildMatchGeneralsText(snapshot),
       snapshot,
       agent: {
         playerId: agent.playerId,
@@ -693,6 +695,7 @@ export class GameAiLoop {
         : {};
     const promptPackage = buildAgentPrompt({
       rulesText: this.rulesText,
+      matchGeneralsText: buildMatchGeneralsText(snapshot),
       snapshot,
       agent: {
         playerId: agent.playerId,
@@ -801,6 +804,7 @@ export class GameAiLoop {
     await this.think(level);
     const promptPackage = buildInteractionPrompt({
       rulesText: this.rulesText,
+      matchGeneralsText: buildMatchGeneralsText(snapshot),
       snapshot,
       agent: {
         playerId: agent.playerId,
@@ -893,6 +897,7 @@ export class GameAiLoop {
     const previousBlock = agent.memory.composePromptBlock();
     const promptPackage = buildStrategyPrompt({
       rulesText: this.rulesText,
+      matchGeneralsText: buildMatchGeneralsText(state),
       snapshot: state,
       agent: {
         playerId: agent.playerId,

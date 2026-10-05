@@ -1,5 +1,5 @@
 import { CardType } from "../engine/cards.js";
-import { isEquipCard, isSlashCard } from "../engine/card-utils.js";
+import { isArmorCard, isAttackHorseCard, isDefenseHorseCard, isEquipCard, isSlashCard, isTreasureCard, isWeaponCard } from "../engine/card-utils.js";
 import {
   CardSource,
   GameAction,
@@ -8,6 +8,7 @@ import {
   InteractionRequest,
   Player,
   PlayerRole,
+  SkillName,
 } from "../engine/game.js";
 
 /**
@@ -45,6 +46,38 @@ export type RelationTag = "self" | "ally" | "enemy" | "unknown-traitor";
 
 /** Judge 门控容忍分差：LLM 决策与 System-One 最优分差在此范围内即放行。 */
 export const JUDGE_TURN_SCORE_GAP = 3;
+
+/**
+ * 无代价白嫖型可选技能：发动只有收益没有代价（摸牌/拿牌/整理牌堆），AI 一律发动。
+ * 有代价或需目标决策的（英魂/据守等）不在此列，保持保守不发动。
+ */
+const FREE_BENEFIT_EFFECTS: ReadonlySet<string> = new Set([
+  SkillName.JiZhi, // 集智：用锦囊摸 1
+  SkillName.BiYue, // 闭月：结束阶段摸 1
+  SkillName.TianDu, // 天妒：拿判定牌
+  SkillName.LianYing, // 联营：摸 1
+  SkillName.JiAng, // 激昂：摸 1
+  SkillName.LuoShen, // 洛神：判定拿牌
+  SkillName.GuanXing, // 观星：整理牌堆顶
+  SkillName.FanKui, // 反馈：拿伤害来源 1 张牌
+  SkillName.GangLie, // 刚烈：无代价判定反击
+  SkillName.JianXiong, // 奸雄：拿造成伤害的牌
+]);
+
+/** 指向性有害锦囊：响应者多为目标，非队友使用时值得交无懈可击。 */
+const HARMFUL_TRICKS: ReadonlySet<string> = new Set([
+  CardType.Duel,
+  CardType.Barbarian,
+  CardType.ArrowRain,
+  CardType.Indulgence,
+  CardType.Lightning,
+  CardType.Snatch,
+  CardType.Dismantle,
+  CardType.Collateral,
+  CardType.FireAttack,
+  CardType.IronChain,
+  CardType.SuppliesCut,
+]);
 
 const DEFAULT_MAX_MEMORY_EVENTS = 60;
 
@@ -270,10 +303,15 @@ export class SystemOneAgent implements FastAdvisor {
       return null;
     }
     if (request.kind === "optional-effect") {
-      return { decision: { choice: "effect", enabled: false }, confidence: 0.6, reason: "默认不发动可选技能" };
+      const enabled = this.shouldActivateEffect(snapshot, self, request.effect);
+      return {
+        decision: { choice: "effect", enabled },
+        confidence: enabled ? 0.75 : 0.6,
+        reason: enabled ? `发动${request.effect}（无代价收益）` : `不发动${request.effect}`,
+      };
     }
     if (request.kind === "collateral") {
-      const targetId = this.pickHostileTarget(snapshot, self, request.victims);
+      const targetId = this.pickCollateralVictim(snapshot, self, request.victims);
       if (targetId) {
         const firstSlash = request.sources[0];
         return {
@@ -281,7 +319,7 @@ export class SystemOneAgent implements FastAdvisor {
             ? { choice: "target", targetId, sourceId: firstSlash.sourceId }
             : { choice: "target", targetId },
           confidence: 0.7,
-          reason: `借刀指向敌方 ${targetId}`,
+          reason: `借刀指向手牌最少的敌方 ${targetId}`,
         };
       }
       return { decision: { choice: "pass" }, confidence: 0.5, reason: "无可借刀敌方" };
@@ -293,12 +331,37 @@ export class SystemOneAgent implements FastAdvisor {
       }
       return { decision: { choice: "pass" }, confidence: 0.4, reason: "无可弃牌" };
     }
-    const mustRespond = request.responseKind === "peach" || (request.responseKind === "slash" && self.hp <= 1);
     const usable = request.sources[0];
-    if (usable && (mustRespond || request.responseKind !== "negate")) {
-      return { decision: { choice: "card", sourceId: usable.sourceId }, confidence: 0.8, reason: `响应${request.responseKind}` };
+    if (request.responseKind === "peach") {
+      // 求桃：只救自己和队友，绝不拿桃救敌人。
+      const dying = snapshot.players.find((item) => item.id === request.trigger.actorId);
+      const ally = !dying || dying.id === self.id || this.relationOf(self, dying) === "ally";
+      if (usable && ally) {
+        return {
+          decision: { choice: "card", sourceId: usable.sourceId },
+          confidence: 0.9,
+          reason: dying && dying.id !== self.id ? "桃救队友" : "桃自救",
+        };
+      }
+      return { decision: { choice: "pass" }, confidence: 0.7, reason: "不救敌人" };
     }
-    if (usable && request.responseKind === "negate" && this.shouldNegate(snapshot, self)) {
+    if (request.responseKind === "slash") {
+      // 决斗出杀：濒死必出；手牌杀 >= 2 大概率打赢；能斩杀发起者也出。
+      const slashCount = self.hand.filter((card) => isSlashCard(card.type)).length;
+      const duelist = snapshot.players.find((item) => item.id === request.trigger.actorId);
+      const lethal = duelist !== undefined && duelist.hp <= 1 && this.relationOf(self, duelist) === "enemy";
+      if (usable && (self.hp <= 1 || slashCount >= 2 || (lethal && slashCount >= 1))) {
+        return { decision: { choice: "card", sourceId: usable.sourceId }, confidence: 0.8, reason: "决斗出杀" };
+      }
+      return { decision: { choice: "pass" }, confidence: 0.6, reason: "决斗留杀" };
+    }
+    if (request.responseKind === "dodge") {
+      if (usable) {
+        return { decision: { choice: "card", sourceId: usable.sourceId }, confidence: 0.8, reason: "出闪" };
+      }
+      return { decision: { choice: "pass" }, confidence: 0.5, reason: "无闪" };
+    }
+    if (usable && this.shouldNegate(snapshot, self, request)) {
       return { decision: { choice: "card", sourceId: usable.sourceId }, confidence: 0.7, reason: "关键锦囊反制" };
     }
     return { decision: { choice: "pass" }, confidence: 0.5, reason: "保留手牌" };
@@ -441,12 +504,30 @@ export class SystemOneAgent implements FastAdvisor {
       return { score: -8, reason: "无合法目标" };
     }
     const base = this.cardPlayValue(card.type, self, snapshot, target);
-    const targetBonus = target ? this.targetBonus(snapshot, target) : 0;
+    let targetBonus = target ? this.targetBonus(snapshot, target) : 0;
+    if (target && this.isDamageCard(card.type)) {
+      const targetPlayer = snapshot.players.find((item) => item.id === target);
+      // 斩杀：能直接带走 1 血敌方时大幅加分，优先补刀。
+      if (targetPlayer && targetPlayer.hp <= 1 && this.relationOf(self, targetPlayer) === "enemy") {
+        targetBonus += 6;
+      }
+    }
     return {
       score: base + targetBonus,
       ...(target ? { targetId: target } : {}),
       reason: target ? `${card.type} -> ${target}` : `使用${card.type}`,
     };
+  }
+
+  /** 直接造成伤害的牌类（斩杀加成用；借刀杀人不直接伤害，不算）。 */
+  private isDamageCard(cardType: CardType): boolean {
+    return (
+      isSlashCard(cardType) ||
+      cardType === CardType.Duel ||
+      cardType === CardType.Barbarian ||
+      cardType === CardType.ArrowRain ||
+      cardType === CardType.FireAttack
+    );
   }
 
   private cardPlayValue(cardType: CardType, self: Player, snapshot: GameSnapshot, targetId?: string): number {
@@ -459,11 +540,15 @@ export class SystemOneAgent implements FastAdvisor {
       }
       return self.hp < self.maxHp ? 5 : -4;
     }
-    if (cardType === CardType.Wine && self.hand.some((card) => isSlashCard(card.type))) {
-      return 7;
+    if (cardType === CardType.Wine) {
+      // 酒杀连招：有杀在手时酒排 10.5（高于常规杀），保证先喝酒再出杀；
+      // 致命杀（13.5+）依然优先（斩杀不需要酒）；无杀喝酒等于白给。
+      return self.hand.some((card) => isSlashCard(card.type)) ? 10.5 : -2;
     }
     if (isSlashCard(cardType)) {
-      return targetId ? 8 : 2;
+      // 手里有酒时杀稍降（7.5），让酒先行打出连招；酒喝完后杀恢复 8。
+      const hasWine = self.hand.some((card) => card.type === CardType.Wine);
+      return targetId ? (hasWine ? 7.5 : 8) : 2;
     }
     if (cardType === CardType.Duel) {
       return targetId ? 7 : 1;
@@ -478,18 +563,45 @@ export class SystemOneAgent implements FastAdvisor {
       return this.groupBenefitValue(snapshot, self);
     }
     if (cardType === CardType.Dismantle || cardType === CardType.Snatch) {
-      return targetId ? 7 : 0;
+      if (!targetId) {
+        return 0;
+      }
+      // 拆/顺：目标有装备时价值大增（诸葛连弩/八卦阵这种关键装备必须拆）。
+      const target = snapshot.players.find((item) => item.id === targetId);
+      const hasEquip = target !== undefined && (target.weapon !== null || target.armor !== null || target.attackHorse !== null || target.defenseHorse !== null);
+      return hasEquip ? 10 : 7;
     }
     if (cardType === CardType.Collateral || cardType === CardType.FireAttack || cardType === CardType.IronChain) {
       return targetId ? 6 : 0;
     }
     if (isEquipCard(cardType)) {
-      return 5;
+      // 别重复占槽：同槽位已有装备时再装等于白扔一张牌。
+      return this.equipSlotOccupied(self, cardType) ? 0 : 5;
     }
     if (cardType === CardType.Dodge || cardType === CardType.Negate) {
       return -4;
     }
     return 2;
+  }
+
+  /** 装备槽位是否已被占用（武器/防具/马/宝物各一槽）。 */
+  private equipSlotOccupied(self: Player, cardType: CardType): boolean {
+    if (isWeaponCard(cardType)) {
+      return self.weapon !== null;
+    }
+    if (isArmorCard(cardType)) {
+      return self.armor !== null;
+    }
+    if (isAttackHorseCard(cardType)) {
+      return self.attackHorse !== null;
+    }
+    if (isDefenseHorseCard(cardType)) {
+      return self.defenseHorse !== null;
+    }
+    if (isTreasureCard(cardType)) {
+      return self.treasure !== null;
+    }
+    return false;
   }
 
   private pickTargetForCard(snapshot: GameSnapshot, self: Player, targets: string[], cardType: CardType): string | undefined {
@@ -556,11 +668,70 @@ export class SystemOneAgent implements FastAdvisor {
     return score;
   }
 
-  private shouldNegate(snapshot: GameSnapshot, self: Player): boolean {
-    const threatening = snapshot.players.some(
-      (item) => item.alive && item.id !== self.id && item.hand.length >= 4 && this.relationOf(self, item) !== "ally",
-    );
-    return self.hp <= 2 || threatening;
+  /**
+   * 可选技能是否发动：无代价白嫖型一律发动；克己看手牌是否超上限；
+   * 有代价/需目标决策的（英魂/据守等）保守不发动。
+   */
+  private shouldActivateEffect(snapshot: GameSnapshot, self: Player, effect: string): boolean {
+    if (FREE_BENEFIT_EFFECTS.has(effect)) {
+      return true;
+    }
+    if (effect === "克己" || effect.endsWith("/克己")) {
+      return self.hand.length > self.hp;
+    }
+    return false;
+  }
+
+  /**
+   * 借刀杀人选受害者：只选敌方，且选手牌最少的（最可能没杀可出，借刀成功率最高）。
+   */
+  private pickCollateralVictim(snapshot: GameSnapshot, self: Player, victims: string[]): string | undefined {
+    const hostiles = victims
+      .map((id) => snapshot.players.find((item) => item.id === id))
+      .filter((item): item is Player => item !== undefined && item.alive && item.id !== self.id && this.relationOf(self, item) !== "ally");
+    if (hostiles.length === 0) {
+      return undefined;
+    }
+    hostiles.sort((a, b) => a.hand.length - b.hand.length || b.hp - a.hp);
+    return hostiles[0]?.id;
+  }
+
+  /**
+   * 是否交无懈可击：看清"反制什么"再决定。
+   * - 全场增益（桃园/五谷）：只在敌人获益净值更高时反制；
+   * - 指向性有害锦囊：响应者多为目标，非队友用的就反制；
+   * - 其他：残血（<=2）才交。
+   */
+  private shouldNegate(
+    snapshot: GameSnapshot,
+    self: Player,
+    request: Extract<InteractionRequest, { kind: "respond" }>,
+  ): boolean {
+    const trick = request.trigger.cardName;
+    const actor = snapshot.players.find((item) => item.id === request.trigger.actorId);
+    const actorIsAlly = actor !== undefined && (actor.id === self.id || this.relationOf(self, actor) === "ally");
+    if (trick === (CardType.PeachGarden as string) || trick === (CardType.Harvest as string)) {
+      return this.groupTrickNetEnemyGain(snapshot, self) > 0;
+    }
+    if (HARMFUL_TRICKS.has(trick)) {
+      return !actorIsAlly;
+    }
+    return self.hp <= 2;
+  }
+
+  /** 全场增益锦囊的敌人净获益（>0 表示敌人赚得更多，值得反制）。 */
+  private groupTrickNetEnemyGain(snapshot: GameSnapshot, self: Player): number {
+    let net = 0;
+    for (const player of snapshot.players) {
+      if (!player.alive) {
+        continue;
+      }
+      const relation = this.relationOf(self, player);
+      const missing = Math.max(0, player.maxHp - player.hp);
+      const gain = missing > 0 ? missing : 0.3;
+      net += relation === "enemy" ? gain : relation === "ally" ? -gain : -gain * 0.3;
+    }
+    return net;
   }
 
   private pickDiscardSource(sources: CardSource[], count: number): string | undefined {
@@ -586,7 +757,8 @@ export class SystemOneAgent implements FastAdvisor {
       return self && self.hp <= 2 ? 100 : 60;
     }
     if (cardType === CardType.Dodge) {
-      return 55;
+      // 残血时闪=命，优先级提到桃之下。
+      return self && self.hp <= 2 ? 70 : 55;
     }
     if (cardType === CardType.Negate) {
       return 50;

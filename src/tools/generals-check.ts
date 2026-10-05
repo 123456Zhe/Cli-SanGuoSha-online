@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { CardType } from "../engine/cards.js";
 import { loadGeneralPacks } from "../engine/general-pack.js";
 import { getPackSkill, SkillModule } from "../engine/skill-module.js";
 import { SKILL_RULE_KEY_KINDS } from "../engine/skill-registry.js";
@@ -42,11 +43,16 @@ const KNOWN_SKILL_KEYS = [
   "targetIntent",
   "label",
   "rules",
+  "conversions",
   "canUse",
   "getTargets",
   "play",
+  "handLimit",
   "onTrigger",
 ];
+
+/** 出牌阶段真正能被引擎枚举为可玩动作的转换目标牌类（其余只能靠 `asResponse` 当响应打出）。 */
+const PLAY_PHASE_CONVERSION_TARGETS: string[] = [CardType.Slash, CardType.FireSlash, CardType.ThunderSlash, CardType.Peach];
 
 export type CheckIssueLevel = "error" | "warning";
 
@@ -187,12 +193,15 @@ const lintDeclarativeSkill = (
   if (typeof skill.kind !== "string") {
     return;
   }
-  if (skill.kind === "conversion") {
+  const conversions = Array.isArray(skill.conversions) ? skill.conversions : [];
+  if (skill.kind === "conversion" && conversions.length === 0) {
     push(
       "warning",
-      `${skillName}：kind = "conversion"（当牌转换）目前不会被引擎枚举为可玩动作，写了也不会生效（已知缺口，优先待补）`,
+      `${skillName}：kind = "conversion"（当牌转换）但没有 conversions 声明，不会有任何效果；` +
+        `若想写成"回合内主动发动"请改用 kind = "active" + play()`,
     );
   }
+  lintConversions(skillName, conversions, push);
   const rawTriggers = Array.isArray(skill.triggers) ? skill.triggers : undefined;
   if (rawTriggers) {
     for (const trigger of rawTriggers) {
@@ -209,8 +218,8 @@ const lintDeclarativeSkill = (
   if (skill.kind === "triggered" && triggerCount === 0) {
     push("warning", `${skillName}：kind = "triggered" 但没有 triggers，钩子不会被调用（声明式技能也没有代码可挂）`);
   }
-  if (triggerCount === 0 && !hasRules) {
-    push("warning", `${skillName}：既没有 triggers 也没有 rules，这个技能不会有任何效果`);
+  if (triggerCount === 0 && !hasRules && conversions.length === 0) {
+    push("warning", `${skillName}：既没有 triggers 也没有 rules/conversions，这个技能不会有任何效果`);
   }
   if (skill.targetIntent !== undefined && skill.kind !== "active") {
     push(
@@ -231,6 +240,41 @@ const lintDeclarativeSkill = (
       }
     }
   }
+};
+
+/** 静态 lint：`conversions`（当牌转换）。schema 由 loader 卡住，这里抓"合法但永远不会生效"的写法。 */
+const lintConversions = (
+  skillName: string,
+  conversions: unknown[],
+  push: (level: CheckIssueLevel, message: string) => void,
+): void => {
+  const seen = new Map<string, string>();
+  conversions.forEach((raw, index) => {
+    if (!isRecord(raw)) {
+      return; // 形状错误由 loader 报
+    }
+    const to = typeof raw.to === "string" ? raw.to : "";
+    const asResponse = Array.isArray(raw.asResponse) ? raw.asResponse : [];
+    const playUsable = PLAY_PHASE_CONVERSION_TARGETS.includes(to);
+    if (!playUsable && asResponse.length === 0) {
+      push(
+        "warning",
+        `${skillName}：第 ${index + 1} 条转换当的是「${to}」，它既不能在出牌阶段主动使用（只有 ${PLAY_PHASE_CONVERSION_TARGETS.join("/")} 可以），` +
+          `也没有 asResponse，永远不会生效`,
+      );
+    }
+    // 引擎按声明顺序取第一条命中的转换：from 完全相同的两条里，后面的永远轮不到。
+    const key = JSON.stringify(raw.from);
+    const previous = seen.get(key);
+    if (previous !== undefined) {
+      push(
+        "error",
+        `${skillName}：第 ${index + 1} 条转换的 from 与第 ${previous} 条完全相同，引擎只认第一条（当「${to}」这条永远不会命中）`,
+      );
+    } else {
+      seen.set(key, String(index + 1));
+    }
+  });
 };
 
 /** 模块级 lint：loader 解析出来的 `SkillModule`（能查 `onTrigger` 这种只有导入后才看得到的字段）。 */

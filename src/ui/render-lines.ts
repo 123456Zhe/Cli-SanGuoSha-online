@@ -1,6 +1,7 @@
 import { GameAction, GameSnapshot, InteractionRequest, Player, PlayerRole, RemovableCardOption } from "../engine/game.js";
 import { computeDistanceBetween, getAttackRange } from "../engine/resolve.js";
 import { describeCard } from "../engine/card-utils.js";
+import { getHandLimit } from "../engine/skill-rules.js";
 
 type TargetAction = Exclude<GameAction, { type: "end" }>;
 
@@ -166,9 +167,9 @@ export function buildActionLines(state: ActionAreaState): string[] {
   } else if (state.mode === "discard") {
     const current = state.snapshot.players.find((player) => player.id === state.snapshot.currentPlayerId);
     if (current && current.id === "human") {
-      const needDiscard = Math.max(0, current.hand.length - current.hp);
+      const needDiscard = Math.max(0, current.hand.length - getHandLimit(current));
       actionLines.push(
-        `弃牌阶段：需弃置 ${needDiscard} 张（手牌 ${current.hand.length} / 体力 ${Math.max(current.hp, 0)}）`,
+        `弃牌阶段：需弃置 ${needDiscard} 张（手牌 ${current.hand.length} / 手牌上限 ${getHandLimit(current)}）`,
       );
       current.hand.forEach((card, index) => {
         actionLines.push(`${index + 1}. 弃置 ${describeCard(card)}`);

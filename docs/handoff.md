@@ -1,17 +1,18 @@
 # 交接文档（给接手的 agent）
 
 > 目的：让一个**没有上下文**的 agent 读完本文 + 下列材料后即可继续开发。
-> 当前分支 `main`；最近提交 `d9a0053`（**Phase 6 拦截点 + local-engine 接入本局武将技能**），其前一项 `c8fc117`（`.gitattributes` 统一 LF），
-> `90bd494` 是 **M1–M3 的落地提交**。
-> 本文档描述的是**已提交的 M1–M3 + Phase 6** + **本轮未提交的 M4 改动**。
+> 当前分支 `main`；已提交：`c55c488`（**神赵云参考实现**）、`9f25b28`（**M4 校验器/自对弈/文档生成**）、
+> `d9a0053`（Phase 6 拦截点 + local-engine）、`90bd494`（M1–M3）。
+> 本文档描述的是**已提交的 M1–M4 + Phase 6** + **本轮未提交的 Phase 7 改动**。
 
 ## 0. 一句话状态
 
-「武将包与技能模块化」计划：**M1（契约 + AI 认识本局武将）、M2（外部武将包进游戏）、M3（声明式规则数据化）已完成并提交**；
-**Phase 6 拦截点（7 个）与 §四 row 14 的本地策略尾巴已提交**（见 `docs/generals-pack-plan.md` §15）；
-**M4（Phase 5：校验器 + 自对弈不变量 + 文档生成）已实现**（见 §16，本轮未提交）。
-基线：`typecheck` 干净、`npm test` **206 全绿**、`lint` 25 个存量错误（无新增）；`generals:check` 与 `rules:check` 均干净。
-**下一步是 §17 的缺口清单**（①声明式 `conversions` ②JSON Schema ③作者 `.d.ts` ④参考实现 gallery ⑤`priority` ⑥pack 钩子 try/catch）。
+「武将包与技能模块化」计划：**M1（契约 + AI 认识本局武将）、M2（外部武将包进游戏）、M3（声明式规则数据化）、
+Phase 6 拦截点、M4（校验器 + 自对弈不变量 + 文档生成）均已完成并提交**；
+**Phase 7（声明式当牌转换 `conversions` / `provide_response` / `ctx.useSlash` / 手牌上限）已实现**（见计划 §19，本轮未提交），
+`examples/generals/神赵云/` 的「龙魂」从"写不出来"变成了可真执行（0 错误 / 0 警告）。
+基线：`typecheck` 干净、`npm test` **219 全绿**、`lint` 25 个存量错误（无新增）；`generals:check` 与 `rules:check` 均干净。
+**下一步是计划 §17 的剩余缺口**（②JSON Schema ③作者 `.d.ts` ④参考实现 gallery ⑤`priority` 空转 ⑥pack 钩子 try/catch）。
 
 ## 1. 必读材料（按顺序）
 
@@ -65,18 +66,29 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 - **`SKILL_RULE_KEY_KINDS`**（`skill-registry.ts`）：`SkillRules` 键→类型的单一真相（校验器/文档/测试都读）。
 - **`GeneralDefinition.description?`**：`general.json` 的 `description` 不再被静默丢弃。
 
-### 下一步（§17 的缺口，按建议顺序）
+### 本轮：Phase 7（见计划 §19）——补完 §17 的 ①②③④
 
-1. **声明式 `conversions`**（当牌转换）：现在 `kind: "conversion"` 写了**完全不生效**，武圣/龙胆/国色/倾国/急救这类
-   只能写代码技能。落点 `skill-module.ts` + `game.ts getPlayableActions`（按 `conversion.toCard` 枚举虚拟动作）+ loader 校验。
-2. **JSON Schema**（`schema/*.json`）+ **作者 `.d.ts`**（`SkillModuleCtx` 只文档化、无签名）+ **参考实现 gallery**
+- **声明式当牌转换 `conversions`**：`SkillConversion[]`（一个技能可多条，龙魂就是 4 条花色映射）。
+  出牌阶段走 `GameAction.convertVia/convertTo` + `cardIndex = -10000 - 下标`（**必须排在 `playAction` 所有内置负下标分支之前**，
+  `<= -1000` 是木牛流马——实现时踩到过）；`playAction` 全部复算，不信任客户端。响应时机走 `provide_response`。
+  `to` 只放行 `杀/火杀/雷杀/桃/闪/无懈可击`，其余 loader 明确拒绝。
+- **`provide_response`**（第 12 个拦截点）：在"没有任何来源 → 判定无法响应"**之前**发射，钩子/声明式转换把来源并入候选；
+  `CardSource.viaSkill` 是凭据，`consumeResponseCard` 用技能真实声明复算 `from`（防伪造的 sourceId 蒙过去）。
+- **`ctx.useSlash`**：外部代码技能可以完整结算一张杀（闪响应/铁骑/藤甲/濒死/胜负/回合推进）。
+- **手牌上限**：静态 `rules.handLimitDelta` + 运行时纯函数 `handLimit(player)`，统一出口 `skill-rules.ts getHandLimit`，
+  引擎（3 处）与 UI 提示同源。
+- **内置转换技不迁移**：武圣/龙胆/国色/倾国/急救仍是硬编码分支，不要给它们填 `conversions`（会重复枚举）。
+
+### 下一步（§17 的剩余缺口，按建议顺序）
+
+1. **JSON Schema**（`schema/*.json`）+ **作者 `.d.ts`**（`SkillModuleCtx` 只文档化、无签名）+ **参考实现 gallery**
    （`examples/generals/` 8–12 个覆盖各机制的武将，默认不加载）。
-3. `priority` 钩子排序（**当前是空转**）或删字段；pack 钩子 `onTrigger` 补 try/catch（现在外部钩子抛错会炸掉整局）。
-4. Phase 6 剩余：`provideResponse`（技能提供响应牌，需改交互管线）。
+2. `priority` 钩子排序（**当前是空转**）或删字段；pack 钩子 `onTrigger` 补 try/catch（现在外部钩子抛错会炸掉整局）。
+3. Phase 7 残留：`conversions` 只吃**一张**源牌（龙魂的"至多两张同花色"双牌模式未实现）；
+   `to` 为延时锦囊/装备的转换（国色的方块当乐不思蜀）不支持。
 
-**参考实现**：`examples/generals/神赵云/` 是刻意做的"缺口标本"——`绝境` 用代码技能真的生效（`before_draw` 改写 `drawCount`，
-已实测 1/2 体力时摸 3 张），`龙魂`（当牌转换）在包层**写不出来**，校验器的 2 条警告就是结论，被 `generals-check.test.ts` 钉住；
-`examples/generals/神赵云/general.md` 记录了 4 个缺口（`conversions` / `provideResponse` / `ctx.resolveSlash` / 手牌上限不可改）。
+**参考实现**：`examples/generals/神赵云/` —— `绝境` 演示"运行时变量"的两条通道（`before_draw` 钩子 + `handLimit` 纯函数），
+`龙魂` 演示声明式 `conversions`（出牌阶段 `火杀/桃` + 响应 `闪/无懈可击`），校验器 **0 错误 / 0 警告**。
 
 **验收方式**（"拿 API 文档独立写出武将"算不算成立）：起一个没有本仓库上下文的 subagent，只给
 `docs/generals-pack-api.md` + `schema/` + 作者 `.d.ts`（**禁止读 `src/`、`examples/`**），写张飞（纯声明式）、
@@ -87,9 +99,9 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 
 ```bash
 npm run typecheck   # 必须干净（当前 0 error）
-npm test            # 当前 206 全绿（node --test --import tsx）
+npm test            # 当前 219 全绿（node --test --import tsx）
 npm run lint        # 基线 25 存量错误，不得新增（不改存量）
-npm run generals:check -- --dir=examples/generals            # 0 错误 / 2 警告（神赵云龙魂的已知 conversion 缺口）
+npm run generals:check -- --dir=examples/generals            # 0 错误 / 0 警告
 npm run generals:check -- --dir=examples/generals --selfplay=3
 npm run rules:check                                          # rules.md 与注册表同步
 npm run host -- --players=3 --generals-pool=all              # 手动验收外部包

@@ -1,5 +1,5 @@
 import { Card, CardType } from "./cards.js";
-import { ResponseKind } from "./interaction.js";
+import { CardSource, ResponseKind } from "./interaction.js";
 
 export type { CardSource, DecisionHandler, InteractionDecision, InteractionRequest, ResponseKind } from "./interaction.js";
 
@@ -110,6 +110,12 @@ export type GameAction =
       targets: string[];
       /** 该牌结算时需要从目标处选择一张牌（如顺手牵羊/过河拆桥），客户端据此决定是否弹出选牌提示 */
       needsTargetCard?: boolean;
+      /**
+       * 当牌转换（Phase 7）：本次"使用"是外部武将包 `conversion` 把这张牌当成 `convertTo` 用。
+       * `cardIndex <= -10000` 时必填（`-10000 - 手牌下标`）。
+       */
+      convertVia?: SkillId;
+      convertTo?: CardType;
     }
   | {
       type: "skill";
@@ -161,10 +167,10 @@ export type GeneralDefinition = {
 };
 
 /**
- * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 新增的拦截点）。
+ * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 的 7 个拦截点 + Phase 7 的 `provide_response`）。
  *
  * 前 4 个是"事件通知"（钩子可改写 payload 里的数值，如 `drawCount`）；
- * 后 7 个是 Phase 6 的拦截点（钩子可改写/否决引擎即将执行的行为，见各字段注释）。
+ * 其余是拦截点（钩子可改写/否决引擎即将执行的行为，见各字段注释）。
  * 单一真相：`SkillTrigger` 由本数组派生，loader 校验与钩子分发都读它，避免多处清单漂移。
  */
 export const SKILL_TRIGGERS = [
@@ -179,6 +185,7 @@ export const SKILL_TRIGGERS = [
   "card_used",
   "peach_save",
   "discard_phase_start",
+  "provide_response",
 ] as const;
 
 export type SkillTrigger = (typeof SKILL_TRIGGERS)[number];
@@ -207,6 +214,18 @@ export type SkillEventPayload = {
   skipDiscardPhase?: boolean;
   /** `peach_save`：钩子可累加"每张桃额外回复"的点数（求和）。 */
   peachSaveBonus?: number;
+  /**
+   * `provide_response`：本次响应需要的牌（闪/杀/无懈可击/桃）。
+   * 钩子据此判断自己的当牌转换能不能顶上。
+   */
+  need?: ResponseKind;
+  /**
+   * `provide_response`：本次响应可选牌来源。引擎先放好基础来源（含声明式 `conversion` 的转换来源），
+   * 钩子可**就地 push** 额外来源（如代码技能把某种牌当闪）；
+   * 这样"手上没有闪但技能能变出闪"的情况下也会询问玩家，而不是直接判定无法响应。
+   * 钩子 push 的来源应带 `viaSkill`，否则 `consumeResponseCard` 不认（防伪造直接响应）。
+   */
+  responseSources?: CardSource[];
 };
 
 export type SkillHook = (payload: SkillEventPayload, logs: string[]) => void | Promise<void>;

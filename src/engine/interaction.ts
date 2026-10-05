@@ -1,4 +1,4 @@
-import type { Card } from "./cards.js";
+import type { Card, CardType } from "./cards.js";
 
 export type ResponseKind = "dodge" | "slash" | "negate" | "peach";
 
@@ -15,6 +15,14 @@ export type CardSource = {
    */
   card?: Card;
   label: string;
+  /**
+   * 当牌转换（Phase 7）：该来源是"通过某技能把这张牌当别的牌"。
+   * 由引擎（声明式 `conversion`）或 `provide_response` 钩子填入；`consumeResponseCard` 据此接受转换来源，
+   * 没有这个标记的来源必须直接满足响应牌类（防止伪造"任意牌当闪"）。
+   */
+  viaSkill?: string;
+  /** 当牌转换成的牌类（`viaSkill` 存在时才有意义）。 */
+  asType?: CardType;
 };
 
 export type InteractionTrigger = {

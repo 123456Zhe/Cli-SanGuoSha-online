@@ -357,7 +357,7 @@ void test("peach_save：钩子可追加濒死回复量", async () => {
   assert.equal(other.alive, true);
 });
 
-void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点", async () => {
+void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response", async () => {
   const { SKILL_TRIGGERS } = await import("./types.js");
   for (const trigger of ["turn_start", "before_draw", "before_damage", "after_damage"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含基础触发点 ${trigger}`);
@@ -365,7 +365,10 @@ void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点"
   for (const trigger of ["judgment", "slash_targeted", "hand_card_lost", "equip_lost", "card_used", "peach_save", "discard_phase_start"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含拦截点 ${trigger}`);
   }
-  assert.equal(SKILL_TRIGGERS.length, 11);
+  for (const trigger of ["provide_response"]) {
+    assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 7 拦截点 ${trigger}`);
+  }
+  assert.equal(SKILL_TRIGGERS.length, 12);
 });
 
 void test("端到端：加载 examples/generals 后，吕蒙的克己在真实对局里跳过弃牌阶段", async () => {

@@ -1,6 +1,6 @@
 import type { SkillHooksContext } from "./skill-hooks.js";
 import type { SkillUseContext } from "./skills.js";
-import type { SkillKind, SkillRules, SkillTargetIntent } from "./skill-registry.js";
+import type { SkillKind, SkillConversion, SkillRules, SkillTargetIntent } from "./skill-registry.js";
 import type { Player, SkillEventPayload, SkillId, SkillTrigger } from "./types.js";
 
 /**
@@ -37,6 +37,13 @@ export type SkillModule = {
   targetIntent?: SkillTargetIntent;
   /** 声明式规则数值/豁免（Phase 3 谓词层消费；见 skill-registry.ts 的 SkillRules）。 */
   rules?: SkillRules;
+  /**
+   * 手牌上限修正：纯函数，只读传入的 `player`（返回 0/正数表示抬高上限）。
+   * 用于"手牌上限 +X"里 X 是运行时变量（如已损失体力值）的场景——静态数值请用 `rules.handLimitDelta`。
+   */
+  handLimit?: (player: Player) => number;
+  /** 当牌转换（Phase 7）：把满足 `from` 的牌当作 `to` 使用或打出；一个技能可声明多条（龙魂 4 条）。 */
+  conversions?: SkillConversion[];
   canUse?(ctx: SkillModuleCtx, player: Player): boolean;
   getTargets?(ctx: SkillModuleCtx, player: Player): string[];
   play?(ctx: SkillModuleCtx, player: Player, targetId?: string): Promise<string[]>;

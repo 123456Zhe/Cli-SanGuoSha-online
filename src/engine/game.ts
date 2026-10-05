@@ -10,6 +10,9 @@ import {
   isEquipCard as isEquipCardImpl,
   isNonDelayedTrickCard as isNonDelayedTrickCardImpl,
   isSlashCard as isSlashCardImpl,
+  matchesConversionFilter,
+  responseKindToCardType,
+  slashKindFromCardType,
   slashKindOf,
 } from "./card-utils.js";
 import {
@@ -57,7 +60,9 @@ import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
 import { getPackSkills } from "./skill-module.js";
 import type { SkillModuleCtx } from "./skill-module.js";
 import { resolveSkillDescriptor } from "./skill-registry.js";
-import { findSkillWithBooleanRule, getSkillRules, isImmuneTo } from "./skill-rules.js";
+import type { SkillConversion } from "./skill-registry.js";
+import type { SlashKind } from "./card-utils.js";
+import { findSkillWithBooleanRule, getHandLimit, getSkillRules, isImmuneTo } from "./skill-rules.js";
 import {
   canPlaySlashInTurn as canPlaySlashInTurnImpl,
   canUseAssault as canUseAssaultImpl,
@@ -97,6 +102,7 @@ import {
   ResponseOption,
   SkillEventPayload,
   SkillHook,
+  SkillId,
   SkillName,
   SkillTrigger,
   TurnPhase,
@@ -706,8 +712,138 @@ export class SanGuoGame {
         targets,
       });
     }
+    this.appendConversionActions(player, actions, canPlaySlash);
     actions.push({ type: "end", label: "结束出牌阶段" });
     return actions;
+  }
+
+  /**
+   * 外部武将包 `conversion`（当牌转换，Phase 7）的可玩动作枚举。
+   *
+   * 约定 `cardIndex = -10000 - 手牌下标`（避开内置已占用的 -100/-200/-400/-500/-1000 与 -1/-11/-12/-13），
+   * 并用 `convertVia`/`convertTo` 标明"通过哪个技能、当成哪张牌"，`playAction` 据此复算，不信任客户端。
+   * 只枚举引擎结算得了的牌类：杀/火杀/雷杀（需要目标）与桃（自己体力未满）。
+   * 闪/无懈可击是响应牌，不进可玩动作列表（走 `provide_response`）。
+   */
+  private appendConversionActions(player: Player, actions: GameAction[], canPlaySlash: boolean): void {
+    for (const { skillId, conversion } of this.playerConversions(player)) {
+      const isSlashLike = this.isSlashCard(conversion.to);
+      if (isSlashLike && !canPlaySlash) {
+        continue;
+      }
+      if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
+        continue;
+      }
+      if (!isSlashLike && conversion.to !== CardType.Peach) {
+        continue;
+      }
+      const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
+      const targets = isSlashLike ? this.findTargetsByCard(player.id, conversion.to) : [];
+      if (isSlashLike && targets.length === 0) {
+        continue;
+      }
+      player.hand.forEach((card, cardIndex) => {
+        if (!matchesConversionFilter(card, conversion.from)) {
+          return;
+        }
+        actions.push({
+          type: "play",
+          cardIndex: -10000 - cardIndex,
+          label: `发动${displayName}：将${describeCard(card)}当${conversion.to}${isSlashLike ? "使用" : "对自己使用"}`,
+          requiresTarget: isSlashLike,
+          targets,
+          convertVia: skillId,
+          convertTo: conversion.to,
+        });
+      });
+    }
+  }
+
+  /** 该玩家拥有的全部当牌转换（外部包声明式 `conversions`；内置技能不走这里）。 */
+  private playerConversions(player: Player): { skillId: SkillId; conversion: SkillConversion }[] {
+    const result: { skillId: SkillId; conversion: SkillConversion }[] = [];
+    for (const skillId of new Set(player.skills)) {
+      for (const conversion of resolveSkillDescriptor(skillId).conversions ?? []) {
+        result.push({ skillId, conversion });
+      }
+    }
+    return result;
+  }
+
+  /** 该玩家能否用某种转换作为 `kind` 响应打出（`asResponse` 命中且源牌匹配）。 */
+  private responseConversions(player: Player, kind: ResponseKind): { skillId: SkillId; conversion: SkillConversion }[] {
+    return this.playerConversions(player).filter(
+      (entry) => (entry.conversion.asResponse ?? []).includes(kind) && responseKindToCardType(kind) === entry.conversion.to,
+    );
+  }
+
+  /**
+   * 当牌转换在**出牌阶段**的结算（`playAction` 的 `cardIndex <= -10000` 分支）。
+   * 复算全部条件：技能归属、转换声明、源牌是否满足 `from`、杀次数、目标合法性。
+   */
+  private async resolveConversionUse(
+    player: Player,
+    handIndex: number,
+    viaSkillId: SkillId | undefined,
+    convertTo: CardType | undefined,
+    targetId: string | undefined,
+  ): Promise<string[]> {
+    const card = player.hand[handIndex];
+    if (!card || !viaSkillId || !convertTo) {
+      return ["使用卡牌失败"];
+    }
+    const conversion = this.playerConversions(player).find(
+      (entry) => entry.skillId === viaSkillId && entry.conversion.to === convertTo,
+    )?.conversion;
+    if (!conversion || !matchesConversionFilter(card, conversion.from)) {
+      return ["使用卡牌失败"];
+    }
+    const displayName = resolveSkillDescriptor(viaSkillId).displayName ?? viaSkillId;
+    const isSlashLike = this.isSlashCard(conversion.to);
+    if (!isSlashLike && conversion.to !== CardType.Peach) {
+      return [`${conversion.to}不能这样使用`];
+    }
+    if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
+      return [`${player.name} 当前体力已满`];
+    }
+    let target: Player | null = null;
+    if (isSlashLike) {
+      if (this.slashUsedThisTurn && !getSkillRules(player).slashLimitExempt && player.weapon !== CardType.Crossbow) {
+        return [`${player.name} 本回合已使用过杀`];
+      }
+      if (!targetId) {
+        return ["需要选择目标"];
+      }
+      const candidate = this.mustGetPlayer(targetId);
+      if (
+        !candidate.alive ||
+        candidate.id === player.id ||
+        !this.canReachForSlash(player, candidate) ||
+        this.isKongChengProtected(candidate, conversion.to)
+      ) {
+        return ["目标无效"];
+      }
+      target = candidate;
+    }
+    const used = await this.removeHandCardAt(player, handIndex);
+    if (!used) {
+      return ["使用卡牌失败"];
+    }
+    this.discardPile.push(used);
+    const logs = [`${player.name} 发动${displayName}，将${describeCard(used)}当${conversion.to}使用`];
+    if (isSlashLike && target) {
+      if (!getSkillRules(player).slashLimitExempt) {
+        this.slashUsedThisTurn = true;
+      }
+      logs.push(...(await this.useSlash(player, target, { kind: slashKindFromCardType(conversion.to), card: used })));
+      return logs;
+    }
+    player.hp = Math.min(player.maxHp, player.hp + 1);
+    logs.push(`${player.name} 回复 1 点体力`);
+    logs.push(...(await this.resolveDeaths()));
+    logs.push(...this.resolveWinner());
+    await this.advanceIfCurrentPlayerDead(logs);
+    return logs;
   }
 
   getPendingDiscardCount(playerId: string): number {
@@ -718,7 +854,7 @@ export class SanGuoGame {
     if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Discard) {
       return 0;
     }
-    return Math.max(0, player.hand.length - player.hp);
+    return Math.max(0, player.hand.length - getHandLimit(player));
   }
 
   getDiscardOptions(playerId: string): DiscardOption[] {
@@ -807,7 +943,7 @@ export class SanGuoGame {
     }
     this.discardPile.push(removed);
     const logs = [`${player.name} 弃置了 ${removed.type}`];
-    if (player.hand.length > player.hp) {
+    if (player.hand.length > getHandLimit(player)) {
       return logs;
     }
     if (this.staged) {
@@ -831,6 +967,12 @@ export class SanGuoGame {
     const player = this.mustGetPlayer(playerId);
     if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
       return [];
+    }
+    if (action.cardIndex <= -10000) {
+      // 外部武将包当牌转换（Phase 7）：cardIndex = -10000 - 手牌下标。
+      // **必须排在所有内置负下标分支之前**（`<= -1000` 是木牛流马，否则会被它先吃掉）。
+      // 不信任客户端：convertVia/convertTo 与源牌都由 resolveConversionUse 复算。
+      return this.resolveConversionUse(player, -10000 - action.cardIndex, action.convertVia, action.convertTo, targetId);
     }
     if (action.cardIndex <= -100 && action.cardIndex > -200) {
       const index = -100 - action.cardIndex;
@@ -1464,6 +1606,7 @@ export class SanGuoGame {
         }
       }
     }
+    this.appendConversionSources(player, "dodge", sources);
     return sources;
   }
 
@@ -1489,13 +1632,46 @@ export class SanGuoGame {
         }
       }
     }
+    this.appendConversionSources(player, "slash", sources);
     return sources;
   }
 
+  /**
+   * 外部武将包 `conversion.asResponse`（Phase 7）的响应来源：把满足 `from` 的牌标成"可当 `kind` 打出"。
+   * `viaSkill`/`asType` 是给 `consumeResponseCard` 的凭据——只有带标记的来源才允许"非直接牌类"响应。
+   */
+  private appendConversionSources(player: Player, kind: ResponseKind, sources: CardSource[]): void {
+    const conversions = this.responseConversions(player, kind);
+    if (conversions.length === 0) {
+      return;
+    }
+    const direct = responseKindToCardType(kind);
+    const all = this.buildUsableSources(player);
+    for (const { skillId, conversion } of conversions) {
+      const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
+      for (const source of all) {
+        if (source.card.type === direct) {
+          continue;
+        }
+        if (!matchesConversionFilter(source.card, conversion.from)) {
+          continue;
+        }
+        sources.push({
+          ...source,
+          label: `${describeCard(source.card)}${displayName}当${conversion.to}`,
+          viaSkill: skillId,
+          asType: conversion.to,
+        });
+      }
+    }
+  }
+
   private buildNegateSources(player: Player): CardSource[] {
-    return this.buildUsableSources(player)
+    const sources = this.buildUsableSources(player)
       .filter((source) => source.card.type === CardType.Negate)
       .map((source) => ({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` }));
+    this.appendConversionSources(player, "negate", sources);
+    return sources;
   }
 
   private buildPeachSources(player: Player, selfRescue = false): CardSource[] {
@@ -1521,6 +1697,7 @@ export class SanGuoGame {
         }
       }
     }
+    this.appendConversionSources(player, "peach", sources);
     return sources;
   }
 
@@ -1548,8 +1725,20 @@ export class SanGuoGame {
             ? card.type === CardType.Negate
             : card.type === CardType.Peach || wineAsPeach;
     if (!direct) {
-      const convertedLabel =
-        kind === "dodge" && card.color === "black" && this.hasSkill(player, SkillName.QingGuo)
+      // 声明式 conversions（`viaSkill` 凭据）与内置转换技各自的"当 X"判定。
+      // 凭据只在来源列表里（`peekUsableCard` 只回 {card}），所以这里按 sourceId 回查一次候选来源；
+      // 再以技能的真实声明复算 `from`，让伪造的 sourceId 无法蒙过去。
+      const candidate = this.buildResponseSources(player, kind, kind === "peach" && player.hp <= 0).find(
+        (entry) => entry.sourceId === sourceId && entry.viaSkill,
+      );
+      const viaConversion = candidate
+        ? this.responseConversions(player, kind).find(
+            (entry) => entry.skillId === candidate.viaSkill && matchesConversionFilter(card, entry.conversion.from),
+          )
+        : undefined;
+      const convertedLabel = viaConversion
+        ? `${resolveSkillDescriptor(viaConversion.skillId).displayName ?? viaConversion.skillId}当${viaConversion.conversion.to}`
+        : kind === "dodge" && card.color === "black" && this.hasSkill(player, SkillName.QingGuo)
           ? `${SkillName.QingGuo}当${CardType.Dodge}`
           : kind === "dodge" && this.isSlashCard(card.type) && this.hasSkill(player, SkillName.LongDan)
             ? `${SkillName.LongDan}当${CardType.Dodge}`
@@ -1600,7 +1789,12 @@ export class SanGuoGame {
     // 酒方法Ⅱ：濒死者本人可将酒当桃自救
     const selfRescue = kind === "peach" && trigger.actorId === player.id;
     const sources = this.buildResponseSources(player, kind, selfRescue);
-    if (sources.length === 0) {
+    // 拦截点 provide_response（Phase 7）：在"没有任何来源 → 直接判为无法响应"**之前**发出，
+    // 钩子可往 payload.responseSources 里 push 额外来源（代码技能的当牌转换）。
+    const payload: SkillEventPayload = { actor: player, need: kind, responseSources: sources };
+    await this.emitSkillTrigger("provide_response", payload, logs);
+    const usable = payload.responseSources ?? sources;
+    if (usable.length === 0) {
       return false;
     }
     const cardNames: Record<ResponseKind, string> = {
@@ -1624,7 +1818,7 @@ export class SanGuoGame {
       responderId: player.id,
       trigger,
       responseKind: kind,
-      sources,
+      sources: usable,
       allowPass: true,
       reason,
     });
@@ -1912,11 +2106,13 @@ export class SanGuoGame {
     const logs: string[] = [];
     logs.push(`进入${TurnPhase.Discard}`);
     if (!await this.shouldSkipDiscardPhase(player, logs)) {
-      if (!player.isAI && player.hand.length > player.hp) {
-        logs.push(`${player.name} 需要弃置 ${player.hand.length - player.hp} 张手牌`);
+      // 手牌上限 = 体力值 + rules.handLimitDelta（绝境这类技能会把它抬高），统一走 getHandLimit。
+      const handLimit = getHandLimit(player);
+      if (!player.isAI && player.hand.length > handLimit) {
+        logs.push(`${player.name} 需要弃置 ${player.hand.length - handLimit} 张手牌`);
         return logs;
       }
-      while (player.hand.length > player.hp) {
+      while (player.hand.length > handLimit) {
         const index = this.randomIndex(player.hand.length);
         const removed = await this.removeHandCardAt(player, index);
         if (removed) {
@@ -2543,6 +2739,24 @@ export class SanGuoGame {
 
   private async expandSlashTargets(player: Player, primary: Player, isLastHandSlash: boolean): Promise<Player[]> {
     return expandSlashTargetsImpl(this as unknown as ResolveContext, player, primary, isLastHandSlash);
+  }
+
+  /**
+   * 外部代码技能的"使用一张杀"入口（Phase 7 / ③）。
+   *
+   * 与内置武圣/龙胆分支同构：结算 + 濒死 + 胜负 + 阵亡者回合推进一条龙。
+   * 源牌的花色/类型由调用方负责（移出手牌、进弃牌堆），这里只负责"当成杀打出去"。
+   */
+  async useSlash(
+    attacker: Player,
+    target: Player,
+    options: { kind?: SlashKind; card?: Card; fromSerpent?: boolean } = {},
+  ): Promise<string[]> {
+    const logs = await this.resolveSlash(attacker, target, options.fromSerpent ?? false, options.kind ?? "normal", options.card);
+    logs.push(...(await this.resolveDeaths()));
+    logs.push(...this.resolveWinner());
+    await this.advanceIfCurrentPlayerDead(logs);
+    return logs;
   }
 
   private resolveSlash(

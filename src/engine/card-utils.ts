@@ -1,4 +1,5 @@
-import { Card, CardSuit, CardType } from "./cards.js";
+import { Card, CardColor, CardSuit, CardType } from "./cards.js";
+import { ResponseKind } from "./interaction.js";
 import {
   ArmorType,
   AttackHorseType,
@@ -170,6 +171,51 @@ export function describeCard(card: Pick<Card, "type" | "suit" | "rank">): string
 
 /** 杀的属性：普通 / 火 / 雷 */
 export type SlashKind = "normal" | "fire" | "thunder";
+
+/**
+ * 由牌类推出杀的属性（当牌转换用：`conversion.to` 是火杀/雷杀时结算要按属性走）。
+ * 与 `slashKindOf` 不同：这里只看目标牌类，不看攻击者的武器（朱雀羽扇由 `resolveSlash` 内部处理）。
+ */
+export function slashKindFromCardType(cardType: CardType): SlashKind {
+  if (cardType === CardType.FireSlash) {
+    return "fire";
+  }
+  if (cardType === CardType.ThunderSlash) {
+    return "thunder";
+  }
+  return "normal";
+}
+
+/** 响应时机 → 需要打出的牌类（当牌转换的 `asResponse` 校验与匹配用）。 */
+export function responseKindToCardType(kind: ResponseKind): CardType {
+  switch (kind) {
+    case "dodge":
+      return CardType.Dodge;
+    case "slash":
+      return CardType.Slash;
+    case "negate":
+      return CardType.Negate;
+    case "peach":
+      return CardType.Peach;
+  }
+}
+
+/**
+ * 当牌转换的源牌筛选（Phase 7）：`from` 里给出的条件之间是 AND，未给的条件不限制。
+ * 纯函数，游戏逻辑与校验器共用。
+ */
+export function matchesConversionFilter(card: Card, filter: { suit?: CardSuit[]; color?: CardColor[]; type?: CardType[] }): boolean {
+  if (filter.suit && !filter.suit.includes(card.suit)) {
+    return false;
+  }
+  if (filter.color && !filter.color.includes(card.color)) {
+    return false;
+  }
+  if (filter.type && !filter.type.includes(card.type)) {
+    return false;
+  }
+  return true;
+}
 
 /** 属性伤害类型：火 / 雷 */
 export type DamageKind = "fire" | "thunder";

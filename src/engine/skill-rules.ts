@@ -24,6 +24,8 @@ export type ResolvedSkillRules = {
   peachSaveBonus: number;
   /** 本回合未使用/打出过杀时可跳过弃牌阶段（OR）。 */
   skipDiscardPhaseIfNoSlash: boolean;
+  /** 手牌上限 +N（求和；默认上限 = 当前体力值）。 */
+  handLimitDelta: number;
 };
 
 /** 可查询归属技能的布尔类规则（需要"为哪个技能询问是否发动"的场景）。 */
@@ -41,6 +43,7 @@ export function getSkillRules(player: Player): ResolvedSkillRules {
     targetImmunity: [],
     peachSaveBonus: 0,
     skipDiscardPhaseIfNoSlash: false,
+    handLimitDelta: 0,
   };
   for (const skillId of new Set(player.skills)) {
     const rules = rulesOf(skillId);
@@ -64,6 +67,9 @@ export function getSkillRules(player: Player): ResolvedSkillRules {
     }
     if (typeof rules.peachSaveBonus === "number") {
       resolved.peachSaveBonus += rules.peachSaveBonus;
+    }
+    if (typeof rules.handLimitDelta === "number") {
+      resolved.handLimitDelta += rules.handLimitDelta;
     }
     if (rules.targetImmunity && rules.targetImmunity.cards.length > 0) {
       resolved.targetImmunity.push({
@@ -95,6 +101,23 @@ export function sumActivatedRules(
     }
   }
   return total;
+}
+
+/**
+ * 手牌上限（默认 = 当前体力值 + `rules.handLimitDelta` 之和 + 代码技能的 `handLimit(player)`，下限 0）。
+ * 纯函数：只读 `player.hp` 与 `player.skills`，因此引擎与 UI（`render-lines.ts`）能对同一份快照算出同一个数。
+ * 弃牌阶段的"该弃几张"必须统一走它，别再写 `player.hand.length - player.hp`。
+ */
+export function getHandLimit(player: Player): number {
+  let delta = getSkillRules(player).handLimitDelta;
+  for (const skillId of new Set(player.skills)) {
+    // 代码技能可以给"运行时变量"的手牌上限修正（如绝境 X = 已损失体力值）。
+    const computed = resolveSkillDescriptor(skillId).handLimit?.(player);
+    if (typeof computed === "number" && Number.isFinite(computed)) {
+      delta += computed;
+    }
+  }
+  return Math.max(0, player.hp + delta);
 }
 
 /** 目标免疫：命中任一技能的 targetImmunity.cards，且满足 requireEmptyHand 条件（空城需空手）。 */

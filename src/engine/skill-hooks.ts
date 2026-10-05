@@ -287,6 +287,8 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
     card_used: [],
     peach_save: [],
     discard_phase_start: [],
+    // Phase 7：响应前由引擎放好基础来源，钩子可就地 push 额外来源（`payload.responseSources`）。
+    provide_response: [],
   };
   // 外部武将包技能：每个触发点在内置钩子之后追加。
   const packCtx = ctx as unknown as SkillModuleCtx;

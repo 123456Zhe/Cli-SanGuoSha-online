@@ -44,10 +44,11 @@ const validGeneral = (overrides: Record<string, unknown> = {}): Record<string, u
   ...overrides,
 });
 
-void test("校验器：仓库自带的示例包零错误，且只报神赵云龙魂那两条已知缺口警告", async () => {
+void test("校验器：仓库自带的示例包零错误零警告", async () => {
   const report = await checkGeneralPacks({ dir: join(process.cwd(), "examples", "generals") });
 
   assert.equal(report.errors, 0, `不应有错误：${report.issues.map((issue) => issue.message).join(" | ")}`);
+  assert.equal(report.warnings, 0, `不应有警告：${report.issues.map((issue) => issue.message).join(" | ")}`);
   assert.equal(report.scanned, 2);
   assert.deepEqual(
     report.packs.map((pack) => pack.name).sort(),
@@ -65,25 +66,33 @@ void test("校验器：仓库自带的示例包零错误，且只报神赵云龙
     shenZhaoYun?.skillsLoaded.map((skill) => `${skill.id}:${skill.kind}`),
     ["神赵云/绝境:triggered", "神赵云/龙魂:conversion"],
   );
+});
 
-  // 这两条警告**钉住已知缺口**：`kind: "conversion"`（当牌转换）引擎尚未执行。
-  // 一旦实现了 conversions，这个用例会失败——那时应当把龙魂改成可真执行的形式并更新这里。
-  assert.deepEqual(
-    report.issues.map((issue) => ({ level: issue.level, pack: issue.pack, message: issue.message })),
-    [
-      {
-        level: "warning",
-        pack: "神赵云",
-        message: '龙魂：kind = "conversion"（当牌转换）目前不会被引擎枚举为可玩动作，写了也不会生效（已知缺口，优先待补）',
+void test("校验器：抓「合法但永远不会生效」的 conversions（Phase 7）", async () => {
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["死转换", "重复转换"] }),
+    {
+      // 当闪/当无懈又没有 asResponse → 永远不生效
+      死转换: { kind: "conversion", description: "x", displayName: "死转换", conversions: [{ from: { suit: ["club"] }, to: "闪" }] },
+      // from 完全相同的两条：第二条永远轮不到
+      重复转换: {
+        kind: "conversion",
+        description: "x",
+        displayName: "重复转换",
+        conversions: [
+          { from: { suit: ["heart"] }, to: "桃" },
+          { from: { suit: ["heart"] }, to: "火杀" },
+        ],
       },
-      {
-        level: "warning",
-        pack: "神赵云",
-        message: "龙魂：既没有 triggers 也没有 rules，这个技能不会有任何效果",
-      },
-    ],
+    },
   );
-  assert.equal(report.warnings, 2);
+
+  const report = await checkGeneralPacks({ dir: root });
+  const messages = report.issues.map((issue) => `${issue.level}:${issue.message}`);
+  assert.ok(messages.some((message) => message.includes("死转换") && message.includes("永远不会生效")), messages.join(" | "));
+  assert.ok(messages.some((message) => message.startsWith("error:") && message.includes("重复转换") && message.includes("只认第一条")));
+  assert.ok(report.errors >= 1);
 });
 
 void test("校验器：未知触发点被报错（loader 只会静默丢弃）", async () => {
@@ -130,7 +139,10 @@ void test("校验器：conversion / 无 play 的主动技能 / 空技能都被�
 
   const report = await checkGeneralPacks({ dir: root });
   const messages = report.issues.map((issue) => issue.message);
-  assert.ok(messages.some((message) => message.includes("conversion") && message.includes("不会被引擎枚举")));
+  assert.ok(
+    messages.some((message) => message.includes("转换") && message.includes("没有 conversions 声明")),
+    messages.join(" | "),
+  );
   assert.ok(messages.some((message) => message.includes("空主动") && message.includes("没有 play()")));
   assert.ok(messages.some((message) => message.includes("空触发") && message.includes("不会有任何效果")));
   assert.equal(report.warnings >= 3, true, "这些是警告而非错误（包仍能加载）");

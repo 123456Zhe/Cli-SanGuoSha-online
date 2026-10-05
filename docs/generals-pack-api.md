@@ -62,6 +62,8 @@ type SkillModule = {
   targetIntent?: "enemy" | "ally" | "any";  // 主动技能目标取向（供 AI 选目标，缺省 any）
   label?: string;                 // 出牌动作标签
   rules?: SkillRules;             // 声明式规则数值/豁免（见下「规则词汇表」）
+  conversions?: SkillConversion[]; // 当牌转换（见下「当牌转换」；一个技能可多条）
+  handLimit?(player): number;     // 手牌上限的运行时修正（纯函数；见下「手牌上限」）
   canUse?(ctx, player): boolean;
   getTargets?(ctx, player): string[];
   play?(ctx, player, targetId?): Promise<string[]>;
@@ -88,10 +90,82 @@ type SkillModule = {
 | `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | — |
 | `peach_save` | 拦截 | 濒死时每消耗一张救援桃 | `peachSaveBonus`（累加额外回复点数） |
 | `discard_phase_start` | 拦截 | 弃牌阶段入口 | `skipDiscardPhase = true` 跳过整个弃牌阶段（钩子自行处理"是否发动"询问） |
+| `provide_response` | 拦截 | 需要响应（闪/杀/无懈可击/桃）、**在"没有任何来源 → 判定无法响应"之前** | `responseSources`（就地 push 额外可选来源；push 的来源必须带 `viaSkill`，否则不被接受） |
 
-未实现（Phase 6 剩余项）：`provideResponse`（技能提供响应牌，需改交互管线）。
+`provide_response` 让"手上没有闪但技能能变出闪"也能询问玩家。钩子 push 的来源形如：
+
+```ts
+onTrigger: {
+  provide_response: (ctx, payload) => {
+    if (payload.need !== "dodge" || !payload.actor || !payload.responseSources) return;
+    for (const card of payload.actor.hand) {
+      if (card.suit !== "club") continue;
+      payload.responseSources.push({
+        sourceId: `hand:${card.id}`,
+        origin: "hand",
+        card,
+        label: `${card.type}当闪`,
+        viaSkill: ctx.id,          // 必填：引擎据此复算技能的真实声明
+        asType: CardType.Dodge,
+      });
+    }
+  },
+}
+```
+
+**声明式当牌转换请优先用 `conversions`**（见下节）：它是纯数据、不用写代码，且出牌阶段与响应时机都覆盖。`provide_response` 留给声明不了的情况。
 
 注意：`createSkillHooks` 在 `SanGuoGame` **构造时**快照外部钩子，因此加载武将包必须在建对局之前完成（与 `loadGeneralPacks` 的既有约定一致）；进行中的对局只认建局时已注册的技能。
+
+## 当牌转换（`conversions`，Phase 7）
+
+把满足 `from` 的牌当作 `to` 使用或打出，**一个技能可以声明多条**（龙魂就是 4 条花色映射）：
+
+```json
+{
+  "kind": "conversion",
+  "description": "你可以将一张手牌按花色当下列牌使用或打出：红桃当桃，方块当火杀，梅花当闪，黑桃当无懈可击。",
+  "conversions": [
+    { "from": { "suit": ["heart"] },   "to": "桃",       "asResponse": ["peach"] },
+    { "from": { "suit": ["diamond"] }, "to": "火杀" },
+    { "from": { "suit": ["club"] },    "to": "闪",       "asResponse": ["dodge"] },
+    { "from": { "suit": ["spade"] },   "to": "无懈可击", "asResponse": ["negate"] }
+  ]
+}
+```
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `from` | `{ suit?: CardSuit[]; color?: ("red"\|"black")[]; type?: CardType[] }` | 源牌筛选。三个条件之间是 **AND**；至少要给一个（什么都不给会被 loader 拒绝，防"任意牌都能变"）。`suit` 取值 `heart/diamond/club/spade` |
+| `to` | `CardType` | 当成什么牌。**只放行** `杀 / 火杀 / 雷杀 / 桃 / 闪 / 无懈可击`——其余牌类（延时锦囊、装备、其他锦囊）需要目标/距离/判定区逻辑，loader 会明确报错 |
+| `asResponse` | `ResponseKind[]`（可选） | 可作为哪些响应时机**打出**：`dodge`（闪）/`slash`（杀）/`negate`（无懈可击）/`peach`（桃）。必须与 `to` 对得上（杀↔`slash` 允许三种杀）。缺省 = 只能在出牌阶段主动使用 |
+
+生效路径（都是引擎自动的，作者不用写代码）：
+
+- **出牌阶段主动使用**：`getPlayableActions` 为持有者枚举 `{type:"play", convertVia, convertTo, targets}`，
+  `cardIndex = -10000 - 手牌下标`（避免与内置转换技的 -100/-200/-400/-500/-1000 段冲突）。
+  `playAction` **不信任客户端**：会复算技能归属、`from` 筛选、杀次数、目标合法性（射程/空城/自己）。
+  只有 `to` 是可玩牌类（`杀/火杀/雷杀/桃`）才会枚举；`to` 是 `闪/无懈可击` 时必须给 `asResponse`，否则那条转换永远不会生效（校验器会警告）。
+- **响应打出**：`requestCardResponse` 在"没有任何来源"判定**之前**发出 `provide_response`，
+  把 `asResponse` 命中的转换来源（带 `viaSkill`/`asType`）并入可选来源。所以"手里没有闪但梅花手牌能当闪"会正常询问玩家。
+  `consumeResponseCard` 收到该来源后，会以技能的真实声明复算一次 `from`，伪造的 `sourceId` 不被接受。
+
+**内置转换技（武圣/龙胆/国色/倾国/急救）仍是各自硬编码的分支**，不要给它们再填 `conversions`（否则会重复枚举）。
+`to` 为延时锦囊/装备的转换（如国色的方块当乐不思蜀）暂不支持。
+
+## 手牌上限（`handLimit` / `rules.handLimitDelta`）
+
+默认手牌上限 = 当前体力值（弃牌阶段"该弃几张"与 UI 提示都走 `skill-rules.ts` 的 `getHandLimit`）：
+
+- `rules.handLimitDelta`：**固定数值**修正（多个技能求和）。
+- `handLimit(player)`：**运行时变量**修正，代码技能提供，必须是**纯函数**（只读传入的 player）——
+  因为 UI（`render-lines.ts`）与引擎拿同一份快照要算出同一个上限，读全局状态会让两边不一致。
+
+```ts
+// 绝境：手牌上限 + 已损失体力值
+handLimit: (player) => Math.max(0, player.maxHp - player.hp),
+```
+
 
 ## 目标取向（`targetIntent`）
 
@@ -118,6 +192,7 @@ type SkillModule = {
 | `damageDelta` | number | 杀/决斗伤害 ±N | 求和（仅「本回合已发动」的技能） | 裸衣 |
 | `peachSaveBonus` | number | 被桃救时额外回复 N | 求和 | 救援（吴势力主公） |
 | `skipDiscardPhaseIfNoSlash` | boolean | 本回合未使用/打出过杀时可跳过弃牌阶段 | OR（需玩家确认发动） | 无内置使用者（示例包吕蒙「克己」） |
+| `handLimitDelta` | number | 手牌上限 +N（默认上限 = 当前体力值） | 求和 | 无内置使用者；运行时变量请用代码技能的 `handLimit(player)`（示例包神赵云「绝境」） |
 
 - `TargetImmunityCard` = `"slash" \| "duel" \| "snatch" \| "indulgence" \| "supplies-cut"`。
 - `drawPhaseDelta` / `damageDelta` 属「发动后本回合生效」：触发时机仍由技能自身的钩子 / `isSkillUsed` 门控，`rules` 只提供数值。
@@ -137,7 +212,7 @@ type SkillModule = {
 - 摸牌/看牌：`drawCard` / `drawCards` / `drawTopCards` / `placeCardsOnTop` / `placeCardsOnBottom`。
 - 交互：`decide(request)` + `nextInteractionId()` + `shouldActivateOptionalEffect`。
 - 弃牌/失去牌：`requestDiscardSelection` / `requestFlexibleDiscard` / `removeHandCardAt` / `removeUsableCardBySourceId` / `discardFromPlayerHand` / `discardSelfCards`。
-- 伤害/死亡：`applyDamage`（随后必须自己结算死亡/胜负，见下）。
+- 伤害/死亡：`applyDamage`（随后必须自己结算死亡/胜负，见下）、`useSlash(attacker, target, {kind, card})`（完整结算一张杀：含闪响应/铁骑/藤甲/濒死/胜负/回合推进）。
 - 回合状态：`skillUsedThisTurn` / `markSkillUsed`（外部技能无 `oncePerTurn` 自动限制，需要限次请在 `canUse` 里查 `skillUsedThisTurn` 并在 `play` 里 `markSkillUsed`）。
 
 调用方必须自己做的事（漏做会静默坏掉）：

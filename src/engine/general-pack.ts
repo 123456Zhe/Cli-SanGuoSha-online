@@ -1,10 +1,22 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { CardColor, CardSuit, CardType } from "./cards.js";
+import { isSlashCard, responseKindToCardType } from "./card-utils.js";
 import { getBuiltinGenerals, resetLoadedGenerals, setLoadedGenerals } from "./generals.js";
-import { SKILL_TARGET_INTENTS, SkillKind, SkillRules, SkillTargetIntent, TargetImmunityCard } from "./skill-registry.js";
+import {
+  CONVERSION_RESPONSE_KINDS,
+  CONVERTIBLE_CARD_TYPES,
+  SKILL_TARGET_INTENTS,
+  SkillConversion,
+  SkillKind,
+  SkillRules,
+  SkillTargetIntent,
+  TargetImmunityCard,
+} from "./skill-registry.js";
 import { registerPackSkill, resetPackSkills, PackSkillEntry, SkillModule } from "./skill-module.js";
 import { GeneralDefinition, SKILL_TRIGGERS, SkillId, SkillTrigger } from "./types.js";
+import { ResponseKind } from "./interaction.js";
 
 /**
  * 外部武将包 loader（Phase 2）。
@@ -39,6 +51,8 @@ export type GeneralPackLoadReport = {
 
 const SKILL_KINDS: SkillKind[] = ["active", "triggered", "conversion", "passive", "lord"];
 const IMMUNITY_CARDS: TargetImmunityCard[] = ["slash", "duel", "snatch", "indulgence", "supplies-cut"];
+/** `conversion.from.suit` 允许的花色（`none` 是无花色的技术值，不作为筛选条件）。 */
+const CONVERSION_SUITS: CardSuit[] = ["heart", "diamond", "club", "spade"];
 
 const isString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
@@ -66,7 +80,8 @@ const validateRules = (raw: unknown, label: string): SkillRules => {
       case "responseMultiplier":
       case "drawPhaseDelta":
       case "damageDelta":
-      case "peachSaveBonus": {
+      case "peachSaveBonus":
+      case "handLimitDelta": {
         if (typeof value !== "number" || !Number.isFinite(value)) {
           throw new Error(`${label} 的 rules.${key} 必须是数字`);
         }
@@ -108,6 +123,92 @@ const validateRules = (raw: unknown, label: string): SkillRules => {
     }
   }
   return rules;
+};
+
+/** 校验当牌转换数组（`conversions`）：每条单独校验。 */
+const parseConversions = (raw: unknown, label: string): SkillConversion[] => {
+  const list = Array.isArray(raw) ? raw : [raw];
+  if (list.length === 0) {
+    throw new Error(`${label} 的 conversions 不能是空数组`);
+  }
+  return list.map((item, index) => parseConversion(item, list.length > 1 ? `${label} 的 conversions[${index}]` : `${label} 的 conversions`));
+};
+
+/** 校验当牌转换（`conversions.to` 必须是引擎能结算的牌类；`from` 条件与 `asResponse` 值都要合法）。 */
+const parseConversion = (raw: unknown, label: string): SkillConversion => {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(`${label} 必须是对象`);
+  }
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.to !== "string" || !CONVERTIBLE_CARD_TYPES.includes(obj.to as CardType)) {
+    throw new Error(
+      `${label} 的 to 非法（允许：${CONVERTIBLE_CARD_TYPES.join("/")}；` +
+        `其他牌类需要目标/距离/判定区逻辑，暂不支持）`,
+    );
+  }
+  if (typeof obj.from !== "object" || obj.from === null || Array.isArray(obj.from)) {
+    throw new Error(`${label} 的 from 必须是对象`);
+  }
+  const from = obj.from as Record<string, unknown>;
+  const filter: SkillConversion["from"] = {};
+  for (const key of Object.keys(from)) {
+    if (key !== "suit" && key !== "color" && key !== "type") {
+      throw new Error(`${label} 的 from.${key} 不是已知字段（允许：suit/color/type）`);
+    }
+  }
+  if (from.suit !== undefined) {
+    if (
+      !Array.isArray(from.suit) ||
+      from.suit.length === 0 ||
+      from.suit.some((suit) => !CONVERSION_SUITS.includes(suit as CardSuit))
+    ) {
+      throw new Error(`${label} 的 from.suit 非法（允许：${CONVERSION_SUITS.join("/")}）`);
+    }
+    filter.suit = from.suit as CardSuit[];
+  }
+  if (from.color !== undefined) {
+    if (!Array.isArray(from.color) || from.color.length === 0 || from.color.some((color) => color !== "red" && color !== "black")) {
+      throw new Error(`${label} 的 from.color 非法（允许：red/black）`);
+    }
+    filter.color = from.color as CardColor[];
+  }
+  if (from.type !== undefined) {
+    if (
+      !Array.isArray(from.type) ||
+      from.type.length === 0 ||
+      from.type.some((type) => !Object.values(CardType).includes(type as CardType))
+    ) {
+      throw new Error(`${label} 的 from.type 含有未知牌类`);
+    }
+    filter.type = from.type as CardType[];
+  }
+  if (filter.suit === undefined && filter.color === undefined && filter.type === undefined) {
+    throw new Error(`${label} 的 from 至少要给 suit/color/type 之一（否则任何牌都能变，几乎肯定是写错了）`);
+  }
+  let asResponse: ResponseKind[] | undefined;
+  if (obj.asResponse !== undefined) {
+    if (
+      !Array.isArray(obj.asResponse) ||
+      obj.asResponse.length === 0 ||
+      obj.asResponse.some((kind) => !CONVERSION_RESPONSE_KINDS.includes(kind as ResponseKind))
+    ) {
+      throw new Error(`${label} 的 asResponse 非法（允许：${CONVERSION_RESPONSE_KINDS.join("/")}）`);
+    }
+    asResponse = obj.asResponse as ResponseKind[];
+    const to = obj.to as CardType;
+    // asResponse 里的时机必须与 to 对得上：闪↔dodge、无懈↔negate、桃↔peach；杀↔slash 允许杀/火杀/雷杀。
+    for (const kind of asResponse) {
+      const ok = kind === "slash" ? isSlashCard(to) : responseKindToCardType(kind) === to;
+      if (!ok) {
+        throw new Error(`${label} 的 asResponse 含 ${kind}，但 to 是 ${obj.to}，对不上`);
+      }
+    }
+  }
+  return {
+    from: filter,
+    to: obj.to as CardType,
+    ...(asResponse ? { asResponse } : {}),
+  };
 };
 
 const validateGeneralJson = (raw: unknown, packName: string): Omit<GeneralDefinition, "skills"> & { skills: string[] } => {
@@ -173,6 +274,7 @@ const parseDeclarativeSkill = (raw: unknown, fallbackId: string, namespacedId: s
     ...(targetIntent ? { targetIntent } : {}),
     ...(isString(obj.label) ? { label: obj.label } : {}),
     ...("rules" in obj ? { rules: validateRules(obj.rules, `${fallbackId}.skill.json`) } : {}),
+    ...("conversions" in obj ? { conversions: parseConversions(obj.conversions, `${fallbackId}.skill.json`) } : {}),
   };
 };
 
@@ -204,11 +306,13 @@ const parseCodeSkill = (mod: unknown, fallbackId: string, namespacedId: string):
     ...(targetIntent ? { targetIntent } : {}),
     ...(isString(obj.label) ? { label: obj.label } : {}),
     ...("rules" in obj ? { rules: validateRules(obj.rules, `${fallbackId}.skill`) } : {}),
+    ...("conversions" in obj ? { conversions: parseConversions(obj.conversions, `${fallbackId}.skill`) } : {}),
     ...(typeof obj.canUse === "function" ? { canUse: obj.canUse as NonNullable<SkillModule["canUse"]> } : {}),
     ...(typeof obj.getTargets === "function"
       ? { getTargets: obj.getTargets as NonNullable<SkillModule["getTargets"]> }
       : {}),
     ...(typeof obj.play === "function" ? { play: obj.play as NonNullable<SkillModule["play"]> } : {}),
+    ...(typeof obj.handLimit === "function" ? { handLimit: obj.handLimit as NonNullable<SkillModule["handLimit"]> } : {}),
     ...(typeof obj.onTrigger === "object" && obj.onTrigger !== null ? { onTrigger: obj.onTrigger } : {}),
   };
   return entry;

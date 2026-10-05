@@ -1,5 +1,5 @@
 import { Card, CardType } from "./cards.js";
-import { DamageKind } from "./card-utils.js";
+import { DamageKind, SlashKind } from "./card-utils.js";
 import { resolveGeneralByName } from "./generals.js";
 import { getPackSkill } from "./skill-module.js";
 import { getSkillRules } from "./skill-rules.js";
@@ -48,6 +48,16 @@ export type SkillUseContext = {
     isChainSpread?: boolean,
   ): Promise<void>;
   resolveDuel(user: Player, target: Player): Promise<string[]>;
+  /**
+   * 以"使用一张杀"完整结算（含濒死/胜负/回合推进），供外部代码技能实现当牌转换。
+   * 调用方自己负责：把源牌移出手牌并置入弃牌堆、把 `card` 传进来当伤害来源牌。
+   * `kind` 决定火杀/雷杀（`rules.responseMultiplier`、藤甲、铁骑等由引擎内部处理）。
+   */
+  useSlash(
+    attacker: Player,
+    target: Player,
+    options?: { kind?: SlashKind; card?: Card; fromSerpent?: boolean },
+  ): Promise<string[]>;
   resolveDeaths(): Promise<string[]>;
   resolveWinner(): string[];
   advanceIfCurrentPlayerDead(logs: string[]): Promise<void>;

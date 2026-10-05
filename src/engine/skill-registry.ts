@@ -1,4 +1,6 @@
-import { BuiltinSkillId, SkillId, SkillName, SkillTrigger } from "./types.js";
+import { CardColor, CardSuit, CardType } from "./cards.js";
+import { ResponseKind } from "./interaction.js";
+import { BuiltinSkillId, Player, SkillId, SkillName, SkillTrigger } from "./types.js";
 import { getPackSkill } from "./skill-module.js";
 
 export type SkillKind = "active" | "triggered" | "conversion" | "passive" | "lord";
@@ -43,6 +45,12 @@ export type SkillRules = {
    * 由 `game.ts` 的弃牌阶段入口消费，需要玩家确认发动（`optional` 语义）。
    */
   skipDiscardPhaseIfNoSlash?: boolean;
+  /**
+   * 手牌上限 +N（求和；默认手牌上限 = 当前体力值）。
+   * 由 `skill-rules.ts` 的 `getHandLimit` 消费，弃牌阶段（`endPlayPhase` / `discardForCurrentPlayer` /
+   * `getPendingDiscardCount`）与 UI 提示统一走它。
+   */
+  handLimitDelta?: number;
 };
 
 /**
@@ -60,9 +68,44 @@ export const SKILL_RULE_KEY_KINDS = {
   damageDelta: "number",
   peachSaveBonus: "number",
   skipDiscardPhaseIfNoSlash: "boolean",
+  handLimitDelta: "number",
 } as const;
 
 export type SkillRuleKey = keyof typeof SKILL_RULE_KEY_KINDS;
+
+/**
+ * 当牌转换（Phase 7）：把满足 `from` 的牌当作 `to` 使用或打出。
+ *
+ * - `from` 的三个条件之间是 **AND**（都不给 = 任何牌都能变，慎用）；
+ * - `to` 只支持引擎真正结算得了的牌类：`杀/火杀/雷杀/桃/闪/无懈可击`
+ *   （其他牌类如延时锦囊需要目标/距离/判定区逻辑，loader 会明确拒绝）；
+ * - `asResponse` 列出可作为哪些响应打出（闪/杀/无懈可击/桃）；缺省 = 只能在出牌阶段主动使用。
+ *
+ * 出牌阶段主动使用时走 `GameAction.convertVia`/`convertTo`（`cardIndex = -10000 - 手牌下标`）。
+ * **内置技能（武圣/龙胆/国色/倾国/急救）仍是各自硬编码的分支**，不要给它们再填 `conversion`，否则会重复枚举。
+ */
+export type SkillConversion = {
+  from: {
+    suit?: CardSuit[];
+    color?: CardColor[];
+    type?: CardType[];
+  };
+  to: CardType;
+  asResponse?: ResponseKind[];
+};
+
+/** `conversion.to` 允许的牌类（引擎有对应结算路径）。 */
+export const CONVERTIBLE_CARD_TYPES: CardType[] = [
+  CardType.Slash,
+  CardType.FireSlash,
+  CardType.ThunderSlash,
+  CardType.Peach,
+  CardType.Dodge,
+  CardType.Negate,
+];
+
+/** 可作为响应打出的牌类 → 响应时机。 */
+export const CONVERSION_RESPONSE_KINDS: ResponseKind[] = ["dodge", "slash", "negate", "peach"];
 
 export type SkillDescriptor = {
   id: SkillId;
@@ -78,6 +121,17 @@ export type SkillDescriptor = {
   targetIntent?: SkillTargetIntent;
   /** 声明式规则数值/豁免（Phase 3 谓词层消费）。 */
   rules?: SkillRules;
+  /**
+   * 手牌上限修正的**运行时**版本：纯函数，只读传入的 `player`，返回值就地累加。
+   * 用于"手牌上限 +X（X 为运行时变量，如已损失体力值）"这类 `rules.handLimitDelta` 表达不了的技能。
+   * 由 `skill-rules.ts` 的 `getHandLimit` 消费；必须**纯**（不能读全局状态），否则 UI 与引擎会算出不同结果。
+   */
+  handLimit?: (player: Player) => number;
+  /**
+   * 当牌转换（Phase 7）：把满足 `from` 的牌当作 `to` 使用或打出。**一个技能可以声明多条**
+   * （龙魂就是 4 条：红桃→桃、方块→火杀、梅花→闪、黑桃→无懈可击）。
+   */
+  conversions?: SkillConversion[];
 };
 
 const triggered = (

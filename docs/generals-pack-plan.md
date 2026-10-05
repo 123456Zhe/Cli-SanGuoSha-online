@@ -2,7 +2,7 @@
 
 > 目标：让**武将 = 一个文件夹**（`generals/<武将名>/`），`general.json` 声明元数据与技能列表，技能各自成文件（JSON 或代码）；新增武将/技能不需要改本项目的 `src/`，也不需要重新编译。同时让**局内 AI 只注入本场出现的武将及其关联技能说明**，取代现在从 `rules.md` 注入全量武将知识的方式。
 
-状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；**M4（Phase 5 校验器 / 自对弈 / 文档生成）已完成**（见 §16）；下一步的关键缺口与排序见 §17。附带的两项规则修正已完成，见 §7。
+状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；**M4（Phase 5 校验器 / 自对弈 / 文档生成）已完成**（见 §16）；下一步的关键缺口与排序见 §17，`神赵云` 实测见 §18。附带的两项规则修正已完成，见 §7。
 
 ## 一、已确认的决策
 
@@ -201,7 +201,7 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 - `npm test` 全绿（**当前基线 206**；新增用例同步更新 `AGENTS.md` 计数）
 - `npm run lint` 不新增错误（存量 25 个不动）
 - 新增逻辑不引入 `no-explicit-any`、不引入浮动 Promise
-- 武将包相关改动：`npm run generals:check -- --dir=examples/generals` 零错误零警告
+- 武将包相关改动：`npm run generals:check -- --dir=examples/generals` **0 错误**（当前基线 2 个警告，均为神赵云 `龙魂` 的已知 `conversion` 缺口；新增警告视同回归）
 - 改过技能 `description` / 武将库：`npm run rules:check` 干净（`rules.md` §14/§16.3 是生成物）
 - 涉及线协议时：只做等价替换或加可选字段，**不 bump** `NETWORK_PROTOCOL_VERSION`，并同步 `webui/src/protocol.ts`
 
@@ -311,7 +311,7 @@ Phase 6 明确未做：`provideResponse`（技能提供响应牌，需要改交�
   `kind: "triggered"` 但无 `triggers`/`rules` 的"空技能"、非主动技能上的 `targetIntent`、`general.json` 的 name 与文件夹名不一致、
   代码技能 `onTrigger` 的键不是已知触发点；
   ③`--selfplay=N` 对每个成功加载的武将强制上场跑 N 局不变量断言；`--json` 输出完整报告（可直接喂给 agent 当反馈），
-  `--strict` 警告即失败。示例包 `examples/generals/吕蒙` 零错误零警告。
+  `--strict` 警告即失败。`examples/generals` 目前 **0 错误 / 2 警告**（那 2 条是神赵云 `龙魂` 故意钉住的 `conversion` 缺口）。
 - **自对弈不变量框架**（新 `src/tools/selfplay.ts`）：`runSelfPlay` 用确定性 `mulberry32(seed)` + 全座位 `isAI` 打通整局，
   统一应答交互（可选效果一律发动，走遍技能分支），把违规记成**结构化记录**而非抛错：
   `crashed` / `turn-stuck` / `hp-over-max` / `alive-without-hp` / `dead-with-hp`（后两条只在延迟结算消费完后才判定）。
@@ -341,7 +341,7 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 | 1 | **`conversions` 完全没实现**（`kind: "conversion"` 只登记不生效，零引用） | 黄月英「奇才/集智」之外的"当牌转换"类武将（武圣/龙胆/国色/倾国/急救）**只能写代码技能**，声明式表达不了 | `skill-module.ts` + `game.ts getPlayableActions`（按 `conversion.toCard` 枚举虚拟动作）+ loader 校验 |
 | 2 | 没有 **JSON Schema**（`schema/general.schema.json` / `schema/skill.schema.json`） | 编辑器/agent 没有机器可读的结构约束，只能靠 `generals:check` 事后反馈 | 新增 `schema/`，`generals-check` 直接用它校验 |
 | 3 | 没有**作者用 `.d.ts`**（`SkillModuleCtx` 的能力清单只在文档里，没有签名） | 代码技能作者只能猜 `ctx.drawCards(...)` 的签名与返回值 | 新增 `types/generals-pack.d.ts`（从 `skill-module.ts` 导出，或生成） |
-| 4 | **参考实现只有 1 个**（`examples/generals/吕蒙`） | 每种机制（改判/取消杀/当牌转换/主公技/AI 选目标）都没有可抄的样例 | `examples/generals/` 增加 8–12 个覆盖各机制的武将（**默认不加载**） |
+| 4 | **参考实现只有 2 个**（`examples/generals/吕蒙`、`examples/generals/神赵云`） | 已覆盖"声明式 rules / 代码主动技能 / 代码触发钩子"；**改判/取消杀/当牌转换/主公技/AI 选目标**仍没有可抄的样例 | `examples/generals/` 继续补到 8–12 个覆盖各机制的武将（**默认不加载**） |
 | 5 | `priority` 是**空转**（`getPackHooksFor` 只按注册顺序追加，从不排序）；`kind` 的部分语义没有落点 | 钩子顺序不可控、`kind` 与实际行为可能不一致（校验器只能警告） | `skill-hooks.ts` 排序，或删掉 `priority` 字段 |
 | 6 | pack 钩子**没有 try/catch**（`skill-hooks.ts` 的 `onTrigger` 调用），只有 `play` 有 | 外部钩子抛错会**炸掉整局**（CLI/联机都一样） | 包一层 try/catch + 归属技能名写进日志（与 `useSkillAction` 对齐） |
 | 7 | 内置技能行为散在 74 个 `hasSkill` 分支（`game.ts` 38 / `resolve.ts` 14 / `skills.ts` 10 / `skill-hooks.ts` 12） | 外部包能表达的能力 = 这些分支能表达的子集；不一致会让作者"按内置抄却抄不出来" | 内置技能模块化迁移（**已决定先不做**） |
@@ -351,4 +351,29 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 张飞（纯声明式）、司马懿（`judgment` 改判 + 反馈）、黄月英（奇才 + 集智 + 一张当牌转换）。
 判定：`npm run generals:check -- --json` 零错误、`--selfplay=100` 零违规、日志里三个技能都真的触发过、`src/` 一行未改。
 按现状，第 2/3/4 项不补则"写对"几乎全靠运气，第 1 项会让黄月英直接写不出来——所以顺序建议是 **1 → 2+3+4 → 5+6**。
+
+## 十八、神赵云参考实现（"能不能只用武将包写出来"的实测）
+
+`examples/generals/神赵云/`（标准版：神/男/2 体力，`绝境` + `龙魂`）是一次**刻意不动 `src/`** 的试验，
+用来把 §17 的缺口从"分析"变成"实测证据"。结论：
+
+| 技能 | 写法 | 实测结果 |
+|---|---|---|
+| 绝境（摸牌阶段额外摸"已损失体力值"张） | `.skill.ts` 代码技能，`before_draw` 钩子改写 `payload.drawCount` | ✅ **生效**。1/2 体力时摸 **3** 张（基础 2 + 绝境 1），日志出现"绝境生效，额外摸 1 张牌"；满体力时不加牌。外部钩子在**内置钩子之后**执行，因此与英姿/裸衣可叠加。 |
+| 绝境（你的手牌上限 +X） | —— | ❌ **表达不了**：引擎手牌上限硬编码为体力值（`game.ts` 的 `endPlayPhase` / `discardForCurrentPlayer`），`SkillRules` 无对应字段，全仓 grep `手牌上限` 零命中。 |
+| 龙魂（当牌转换：红桃当桃/方块当火杀/梅花当闪/黑桃当无懈可击） | `.skill.json` 声明 `kind: "conversion"` | ❌ **完全不生效**：引擎不为 `conversion` 枚举可玩动作；"当闪/当无懈可击打出"还需要未实现的 `provideResponse`。 |
+
+为什么**不用代码技能硬凑**龙魂：`SkillModuleCtx` 里有 `applyDamage`/`resolveDuel`，但**没有 `resolveSlash`**；
+红桃当桃姑且能靠直接赋值 `hp` 糊出来，方块当火杀/梅花当闪/黑桃当无懈可击则完全做不到——
+写个"只能回血、不能当杀、不能响应"的半成品只会把缺口藏起来。
+
+由此得到 3 条可执行的判断：
+
+1. §17 的缺口 ① 是**真实阻塞**（不是理论问题）：一个只读 API 文档的作者写龙魂/武圣/龙胆/国色/倾国/急救时，
+   会得到"加载成功、校验只有警告、对局里毫无效果"的最坏结果。
+2. 光有 `conversions` 还不够：**一半的当牌转换发生在"打出"时机**（闪/无懈可击），必须同时补 `provideResponse`
+   （或让 `conversions` 声明可响应的牌类），否则只解决"出牌阶段主动使用"那一半。
+3. 校验器把缺口变成了**可观测的基线**：`examples/generals` 现在是 **0 错误 / 2 警告**，
+   `src/tools/generals-check.test.ts` 逐字钉住那 2 条警告——实现 `conversions` 那天该用例会失败，
+   提醒作者把龙魂改成可真执行的形式。
 

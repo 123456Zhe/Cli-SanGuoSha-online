@@ -251,7 +251,7 @@ generals/<武将名>/
 
 - 技能身份 = `<文件夹名>/<技能名>`（命名空间 id），展示用 `displayName`。
 - 完整文件格式、`SkillModule` 契约、Context 能力清单与隐式约定见 `docs/generals-pack-api.md`。
-- 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）。
+- 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）、`examples/generals/神赵云/`（`绝境` 代码技能 + `龙魂` 这个**当前格式写不出来**的转换技标本）。
 
 ```bash
 # 复制示例到项目根 generals/ 后，npm run dev 选将出现吕蒙

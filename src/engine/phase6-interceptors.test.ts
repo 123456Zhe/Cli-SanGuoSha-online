@@ -370,7 +370,9 @@ void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点"
 
 void test("端到端：加载 examples/generals 后，吕蒙的克己在真实对局里跳过弃牌阶段", async () => {
   const report = await loadGeneralPacks({ dir: join(process.cwd(), "examples", "generals"), pool: "all" });
-  assert.deepEqual(report.loaded, ["吕蒙"]);
+  // examples/generals 里有吕蒙与神赵云两个包；这里只关心吕蒙。
+  assert.deepEqual(report.errors, []);
+  assert.ok(report.loaded.includes("吕蒙"), `吕蒙应被加载：${report.loaded.join("、")}`);
   const { game, players } = await setup();
   const [me, other] = players as [Player, Player];
   // 真实武将定义来自 general.json：skills 已是命名空间 id（吕蒙/克己、吕蒙/涉猎）

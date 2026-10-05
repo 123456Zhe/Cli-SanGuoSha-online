@@ -74,6 +74,10 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 3. `priority` 钩子排序（**当前是空转**）或删字段；pack 钩子 `onTrigger` 补 try/catch（现在外部钩子抛错会炸掉整局）。
 4. Phase 6 剩余：`provideResponse`（技能提供响应牌，需改交互管线）。
 
+**参考实现**：`examples/generals/神赵云/` 是刻意做的"缺口标本"——`绝境` 用代码技能真的生效（`before_draw` 改写 `drawCount`，
+已实测 1/2 体力时摸 3 张），`龙魂`（当牌转换）在包层**写不出来**，校验器的 2 条警告就是结论，被 `generals-check.test.ts` 钉住；
+`examples/generals/神赵云/general.md` 记录了 4 个缺口（`conversions` / `provideResponse` / `ctx.resolveSlash` / 手牌上限不可改）。
+
 **验收方式**（"拿 API 文档独立写出武将"算不算成立）：起一个没有本仓库上下文的 subagent，只给
 `docs/generals-pack-api.md` + `schema/` + 作者 `.d.ts`（**禁止读 `src/`、`examples/`**），写张飞（纯声明式）、
 司马懿（`judgment` + 反馈）、黄月英（奇才 + 集智 + 一张当牌转换）；判定
@@ -85,7 +89,7 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 npm run typecheck   # 必须干净（当前 0 error）
 npm test            # 当前 206 全绿（node --test --import tsx）
 npm run lint        # 基线 25 存量错误，不得新增（不改存量）
-npm run generals:check -- --dir=examples/generals            # 零错误零警告
+npm run generals:check -- --dir=examples/generals            # 0 错误 / 2 警告（神赵云龙魂的已知 conversion 缺口）
 npm run generals:check -- --dir=examples/generals --selfplay=3
 npm run rules:check                                          # rules.md 与注册表同步
 npm run host -- --players=3 --generals-pool=all              # 手动验收外部包

@@ -32,7 +32,10 @@ generals/                      # 项目根目录（在 src 之外，不进 typec
 - `skills` 是**原始技能名**数组；对应文件名为 `<技能名>.skill.json|.ts|.mjs`（二选一，不要 JSON+代码成对出现，避免双源真相）。
 - **未知字段会被 loader 静默忽略**——拼错字段名不会报错。跑 `npm run generals:check` 会让它变成一条警告。
 
-完整的可运行示例见 `examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）。
+完整的可运行示例见 `examples/generals/`：
+
+- `吕蒙/`：`克己`（声明式 `rules`）+ `涉猎`（代码主动技能）。
+- `神赵云/`：`绝境`（代码技能，数值是运行时变量 → `before_draw` 钩子）+ `龙魂`（`kind: "conversion"` 的**缺口标本**：当前格式写不出来，校验器会稳定报出两条警告）。
 
 ## 技能身份与命名空间
 
@@ -208,13 +211,16 @@ npm run generals:check -- --dir=generals --selfplay=3  # 每个武将强制上�
 ## 手动验收
 
 ```bash
-# 方式一：复制示例到项目根 generals/ 后 npm run dev 选将出现吕蒙
+# 方式一：复制示例到项目根 generals/ 后 npm run dev 选将出现吕蒙/神赵云
 cp -r examples/generals/吕蒙 generals/吕蒙 && npm run dev
 
-# 方式二：直接把示例目录当武将包目录
+# 方式二：直接把示例目录当武将包目录（吕蒙 + 神赵云一起进池）
 npm run dev -- --generals-dir=examples/generals
 
-# host 默认不含吕蒙；显式 all 才加载
+# 自检：0 错误；神赵云龙魂的 2 条已知缺口警告是预期输出
+npm run generals:check -- --dir=examples/generals
+
+# host 默认不含外部包；显式 all 才加载
 npm run host -- --players=3
 npm run host -- --players=3 --generals-pool=all
 ```

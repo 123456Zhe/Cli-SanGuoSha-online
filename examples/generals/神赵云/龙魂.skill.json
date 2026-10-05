@@ -1,0 +1,7 @@
+{
+  "id": "龙魂",
+  "displayName": "龙魂",
+  "kind": "conversion",
+  "optional": true,
+  "description": "你可以将至多两张花色相同的手牌按下列规则使用或打出：红桃当桃，方块当火杀，梅花当闪，黑桃当无懈可击。"
+}

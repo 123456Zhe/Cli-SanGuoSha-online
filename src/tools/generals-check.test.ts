@@ -44,20 +44,46 @@ const validGeneral = (overrides: Record<string, unknown> = {}): Record<string, u
   ...overrides,
 });
 
-void test("校验器：仓库自带的示例包零错误零警告", async () => {
+void test("校验器：仓库自带的示例包零错误，且只报神赵云龙魂那两条已知缺口警告", async () => {
   const report = await checkGeneralPacks({ dir: join(process.cwd(), "examples", "generals") });
 
-  assert.deepEqual(report.issues, []);
-  assert.equal(report.errors, 0);
-  assert.equal(report.warnings, 0);
-  assert.equal(report.scanned, 1);
-  const pack = report.packs[0];
-  assert.equal(pack?.name, "吕蒙");
-  assert.equal(pack?.loaded, true);
+  assert.equal(report.errors, 0, `不应有错误：${report.issues.map((issue) => issue.message).join(" | ")}`);
+  assert.equal(report.scanned, 2);
   assert.deepEqual(
-    pack?.skillsLoaded.map((skill) => `${skill.id}:${skill.kind}`),
+    report.packs.map((pack) => pack.name).sort(),
+    ["吕蒙", "神赵云"].sort(),
+  );
+  const lvMeng = report.packs.find((pack) => pack.name === "吕蒙");
+  assert.equal(lvMeng?.loaded, true);
+  assert.deepEqual(
+    lvMeng?.skillsLoaded.map((skill) => `${skill.id}:${skill.kind}`),
     ["吕蒙/克己:triggered", "吕蒙/涉猎:active"],
   );
+  const shenZhaoYun = report.packs.find((pack) => pack.name === "神赵云");
+  assert.equal(shenZhaoYun?.loaded, true);
+  assert.deepEqual(
+    shenZhaoYun?.skillsLoaded.map((skill) => `${skill.id}:${skill.kind}`),
+    ["神赵云/绝境:triggered", "神赵云/龙魂:conversion"],
+  );
+
+  // 这两条警告**钉住已知缺口**：`kind: "conversion"`（当牌转换）引擎尚未执行。
+  // 一旦实现了 conversions，这个用例会失败——那时应当把龙魂改成可真执行的形式并更新这里。
+  assert.deepEqual(
+    report.issues.map((issue) => ({ level: issue.level, pack: issue.pack, message: issue.message })),
+    [
+      {
+        level: "warning",
+        pack: "神赵云",
+        message: '龙魂：kind = "conversion"（当牌转换）目前不会被引擎枚举为可玩动作，写了也不会生效（已知缺口，优先待补）',
+      },
+      {
+        level: "warning",
+        pack: "神赵云",
+        message: "龙魂：既没有 triggers 也没有 rules，这个技能不会有任何效果",
+      },
+    ],
+  );
+  assert.equal(report.warnings, 2);
 });
 
 void test("校验器：未知触发点被报错（loader 只会静默丢弃）", async () => {

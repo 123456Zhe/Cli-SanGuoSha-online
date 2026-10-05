@@ -49,10 +49,12 @@ export type GeneralPackLoadReport = {
   errors: { pack: string; message: string }[];
 };
 
-const SKILL_KINDS: SkillKind[] = ["active", "triggered", "conversion", "passive", "lord"];
-const IMMUNITY_CARDS: TargetImmunityCard[] = ["slash", "duel", "snatch", "indulgence", "supplies-cut"];
-/** `conversion.from.suit` 允许的花色（`none` 是无花色的技术值，不作为筛选条件）。 */
-const CONVERSION_SUITS: CardSuit[] = ["heart", "diamond", "club", "spade"];
+/** `kind` 允许值；`schema/skill.schema.json` 与校验器读同一份（防漂移测试见 `src/tools/pack-schema.test.ts`）。 */
+export const SKILL_KINDS: SkillKind[] = ["active", "triggered", "conversion", "passive", "lord"];
+/** `rules.targetImmunity.cards` 允许值（同上，schema 的单一真相）。 */
+export const TARGET_IMMUNITY_CARDS: TargetImmunityCard[] = ["slash", "duel", "snatch", "indulgence", "supplies-cut"];
+/** `conversion.from.suit` 允许的花色（`none` 是无花色的技术值，不作为筛选条件）；schema 的单一真相。 */
+export const CONVERSION_SUITS: CardSuit[] = ["heart", "diamond", "club", "spade"];
 
 const isString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
@@ -105,9 +107,9 @@ const validateRules = (raw: unknown, label: string): SkillRules => {
         if (
           !Array.isArray(immunity.cards) ||
           immunity.cards.length === 0 ||
-          immunity.cards.some((card) => !IMMUNITY_CARDS.includes(card as TargetImmunityCard))
+          immunity.cards.some((card) => !TARGET_IMMUNITY_CARDS.includes(card as TargetImmunityCard))
         ) {
-          throw new Error(`${label} 的 rules.targetImmunity.cards 非法（允许：${IMMUNITY_CARDS.join("/")}）`);
+          throw new Error(`${label} 的 rules.targetImmunity.cards 非法（允许：${TARGET_IMMUNITY_CARDS.join("/")}）`);
         }
         if ("requireEmptyHand" in immunity && typeof immunity.requireEmptyHand !== "boolean") {
           throw new Error(`${label} 的 rules.targetImmunity.requireEmptyHand 必须是布尔`);

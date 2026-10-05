@@ -259,11 +259,15 @@ void test("targetIntent 校验：非法值被拒绝（隔离进 errors）", asyn
   assert.match(report.errors[0]?.message ?? "", /targetIntent/);
 });
 
-void test("示例包 examples/generals 可整体加载（吕蒙声明式 + 神赵云代码技能）", async () => {
+/** gallery（`examples/generals/`）的武将名；新增参考武将时同步这里（测试只要求"都加载成功"，不要求恰好这些）。 */
+const GALLERY_GENERALS = ["吕蒙", "神赵云", "张角", "凌统", "荀彧", "卧龙诸葛亮", "刘禅"];
+
+void test("示例包 examples/generals 可整体加载（含全部 gallery 武将）", async () => {
   const report = await loadGeneralPacks({ dir: join(process.cwd(), "examples", "generals"), pool: "all" });
-  // loaded 按武将名 localeCompare 排序，断言集合而非顺序。
-  assert.deepEqual([...report.loaded].sort(), ["吕蒙", "神赵云"].sort());
   assert.deepEqual(report.errors, []);
+  for (const name of GALLERY_GENERALS) {
+    assert.ok(report.loaded.includes(name), `${name} 应该被加载（实际 loaded=${report.loaded.join("/")}）`);
+  }
   assert.deepEqual(getPackSkill("吕蒙/克己")?.rules, { skipDiscardPhaseIfNoSlash: true });
   assert.equal(getPackSkill("吕蒙/涉猎")?.kind, "active");
   // 神赵云「绝境」：声明式表达不了运行时数值，用 before_draw 钩子的代码技能实现。
@@ -271,8 +275,13 @@ void test("示例包 examples/generals 可整体加载（吕蒙声明式 + 神�
   assert.equal(juejing?.kind, "triggered");
   assert.deepEqual(juejing?.triggers, ["before_draw"]);
   assert.equal(typeof juejing?.onTrigger?.before_draw, "function");
-  // 神赵云「龙魂」：当牌转换（conversion）目前引擎不执行，但必须能被加载与识别。
+  // 神赵云「龙魂」：声明式当牌转换（Phase 7 起真正生效）。
   assert.equal(getPackSkill("神赵云/龙魂")?.kind, "conversion");
+  // gallery 新样例的机制抽查：改判 / 失去装备 / 取消杀 / 声明式转换。
+  assert.equal(typeof getPackSkill("张角/鬼道")?.onTrigger?.judgment, "function");
+  assert.equal(typeof getPackSkill("凌统/旋风")?.onTrigger?.equip_lost, "function");
+  assert.equal(typeof getPackSkill("刘禅/享乐")?.onTrigger?.slash_targeted, "function");
+  assert.equal(getPackSkill("卧龙诸葛亮/看破")?.conversions?.[0]?.to, "无懈可击");
 });
 
 /** 按 SKILL_RULE_KEY_KINDS 生成一个该键的合法取值（词汇表与 validateRules 必须同步）。 */

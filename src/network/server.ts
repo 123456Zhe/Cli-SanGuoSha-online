@@ -102,6 +102,15 @@ export class GameServer {
   private seatGenerals: Map<string, string> | undefined; // playerId -> join 时用调试参数指定的武将（重开一局仍沿用）
   private server: Server | null = null;
   private restarting = false;
+  /**
+   * 对局代号：每重开一局 +1。
+   *
+   * `checkAndHandleGameOver()` 在 `autoRestartAfterGameOver` 时会先等 3 秒再重开新局，期间挂起的
+   * 旧调用栈（AI 驱动循环、出牌/弃牌收尾）恢复后必须整体失效——否则会继续驱动刚重开的、甚至
+   * 还没开局的空对局：`game.getCurrentPlayer()` 抛 "current player missing"，未捕获即杀掉整个进程
+   * （联机实测：打完整一局、结算重开时服务端 exit 1）。
+   */
+  private gameGeneration = 0;
   private closing = false;
   private readonly aiLoop: GameAiLoop | SystemOneAgent | null;
   private readonly localAiEngine: LocalAiEngine | null;
@@ -361,11 +370,21 @@ export class GameServer {
   }
 
   /** 驱动循环每次 await 后校验：epoch 变化说明玩家已重连/再次掉线，或服务器正在关闭，应停止代打。 */
-  private isStaleDrive(playerId: string, driveEpoch: number): boolean {
-    return this.closing || this.getEpoch(playerId) !== driveEpoch;
+  private isStaleDrive(playerId: string, driveEpoch: number, gameGeneration = this.gameGeneration): boolean {
+    return this.closing || this.gameGeneration !== gameGeneration || this.getEpoch(playerId) !== driveEpoch;
+  }
+
+  /**
+   * 旧调用栈应立即停止推进：对局已换代、已结束，或当前 `this.game` 是"还没有玩家"的空对局
+   * （`restartGame()` 在重开时人数不足会留下这样一个空对局；此时 `currentPlayer` getter 会抛错）。
+   * 注意不能用 `!this.started`：测试会把对局直接注入 GameServer 后调用这些流程，此时 started 为 false。
+   */
+  private isStaleGame(generation: number): boolean {
+    return this.gameGeneration !== generation || this.game.isGameOver() || this.game.getSnapshot().players.length === 0;
   }
 
   private async restartGame(): Promise<void> {
+    this.gameGeneration += 1;
     this.game = new this.gameClass(secureRng);
     this.game.setDeferDyingResolution(true);
     this.logs.length = 0;
@@ -914,6 +933,7 @@ export class GameServer {
   }
 
   private async runTurnStart(playerId: string): Promise<void> {
+    const generation = this.gameGeneration;
     const effects = this.game.getTurnStartOptionalEffects(playerId);
     for (const effect of effects) {
       await this.askOptionalEffect(playerId, effect, "摸牌阶段");
@@ -929,7 +949,7 @@ export class GameServer {
     this.trackBattlefield();
     this.broadcastState();
     await this.checkAndHandleGameOver();
-    if (this.game.isGameOver()) return;
+    if (this.isStaleGame(generation)) return;
     if (this.game.consumePendingNextTurn()) {
       // 当前玩家在判定阶段阵亡，已推进到下一玩家：直接开始其回合
       this.beginTurn();
@@ -940,7 +960,7 @@ export class GameServer {
     // 这里必须统一消费，否则真人/AI 回合都会卡死在弃牌阶段（pendingDiscardCount=0 且无动作可执行）。
     // resolveTurnEnd 内部自带保护：pendingTurnEndPlayer 为空或不属于当前玩家时直接返回。
     await this.resolveTurnEnd(playerId);
-    if (!this.game.isGameOver() && this.isAiDriven(this.game.getCurrentPlayer().id)) {
+    if (!this.isStaleGame(generation) && this.isAiDriven(this.game.getCurrentPlayer().id)) {
       await this.driveAiTurn(this.game.getCurrentPlayer().id);
     }
   }
@@ -954,11 +974,12 @@ export class GameServer {
     }
     this.activeDrivers.add(aiId);
     const driveEpoch = this.getEpoch(aiId);
+    const gameGeneration = this.gameGeneration;
     const seatLabel = this.aiPlayerIds.includes(aiId) ? "[AI]" : "（托管）";
     try {
       let actionsTaken = 0;
       while (true) {
-        if (this.isStaleDrive(aiId, driveEpoch)) {
+        if (this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
           return; // 玩家已重连，交还控制权
         }
         if (this.game.isGameOver()) {
@@ -972,7 +993,7 @@ export class GameServer {
         // 弃牌阶段：引擎只对 isAI 原生座位自动弃牌；断线托管的人类座位（isAI=false）
         // 必须由服务端主动弃牌，否则回合会永久卡死在弃牌阶段（getPlayableActions 为空、无人发 discard）。
         if (this.game.getPendingDiscardCount(aiId) > 0) {
-          await this.discardPendingForAi(aiId, driveEpoch);
+          await this.discardPendingForAi(aiId, driveEpoch, gameGeneration);
           await this.resolveTurnEnd(aiId);
           continue;
         }
@@ -985,7 +1006,7 @@ export class GameServer {
           this.log(`${seatLabel} ${current.name} 回合动作已达上限（${actionLimit}），强制结束出牌`);
           this.broadcastInterimState();
           const ended = await this.forceEndAiTurn(aiId);
-          if (!ended || this.isStaleDrive(aiId, driveEpoch)) {
+          if (!ended || this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
             return;
           }
           continue;
@@ -1001,13 +1022,13 @@ export class GameServer {
         this.log(`${seatLabel} ${current.name} 正在思考...`);
         this.broadcastInterimState();
         const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
-        if (this.isStaleDrive(aiId, driveEpoch)) {
+        if (this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
           return; // 决策期间玩家已重连，放弃本次代打出牌
         }
         const decision = picked.decision;
         if (!decision) {
           const ended = await this.forceEndAiTurn(aiId);
-          if (!ended || this.isStaleDrive(aiId, driveEpoch)) {
+          if (!ended || this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
             return;
           }
           continue;
@@ -1021,7 +1042,7 @@ export class GameServer {
         this.log(`${current.name} 正在使用 ${decision.action.label}${targetName ? " 目标 " + targetName : ""}`);
         this.broadcastInterimState();
         const actionLogs = await this.game.playAction(aiId, decision.action, decision.targetId);
-        if (this.isStaleDrive(aiId, driveEpoch)) {
+        if (this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
           return;
         }
         this.log(...actionLogs);
@@ -1030,7 +1051,13 @@ export class GameServer {
         this.trackBattlefield();
         this.broadcastState();
         await this.checkAndHandleGameOver();
+        if (this.isStaleGame(gameGeneration)) {
+          return; // 本局已结束并重开（或重开后人数不足未开局）：旧栈不得继续驱动新对局
+        }
         await this.advanceIfCurrentPlayerDead();
+        if (this.isStaleGame(gameGeneration)) {
+          return;
+        }
         if (!this.game.getCurrentPlayer().alive) {
           return;
         }
@@ -1046,8 +1073,8 @@ export class GameServer {
   }
 
   /** AI 托管座位的弃牌阶段：逐张弃掉超出体力的手牌（引擎只自动处理 isAI 原生座位）。 */
-  private async discardPendingForAi(aiId: string, driveEpoch: number): Promise<void> {
-    while (!this.isStaleDrive(aiId, driveEpoch) && this.game.getPendingDiscardCount(aiId) > 0) {
+  private async discardPendingForAi(aiId: string, driveEpoch: number, gameGeneration: number): Promise<void> {
+    while (!this.isStaleDrive(aiId, driveEpoch, gameGeneration) && this.game.getPendingDiscardCount(aiId) > 0) {
       const options = this.game.getDiscardOptions(aiId);
       const first = options[0];
       if (!first) {
@@ -1062,6 +1089,7 @@ export class GameServer {
 
   /** 强制结束当前 AI 的出牌阶段；返回 false 表示回合已终止（无人存活或无结束动作）。 */
   private async forceEndAiTurn(aiId: string): Promise<boolean> {
+    const generation = this.gameGeneration;
     const forcedEndAction = this.game.getPlayableActions(aiId).find((action) => action.type === "end");
     if (!forcedEndAction) {
       return false;
@@ -1070,8 +1098,11 @@ export class GameServer {
     this.log(...endLogs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    if (this.isStaleGame(generation)) {
+      return true; // 已换代/结束：调用方（AI 循环）会因 stale 自行退出
+    }
     await this.advanceIfCurrentPlayerDead();
-    if (!this.game.getCurrentPlayer().alive) {
+    if (this.isStaleGame(generation) || !this.game.getCurrentPlayer().alive) {
       return false;
     }
     if (this.game.getPendingDiscardCount(aiId) === 0) {
@@ -1116,6 +1147,7 @@ export class GameServer {
 
   private async resolveAfterPlay(): Promise<void> {
     if (!this.pendingAction) return;
+    const generation = this.gameGeneration;
     const { peer, action, targetId, selectedCardId } = this.pendingAction;
     try {
       // Broadcast an interim state with empty actions before playAction.
@@ -1138,8 +1170,9 @@ export class GameServer {
       this.broadcastState();
 
       await this.checkAndHandleGameOver();
+      if (this.isStaleGame(generation)) return;
       await this.advanceIfCurrentPlayerDead();
-      if (!this.game.getCurrentPlayer().alive) return;
+      if (this.isStaleGame(generation) || !this.game.getCurrentPlayer().alive) return;
       if (this.game.getPendingDiscardCount(peer.id) === 0) {
         await this.resolveTurnEnd(peer.id);
       }
@@ -1149,10 +1182,12 @@ export class GameServer {
   }
 
   private async handleDiscard(peer: Peer, handIndex: number): Promise<void> {
+    const generation = this.gameGeneration;
     const logs = await this.game.discardForCurrentPlayer(peer.id, handIndex);
     this.log(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
+    if (this.isStaleGame(generation)) return;
     if (this.game.getPendingDiscardCount(peer.id) === 0) {
       await this.resolveTurnEnd(peer.id);
     }
@@ -1182,6 +1217,7 @@ export class GameServer {
   }
 
   private async resolveTurnEnd(playerId: string): Promise<void> {
+    const generation = this.gameGeneration;
     const enderId = this.game.consumePendingTurnEnd();
     if (enderId !== playerId) return;
     const player = this.game.getSnapshot().players.find((p) => p.id === playerId);
@@ -1198,6 +1234,7 @@ export class GameServer {
       this.trackBattlefield();
       this.broadcastState();
       await this.checkAndHandleGameOver();
+      if (this.isStaleGame(generation)) return;
       this.reviewStrategiesForTurnEnd(playerId);
       if (this.game.consumePendingNextTurn()) {
         this.beginTurn();
@@ -1206,6 +1243,10 @@ export class GameServer {
   }
 
   private async advanceIfCurrentPlayerDead(): Promise<void> {
+    const generation = this.gameGeneration;
+    if (this.isStaleGame(generation)) {
+      return; // 已换代/结束/未开局：不碰 currentPlayer（重开后的空对局会让 getter 抛错）
+    }
     const current = this.game.getCurrentPlayer();
     if (current.alive) return;
     const logs: string[] = [`${current.name} 已阵亡`];
@@ -1213,7 +1254,7 @@ export class GameServer {
     this.log(...logs);
     this.broadcastState();
     await this.checkAndHandleGameOver();
-    if (this.game.isGameOver()) return;
+    if (this.isStaleGame(generation)) return;
     this.reviewStrategiesForTurnEnd(current.id);
     if (this.game.consumePendingNextTurn()) {
       this.beginTurn();
@@ -1225,7 +1266,7 @@ export class GameServer {
     this.log(...(await this.game.ensureTurnState()));
     this.broadcastState();
     await this.checkAndHandleGameOver();
-    if (this.game.isGameOver()) return;
+    if (this.isStaleGame(generation)) return;
     if (this.game.consumePendingNextTurn()) {
       this.beginTurn();
     }

@@ -2,7 +2,7 @@
 
 > 目标：让**武将 = 一个文件夹**（`generals/<武将名>/`），`general.json` 声明元数据与技能列表，技能各自成文件（JSON 或代码）；新增武将/技能不需要改本项目的 `src/`，也不需要重新编译。同时让**局内 AI 只注入本场出现的武将及其关联技能说明**，取代现在从 `rules.md` 注入全量武将知识的方式。
 
-状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；**M4（Phase 5 校验器 / 自对弈 / 文档生成）已完成**（见 §16）；**Phase 7（声明式当牌转换 / provide_response / useSlash / 手牌上限）已完成**（见 §19，补完 §17 的 ①②③④）；`神赵云` 实测见 §18。附带的两项规则修正已完成，见 §7。
+状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；**M4（Phase 5 校验器 / 自对弈 / 文档生成）已完成**（见 §16）；**Phase 7（声明式当牌转换 `conversions` / 响应拦截点 `provide_response` / `ctx.useSlash` / 手牌上限）已完成**（见 §19，补完 §17 的 ① 与 §18 给出的 `provide_response`）；`神赵云` 实测见 §18。§17 的 ②③④（JSON Schema / 作者 `.d.ts` / 参考武将 gallery）见 §20。附带的两项规则修正已完成，见 §7。
 
 ## 一、已确认的决策
 
@@ -90,38 +90,43 @@ type SkillModule = {
   displayName: string;
   kind: SkillKind;
   description: string;            // 必填
-  priority?: number;              // 钩子执行顺序（默认 100，升序）
-  oncePerTurn?: boolean;
+  priority?: number;              // 钩子执行顺序（当前仍是空转，见 §17 row 5）
   optional?: boolean;             // 需要"是否发动"询问
-  triggers?: SkillTrigger[];      // 基础 4 个触发点 + Phase 6 的 7 个拦截点（同一套 onTrigger）
+  triggers?: SkillTrigger[];      // 4 个基础触发点 + 8 个拦截点（共 12 个，同一套 onTrigger）
   requiresTarget?: boolean;
   targetIntent?: "enemy" | "ally" | "any";  // 主动技能目标取向（供 AI 选目标）
   label?: string;                 // 出牌动作标签（原 game.ts 手写标签迁到此处）
   rules?: SkillRules;             // 声明式数值/豁免
+  handLimit?(player): number;     // 手牌上限运行时修正（纯函数；Phase 7）
   canUse?(ctx, player): boolean;
+  getTargets?(ctx, player): string[];
   play?(ctx, player, targetId?): Promise<string[]>;
   onTrigger?: Partial<Record<SkillTrigger, SkillHook>>;
-  conversions?: ConversionRule[]; // 当牌规则（未实现，走代码技能）
+  conversions?: SkillConversion[]; // 当牌转换（Phase 7 已实现）
 };
 ```
+
+> 上面是设计期草图；**实现后的权威契约**见 `docs/generals-pack-api.md` 与 `src/engine/skill-module.ts`
+> （外部技能没有 `oncePerTurn` 自动限制，需要限次请在 `canUse` 里查 `skillUsedThisTurn`）。
 
 > Phase 6 实现时没有另开 `interceptors` 字段：拦截点与触发点共用 `onTrigger` 与同一张钩子表，
 > 区别只在 payload 里是否有"可改写/可否决"的字段（如 `skipDiscardPhase`、`canceled`、`judgmentCard`）。
 > 这样 loader 校验、注册表、AI 提示、测试桩全部复用同一条路径。
 
-`SkillRules` 词汇表（Phase 3 目标；"现状"列指今天的实现位置）：
+`SkillRules` 词汇表（Phase 3 目标；下表"现状"已全部落在 `skill-rules.ts` 谓词层，权威表见 `docs/generals-pack-api.md`）：
 
-| 字段 | 语义 | 使用者 | 现状 |
-|---|---|---|---|
-| `distanceDelta` | 计算距离时 -N | 马术 | 硬编码于 `computeDistanceBetween`（resolve.ts） |
-| `trickDistanceExempt` | 使用受距离限制的锦囊无距离限制 | 奇才 | **已实现**（硬编码于 `resolve.canReachForDistanceOneTrick`） |
-| `slashLimitExempt` | 出牌阶段杀无次数限制 | 咆哮 | 硬编码 5 处（game.ts） |
-| `responseMultiplier` | 需 N 张闪/杀响应 | 无双 | 硬编码于 resolveSlash/resolveDuel |
-| `targetImmunity` | 不能成为某些牌的目标 | 空城、谦逊 | 硬编码于 `findTargetsByCard` + 结算层 |
-| `drawPhaseDelta` | 摸牌阶段 ±N | 英姿、裸衣 | 钩子（skill-hooks.ts） |
-| `damageDelta` | 杀/决斗伤害 ±N | 裸衣、酒 | 硬编码于 resolveSlash/resolveDuel |
-| `peachSaveBonus` | 被桃救时额外回复 | 救援 | 硬编码于 resolve.ts |
-| `skipDiscardPhaseIfNoSlash` | 未出杀时可跳过弃牌阶段 | 克己（示例包） | ✅ Phase 6（`game.endPlayPhase`） |
+| 字段 | 语义 | 内置使用者 |
+|---|---|---|
+| `distanceDelta` | 计算距离时 -N | 马术 |
+| `trickDistanceExempt` | 使用受距离限制的锦囊无距离限制 | 奇才 |
+| `slashLimitExempt` | 出牌阶段杀无次数限制 | 咆哮 |
+| `responseMultiplier` | 需 N 张闪/杀响应 | 无双 |
+| `targetImmunity` | 不能成为某些牌的目标 | 空城、谦逊 |
+| `drawPhaseDelta` | 摸牌阶段 ±N | 英姿、裸衣 |
+| `damageDelta` | 杀/决斗伤害 ±N | 裸衣 |
+| `peachSaveBonus` | 被桃救时额外回复 | 救援 |
+| `skipDiscardPhaseIfNoSlash` | 未出杀时可跳过弃牌阶段 | 克己（示例包） |
+| `handLimitDelta` | 手牌上限 +N | 无内置（Phase 7；运行时变量用代码技能 `handLimit(player)`） |
 
 **能力清单（Context API）必须写进 API 文档**，尤其"调用方还需要自己做什么"这类隐式约定，例如：
 `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己 `discardPile.push`（见 `skills.ts` 现有写法）；伤害后必须走 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead`；失去手牌必须走 `removeHandCardAt`，否则连营不触发。
@@ -146,7 +151,7 @@ type SkillModule = {
 | 14 | AI 动态技能说明（详见 §6） | `src/agent/match-context.ts`（新增）、`prompt.ts`、`ai.ts`、`local-engine.ts`、`jev-advisor.ts`、`server.ts`、`app.ts` | ✅ 4（`local-engine.ts` 见 §15 补齐） |
 | 15 | `rules.md` §14/§16.3 改为由注册表 + 武将库生成 | 新增生成脚本 | ✅ 4/5（`src/tools/gen-rules.ts` + `rules:gen`/`rules:check` + 漂移测试，见 §16） |
 | 16 | 独立校验器 `npm run generals:check <dir>` + headless 自对弈不变量断言 | 新增 `src/tools/generals-check.ts` | ✅ 5（`--json`/`--strict`/`--selfplay=N`，见 §16） |
-| 17 | 拦截点：`judgment`、`hand_card_lost`、`equip_lost`、`slash_targeted`、`peach_save`、`card_used`、`discard_phase_start` | `resolve.ts`、`game.ts`、`skill-hooks.ts`、`types.ts` | ✅ 6（`provideResponse` 未做，见 §15） |
+| 17 | 拦截点：`judgment`、`hand_card_lost`、`equip_lost`、`slash_targeted`、`peach_save`、`card_used`、`discard_phase_start` | `resolve.ts`、`game.ts`、`skill-hooks.ts`、`types.ts` | ✅ 6（第 8 个 `provide_response` 由 Phase 7 补齐，见 §19） |
 
 ## 五、阶段与里程碑
 
@@ -156,7 +161,7 @@ type SkillModule = {
 | **M2** 外部武将包进游戏 | 1 + 2 | ✅ 已完成（见 §13）：放个文件夹就能选将/对局/触发技能 | 1 天 |
 | **M3** 声明式技能 | 3 | ✅ 已完成（见 §14）：`SkillRules` 词表 + 谓词层，8 条硬编码规则数据化 | 半天 |
 | **M4** 可批量生成 | 5 | ✅ 已完成（见 §16）：独立校验器（真实 loader + 静态 lint + 可选自对弈）+ headless 自对弈不变量断言 + `rules.md` 生成 | 半天 |
-| M5 | 6 | ✅ 已完成按需子集（见 §15）：7 个拦截点；`provideResponse` 待做 | 按需 |
+| M5 | 6 | ✅ 已完成按需子集（见 §15）：7 个拦截点（Phase 7 又补第 8 个 `provide_response`） | 按需 |
 
 关键路径 `0 → 1 → 2 → 3 → 5`；**Phase 4 只依赖 Phase 0，可与 Phase 2 并行**。
 
@@ -193,15 +198,20 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 | 6 | 决斗触发激昂时未判红色（`resolve.ts` `qualifies` 恒真） | 裁定偏差 |
 | 7 | 魂姿只在 `turn_start` 检查 `hp === 1` | 回合外掉血要等下个回合开始才觉醒 |
 
-**以上 7 项已在 M3 一并处理**（见 §14）：#1 受控常量、#2/#3/#4 文档修正、#5/#6/#7 代码修复。
+**以上 7 项已在 M3 一并处理**（见 §14）：#1 受控常量、#2/#3/#4 文档修正、#5 主公 +1 体力。
+
+> **复审更正（commit `74086e5`）**：#6/#7 的 M3 处理与官方规则不符，已改回官方口径——
+> **激昂**：【决斗】不分颜色一律触发（原先"判色"只适用于【杀】，且仅红色【杀】触发）；
+> **魂姿**：只在准备阶段（`turn_start`）判定 `hp === 1`，移除"受伤即时觉醒"。
+> `rules.md` §14 与技能注册表的 `description` 曾滞后于该改动，已按实现同步（`rules:gen`）。
 
 ## 九、验收门槛（每个阶段）
 
 - `npm run typecheck` 干净
-- `npm test` 全绿（**当前基线 206**；新增用例同步更新 `AGENTS.md` 计数）
+- `npm test` 全绿（**当前基线 250**；新增用例同步更新 `AGENTS.md` 与本行计数）
 - `npm run lint` 不新增错误（存量 25 个不动）
 - 新增逻辑不引入 `no-explicit-any`、不引入浮动 Promise
-- 武将包相关改动：`npm run generals:check -- --dir=examples/generals` **0 错误**（当前基线 2 个警告，均为神赵云 `龙魂` 的已知 `conversion` 缺口；新增警告视同回归）
+- 武将包相关改动：`npm run generals:check -- --dir=examples/generals` **0 错误 / 0 警告**（Phase 7 修复 `conversions` 后已从"2 个已知警告"回到干净基线；任何新增警告视同回归）
 - 改过技能 `description` / 武将库：`npm run rules:check` 干净（`rules.md` §14/§16.3 是生成物）
 - 涉及线协议时：只做等价替换或加可选字段，**不 bump** `NETWORK_PROTOCOL_VERSION`，并同步 `webui/src/protocol.ts`
 
@@ -262,6 +272,7 @@ M2 明确未做：声明式 `.skill.json` 的 `rules` 只加载保留、不参�
 - **调用点迁移（行为不变）**：`resolve.ts`（马术距离、奇才锦囊减免、无双响应数、裸衣伤害、空城/谦逊免疫、救援回复、激昂决斗判色）、`game.ts`（咆哮次数豁免 5 处、空城/谦逊目标筛选、主公 +1 体力）、`skills.ts`（`canPlaySlashInTurn`）、`skill-hooks.ts`（英姿/裸衣摸牌数值、魂姿即时觉醒）。
 - **外部 `rules` 校验**（`general-pack.ts validateRules`）：未知键/类型不符/非法 `targetImmunity.cards` → 抛错（隔离进 `report.errors`，`--strict-generals` 整体失败）；`examples/generals/吕蒙/克己.skill.json` 已改为不含无效 rules。
 - **§8 修复**：`UNOWNED_BUILTIN_SKILLS`（强袭/英魂）替代测试白名单；主公 ≥5 人局 +1 体力上限；激昂决斗按牌色判定（无牌来源的技能型决斗不触发）；魂姿掉血到 1 即时觉醒；`rules.md` 孙策/曹仁/遗计条目修正。
+  > **后续更正**：激昂决斗判色与魂姿即时觉醒这两条已在 `74086e5` 按官方规则改回（见 §8 复审更正），此处仅作 M3 阶段的历史记录。
 - **测试**：新增 `skill-rules.test.ts`（4）、`m3-rule-fixes.test.ts`（3，覆盖主公体力/激昂判色/魂姿），`general-pack.test.ts` +3（rules 校验），157 → **167**，`typecheck` 干净，lint 无新增。
 
 M3 明确未做：非 `rules` 词汇表可表达的效果（如克己跳弃牌、反击类）仍待 **Phase 6 拦截点**；`local-engine.ts` 仍读静态规则文本；`priority` 钩子顺序快照测试未做（Phase 4）。
@@ -270,7 +281,7 @@ M3 明确未做：非 `rules` 词汇表可表达的效果（如克己跳弃牌�
 
 已完成，落点：
 
-- **触发点/拦截点合并为一套机制**：`types.ts` 新增 `SKILL_TRIGGERS` 常量数组（`SkillTrigger` 由它派生，单一真相），4 个基础触发点 + 7 个拦截点：
+- **触发点/拦截点合并为一套机制**：`types.ts` 新增 `SKILL_TRIGGERS` 常量数组（`SkillTrigger` 由它派生，单一真相），4 个基础触发点 + 7 个拦截点（Phase 7 又补 `provide_response`，共 12 个）：
   `judgment`（改判：payload `judgmentCard` 可替换）、`slash_targeted`（payload `canceled` 可取消杀）、
   `hand_card_lost`、`equip_lost`（payload `equip`）、`card_used`（payload `reason` = 使用/打出）、
   `peach_save`（payload `peachSaveBonus` 累加回复）、`discard_phase_start`（payload `skipDiscardPhase` 跳弃牌）。
@@ -339,21 +350,27 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 | # | 缺口 | 影响 | 落点 |
 |---|------|------|------|
 | 1 | ~~**`conversions` 完全没实现**~~ | ✅ **Phase 7 已补**（见 §19）：声明式当牌转换 + 出牌阶段枚举 + 响应时机 | — |
-| 2 | 没有 **JSON Schema**（`schema/general.schema.json` / `schema/skill.schema.json`） | 编辑器/agent 没有机器可读的结构约束，只能靠 `generals:check` 事后反馈 | 新增 `schema/`，`generals-check` 直接用它校验 |
-| 3 | 没有**作者用 `.d.ts`**（`SkillModuleCtx` 的能力清单只在文档里，没有签名） | 代码技能作者只能猜 `ctx.drawCards(...)` 的签名与返回值 | 新增 `types/generals-pack.d.ts`（从 `skill-module.ts` 导出，或生成） |
-| 4 | **参考实现只有 2 个**（`examples/generals/吕蒙`、`examples/generals/神赵云`） | 已覆盖"声明式 rules / 代码主动技能 / 代码触发钩子 / 声明式当牌转换 / 运行时变量（handLimit）"；**改判/取消杀/主公技/AI 选目标**仍没有可抄的样例 | `examples/generals/` 继续补到 8–12 个覆盖各机制的武将（**默认不加载**） |
+| 2 | ~~没有 **JSON Schema**~~ | ✅ **已补**（§20）：`schema/general.schema.json` + `schema/skill.schema.json`，enum/字段与代码单一真相由 `src/tools/pack-schema.test.ts` 卡住 | — |
+| 3 | ~~没有**作者用 `.d.ts`**~~ | ✅ **已补**（§20）：`types/generals-pack.d.ts`（含 `SkillModuleCtx` 全部签名），与真实类型的漂移由 `src/tools/generals-pack-types.test.ts` 卡住 | — |
+| 4 | ~~**参考实现只有 2 个**~~ | ✅ **已补到 7 个**（§20）：新增 `张角`（改判 + 使用【闪】触发判定伤害）、`凌统`（失去装备）、`荀彧`（受伤补牌）、`卧龙诸葛亮`（纯声明式当牌转换）、`刘禅`（取消杀）；**仍未覆盖** `hand_card_lost`/`peach_save`/`before_damage` 与代码版 `provide_response`（见 §20 覆盖矩阵） | — |
 | 5 | `priority` 是**空转**（`getPackHooksFor` 只按注册顺序追加，从不排序）；`kind` 的部分语义没有落点 | 钩子顺序不可控、`kind` 与实际行为可能不一致（校验器只能警告） | `skill-hooks.ts` 排序，或删掉 `priority` 字段 |
-| 6 | pack 钩子**没有 try/catch**（`skill-hooks.ts` 的 `onTrigger` 调用），只有 `play` 有 | 外部钩子抛错会**炸掉整局**（CLI/联机都一样） | 包一层 try/catch + 归属技能名写进日志（与 `useSkillAction` 对齐） |
+| 6 | ~~pack 钩子**没有 try/catch**（`skill-hooks.ts` 的 `onTrigger` 调用），只有 `play` 有~~ | ✅ **已修**（`74086e5`）：单个包钩子抛错只记日志，不打断整局 | — |
 | 7 | 内置技能行为散在 74 个 `hasSkill` 分支（`game.ts` 38 / `resolve.ts` 14 / `skills.ts` 10 / `skill-hooks.ts` 12） | 外部包能表达的能力 = 这些分支能表达的子集；不一致会让作者"按内置抄却抄不出来" | 内置技能模块化迁移（**已决定先不做**） |
 
 **Phase 7 后新增的残留缺口**：`conversions` 一次只吃**一张**源牌（龙魂的"至多两张同花色"双牌模式未实现）；
 `to` 只放行 `杀/火杀/雷杀/桃/闪/无懈可击`（当延时锦囊/装备的转换，如国色的方块当乐不思蜀，仍不支持）。
 
 验收标准（"独立写出武将"这件事算不算成立）：起一个**没有本仓库上下文**的 subagent，只给 `docs/generals-pack-api.md`
-+ `schema/` + 作者 `.d.ts`（禁止读 `src/`、`examples/`），让它写三个武将：
-张飞（纯声明式）、司马懿（`judgment` 改判 + 反馈）、黄月英（奇才 + 集智 + 一张当牌转换）。
-判定：`npm run generals:check -- --json` 零错误、`--selfplay=100` 零违规、日志里三个技能都真的触发过、`src/` 一行未改。
-按现状，第 2/3/4 项不补则"写对"几乎全靠运气——所以顺序建议是 **2+3+4 → 5+6**（第 1 项已在 §19 补完）。
++ `schema/` + `types/generals-pack.d.ts`（禁止读 `src/`、`examples/`），让它写三个武将。
+判定：`npm run generals:check -- --json` 零错误、`--selfplay=100` 零违规、日志里技能都真的触发过、`src/` 一行未改。
+
+> **验收题目必须避开内置武将名**：原稿用「张飞 / 司马懿 / 黄月英」，但这三个都是**内置武将**，
+> 外部包一旦同名，loader 会以"武将名重复"**整包拒绝**（`loadOnePack` 的重名检查），
+> 于是无论作者写得多好都过不了验收。请改用非内置名，例如
+> **张角**（`judgment` 改判 + 使用【闪】触发判定伤害）、**凌统**（`equip_lost`）、**卧龙诸葛亮**（一张当牌转换）。
+> §20 的 gallery 已经把这三个写成可抄的参考实现。
+
+第 2/3/4 项已补完（见 §20）；剩余的第 5 项（`priority` 空转）与第 7 项（内置技能模块化）按原决定优先级最低。
 
 ## 十八、神赵云参考实现（"能不能只用武将包写出来"的实测）
 
@@ -407,3 +424,73 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 `SKILL_TRIGGERS` 计数用例 11 → 12。
 
 
+
+## 二十、§17 的 ②③④：JSON Schema / 作者 `.d.ts` / 参考武将 gallery
+
+§17 的三项"让没有本仓库上下文的作者也能写对"的缺口已补完，落点如下。
+
+### ② JSON Schema（`schema/`）
+
+- `schema/general.schema.json`、`schema/skill.schema.json`（draft-07，`additionalProperties: false`）：
+  `general.json` 的字段/必填/`maxHp`/`gender`/技能名 pattern；`.skill.json` 的 `kind`/`triggers`/`targetIntent`/
+  `rules` 各键类型/`conversions` 的 `to` 白名单与 `from` 筛选项/`asResponse` 时机，全部机器可读。
+- **`src/tools/pack-schema.test.ts`（7 例）**三个方向：
+  ① **schema ↔ 代码**：enum/字段名逐项比对引擎的单一真相（`SKILL_TRIGGERS`、`SKILL_RULE_KEY_KINDS`、
+  `CONVERTIBLE_CARD_TYPES`、`CONVERSION_RESPONSE_KINDS`、`CardType` 全部取值、`SKILL_KINDS`、`SKILL_TARGET_INTENTS`、
+  `generals-check` 的 `KNOWN_*_KEYS`）；② **schema ↔ 示例包**：`examples/generals/` 每个 `general.json`/`.skill.json` 必须通过；
+  ③ **反向用例**：未知字段/坏枚举/缺必填/空 `from`/非白名单 `to`/`.skill.json` 里写代码字段都必须被报出来。
+- 为此把散落的清单**导出成单一真相**：`general-pack.ts` 的 `SKILL_KINDS`/`TARGET_IMMUNITY_CARDS`/`CONVERSION_SUITS`，
+  `generals-check.ts` 的 `KNOWN_GENERAL_KEYS`/`KNOWN_SKILL_KEYS`/`CODE_ONLY_SKILL_KEYS`。
+- 取舍：**没有**把 schema 接进 `generals-check` 的运行时校验（loader 才是权威，且不想引入 JSON Schema 依赖）。
+  schema 的职责是"编辑器/agent 的机器可读约束"，它与代码的一致性由上面的测试保证。
+
+### ③ 作者 `.d.ts`（`types/generals-pack.d.ts`）
+
+- 独立于 `src/` 的完整作者契约：`SkillModule`、`SkillModuleCtx`（两个真实 context 的**全部** 39 个成员 + 隐式约定 JSDoc）、
+  `SkillEventPayload`、`SkillRules`、`SkillConversion`、`CardSource`、`InteractionRequest`/`Decision`、
+  `Player`/`Card`/`GeneralDefinition`、全部词表（`CardType` 等用**字符串字面量联合**，作者不必 import 引擎枚举）。
+- 用法：代码技能顶部 `import type { SkillModule, SkillModuleCtx } from "../../../types/generals-pack.js";` + `satisfies SkillModule`；
+  `import type` 运行时被擦除，故不影响加载。仓库内 7 个 gallery 代码技能已实测按该 d.ts **严格编译零诊断**。
+- **`src/tools/generals-pack-types.test.ts`（9 例）**：
+  ① 用 TS 编译器 API 把 d.ts 当独立程序编译，断言**零诊断**（不依赖 `tsconfig`，因为 `types/` 与 `generals/` 一样不进 `tsc`）；
+  ② AST 逐项比对字段名与字面量联合（`SkillModuleCtx` == `SkillUseContext & SkillHooksContext`、`SkillModule`/`SkillEventPayload`/
+  `Player`/`Card`/`SkillConversion`/`CardSource` 字段名、装备词表、`SkillRules` 键、各枚举）；
+  ③ **运行时守卫**：`SkillModuleCtx` 的每个成员都必须在真实 `SanGuoGame` 实例上存在（方法须是函数、字段须在实例上）。
+
+### ③ 顺带修掉的一个真 bug（运行时守卫抓到的第一例）
+
+- `SkillHooksContext.hasRemovableCard` 只写在**类型与文档**里，从来没挂到 `SanGuoGame` 实例上；
+  内置「反馈」（`skill-hooks.ts` 的 `after_damage` 钩子里 `ctx.hasRemovableCard(source)`）一旦玩家确认发动就会抛
+  `ctx.hasRemovableCard is not a function`。它长期没暴露，是因为测试里没有 handler 时 `autoDecision` 把
+  `optional-effect` 默认成"不发动"，`&&` 短路掉了那一步。
+- 修复：`SanGuoGame` 增加 `hasRemovableCard(player)`（委托 `card-utils.ts` 的同名纯函数，原先的两处调用改用别名导入）；
+  上面 ③ 的运行时守卫测试是这类"类型里有、运行时没有"漂移的通用防线。
+- gallery 的「凌统/旋风」最初为绕开这个 bug 写了本地谓词，修复后已改回 `ctx.hasRemovableCard`（更好的教学样例）。
+
+### ④ 参考武将 gallery（`examples/generals/`，默认不加载）
+
+在 `吕蒙`（声明式 rules + 代码主动技）、`神赵云`（`before_draw` 运行时变量 + `handLimit` 纯函数 + 声明式 `conversions`）
+之外新增 5 个包，共 **7 个**，`--strict` 0 错误 / 0 警告、`--selfplay=3` 全部 0 违规：
+
+| 武将 | 技能 | 覆盖机制 |
+|---|---|---|
+| 张角 | 鬼道 | `judgment` 改判（`choose-discard` 询问 + `removeHandCardAt` + `payload.judgmentCard`） |
+| 张角 | 雷击 | `card_used` → `drawJudgmentCard` → `applyDamage(...,"thunder")` → 死亡/胜负/回合推进链 |
+| 凌统 | 旋风 | `equip_lost` + `ctx.hasRemovableCard` + `removeRandomCardFromPlayer` |
+| 荀彧 | 节命 | `after_damage` + `drawCards`/`discardFromPlayerHand`（补至体力上限、封顶 5） |
+| 卧龙诸葛亮 | 看破 | 纯声明式当牌转换（黑色手牌当【无懈可击】，`asResponse:["negate"]`） |
+| 刘禅 | 享乐 | `slash_targeted` 取消杀 + `buildUsableSources` + `requestDiscardSelection` + 自己 `discardPile.push` |
+
+- `examples/generals/README.md` 是**机制覆盖矩阵**：12 个触发点里 8 个有样例（`discard_phase_start`/`provide_response` 为声明式路径），
+  `turn_start` 只有内置样例，`hand_card_lost`/`peach_save`/`before_damage` **仍无样例**（原因写在矩阵里：贴切的真实技能与内置重叠，或需要引擎新能力）。
+- **实测暴露的两处引擎能力不对称**（已写进 `docs/generals-pack-api.md` 与 gallery README，属 §17 row 7 的具体证据）：
+  ① **触发性技能无法交互式选目标**（`InteractionRequest` 没有"选玩家"），gallery 里的选人都照内置「英魂」自动挑选；
+  ② **`judgment` 钩子只分发给"判定牌归属者"**（`drawJudgmentCard` 的 payload 只有 `actor = owner`），
+  所以外部「鬼道」只能改判自己的判定，而内置「鬼才」因写在 `game.ts` 里做全局搜索，能改判任意角色。
+
+### 测试与基线
+
+- 测试 226 → **250**：远端两个本地 AI 提交（System-One / simple 升级）先加到 232，本轮再加 18 —— `pack-schema.test.ts` 7 例 + `generals-pack-types.test.ts` 9 例 + 联机实测带出的 2 例回归（铁索连环自选目标、重开后空对局不崩服务端）；
+  另按 gallery 更新了 `general-pack.test.ts`/`generals-check.test.ts` 里钉死"示例包恰好 2 个"的断言（改为"gallery 全员加载成功"）。
+- `typecheck` 干净；`lint` 仍是 25 个存量错误（新增文件里的 `void test(...)` 已按仓库惯例处理，无新增）；
+  `generals:check --dir=examples/generals --strict` 与 `rules:check` 干净。

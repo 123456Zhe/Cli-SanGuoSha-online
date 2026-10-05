@@ -1,0 +1,295 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/123456Zhe/Cli-SanGuoSha-online/schema/skill.schema.json",
+  "title": "CLI 三国杀 武将包声明式技能 <技能名>.skill.json",
+  "description": "声明式技能（纯数据，无代码）。代码技能用 .skill.ts/.mjs，其类型契约见 types/generals-pack.d.ts。字段语义见 docs/generals-pack-api.md；loader 的权威校验在 src/engine/general-pack.ts，二者由 src/tools/pack-schema.test.ts 卡住漂移。注意：loader 会静默丢弃不在 SKILL_TRIGGERS 里的 triggers、并忽略未知字段（本 schema 提前报错）。",
+  "type": "object",
+  "required": [
+    "kind",
+    "description"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "可选。引擎不用它：技能 id 固定为 <文件夹名>/<技能名>（本文件名的技能名）。写错只会让 npm run generals:check 警告。"
+    },
+    "displayName": {
+      "type": "string",
+      "description": "UI/AI 展示名；缺省时用文件名里的技能名。"
+    },
+    "kind": {
+      "enum": [
+        "active",
+        "triggered",
+        "conversion",
+        "passive",
+        "lord"
+      ],
+      "description": "active=出牌阶段发动（需 play()，只能写代码技能） triggered=钩子触发 conversion=当牌转换 passive=锁定被动 lord=主公技。"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "必填：AI 与 UI 的唯一来源（会进 AI 上下文与 rules.md §14）。建议不超过 160 字。"
+    },
+    "triggers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": [
+          "turn_start",
+          "before_draw",
+          "before_damage",
+          "after_damage",
+          "judgment",
+          "slash_targeted",
+          "hand_card_lost",
+          "equip_lost",
+          "card_used",
+          "peach_save",
+          "discard_phase_start",
+          "provide_response"
+        ]
+      },
+      "description": "触发点/拦截点。写在这里的钩子只有代码技能能实现；声明式技能只表达「会在这个时机生效」供 AI 阅读。未知触发点会被 loader 静默丢弃。"
+    },
+    "optional": {
+      "type": "boolean",
+      "description": "需要询问「是否发动」。"
+    },
+    "priority": {
+      "type": "number",
+      "description": "预留的钩子执行顺序（当前引擎不排序，写了也不生效）。"
+    },
+    "requiresTarget": {
+      "type": "boolean",
+      "description": "主动技能是否需要指定目标。"
+    },
+    "targetIntent": {
+      "enum": [
+        "enemy",
+        "ally",
+        "any"
+      ],
+      "description": "主动技能的目标取向，供 AI 选目标：enemy 打敌人 / ally 支援队友 / any 缺省。"
+    },
+    "label": {
+      "type": "string",
+      "description": "出牌动作标签。"
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "distanceDelta": {
+          "type": "number",
+          "description": "计算与其他角色的距离时 -N（求和）。"
+        },
+        "trickDistanceExempt": {
+          "type": "boolean",
+          "description": "使用受距离限制的锦囊（顺手牵羊/兵粮寸断）无距离限制（OR）。"
+        },
+        "slashLimitExempt": {
+          "type": "boolean",
+          "description": "出牌阶段使用【杀】无次数限制（OR）。"
+        },
+        "responseMultiplier": {
+          "type": "number",
+          "description": "成为【杀】/【决斗】目标时需 N 张闪/杀响应（取最大值，默认 1）。"
+        },
+        "targetImmunity": {
+          "type": "object",
+          "description": "不能成为某些牌的目标（并集）。",
+          "required": [
+            "cards"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cards": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "enum": [
+                  "slash",
+                  "duel",
+                  "snatch",
+                  "indulgence",
+                  "supplies-cut"
+                ]
+              },
+              "description": "免疫的牌类：slash=杀 duel=决斗 snatch=顺手牵羊 indulgence=乐不思蜀 supplies-cut=兵粮寸断。"
+            },
+            "requireEmptyHand": {
+              "type": "boolean",
+              "description": "为真时还需手牌为空才免疫（空城）。"
+            }
+          }
+        },
+        "drawPhaseDelta": {
+          "type": "number",
+          "description": "摸牌阶段摸牌数 ±N（求和；由 before_draw 钩子消费）。"
+        },
+        "damageDelta": {
+          "type": "number",
+          "description": "【杀】/【决斗】伤害 ±N（求和；仅「本回合已发动」的技能生效）。"
+        },
+        "peachSaveBonus": {
+          "type": "number",
+          "description": "被【桃】救起时额外回复 N 点体力（求和）。"
+        },
+        "skipDiscardPhaseIfNoSlash": {
+          "type": "boolean",
+          "description": "本回合未使用或打出过【杀】时，可以跳过弃牌阶段（OR，需玩家确认发动）。"
+        },
+        "handLimitDelta": {
+          "type": "number",
+          "description": "手牌上限 +N（求和；默认上限 = 当前体力值）。运行时变量请用代码技能的 handLimit(player)。"
+        }
+      },
+      "description": "声明式规则数值/豁免（见 docs/generals-pack-api.md「规则词汇表」）。"
+    },
+    "conversions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "当牌转换（Phase 7）：把满足 from 的牌当作 to 使用或打出。",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "anyOf": [
+              {
+                "required": [
+                  "suit"
+                ]
+              },
+              {
+                "required": [
+                  "color"
+                ]
+              },
+              {
+                "required": [
+                  "type"
+                ]
+              }
+            ],
+            "description": "源牌筛选，三个条件之间是 AND，至少要给一个。",
+            "properties": {
+              "suit": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "heart",
+                    "diamond",
+                    "club",
+                    "spade"
+                  ]
+                },
+                "description": "花色。"
+              },
+              "color": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "red",
+                    "black"
+                  ]
+                },
+                "description": "颜色。"
+              },
+              "type": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "enum": [
+                    "杀",
+                    "火杀",
+                    "雷杀",
+                    "闪",
+                    "桃",
+                    "酒",
+                    "过河拆桥",
+                    "顺手牵羊",
+                    "决斗",
+                    "无中生有",
+                    "南蛮入侵",
+                    "万箭齐发",
+                    "借刀杀人",
+                    "无懈可击",
+                    "桃园结义",
+                    "五谷丰登",
+                    "火攻",
+                    "铁索连环",
+                    "诸葛连弩",
+                    "雌雄双股剑",
+                    "青釭剑",
+                    "寒冰剑",
+                    "银月枪",
+                    "古锭刀",
+                    "丈八蛇矛",
+                    "青龙偃月刀",
+                    "贯石斧",
+                    "方天画戟",
+                    "麒麟弓",
+                    "朱雀羽扇",
+                    "八卦阵",
+                    "仁王盾",
+                    "藤甲",
+                    "白银狮子",
+                    "的卢",
+                    "绝影",
+                    "爪黄飞电",
+                    "骅骝",
+                    "赤兔",
+                    "大宛",
+                    "紫骍",
+                    "木牛流马",
+                    "乐不思蜀",
+                    "兵粮寸断",
+                    "闪电"
+                  ]
+                },
+                "description": "牌类。"
+              }
+            }
+          },
+          "to": {
+            "enum": [
+              "杀",
+              "火杀",
+              "雷杀",
+              "桃",
+              "闪",
+              "无懈可击"
+            ],
+            "description": "当成什么牌。只有这些牌类引擎结算得了；当延时锦囊/装备会被 loader 明确拒绝。"
+          },
+          "asResponse": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "dodge",
+                "slash",
+                "negate",
+                "peach"
+              ]
+            },
+            "description": "可作为哪些响应时机打出：dodge 闪 / slash 杀 / negate 无懈可击 / peach 桃。必须与 to 对得上（杀↔slash 三种杀都行），否则 loader 报错。缺省 = 只能在出牌阶段主动使用。"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "凌统",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["旋风"],
+  "description": "吴国武将，失去装备后卷起旋风，弃置他人的牌。"
+}

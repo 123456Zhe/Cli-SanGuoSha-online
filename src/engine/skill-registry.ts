@@ -356,17 +356,18 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
     SkillName.JiJiu,
     "队友濒死求桃时，可将红色手牌当桃使用（自己濒死时不可对自己发动）。",
   ),
-  // NOTE(§8问题6)：决斗与杀均按牌色判定（红色才触发）；无牌来源的技能型决斗（离间）不触发。
+  // 实现口径（commit 74086e5 复审后）：【决斗】不分颜色一律触发；【杀】只有红色（含火杀）触发。
+  // 无实体牌的"视为使用"（离间/丈八蛇矛转化的杀）不带牌色，因此不触发。
   [SkillName.JiAng]: triggered(
     SkillName.JiAng,
     [],
-    "使用或成为红色杀/红色决斗的目标时，双方有激昂者可各摸 1 张牌。",
+    "当你使用【决斗】或红色【杀】指定目标后，或成为其目标后，你可以摸 1 张牌（使用方与目标方各自判定，均可发动）。",
     { optional: true },
   ),
   [SkillName.HunZi]: triggered(
     SkillName.HunZi,
-    ["turn_start", "after_damage"],
-    "觉醒技：体力值降到 1 时（含回合开始），体力上限 -1 并获得英姿、英魂。",
+    ["turn_start"],
+    "觉醒技：准备阶段（回合开始时）若你的体力值为 1，你减 1 点体力上限并获得英姿、英魂。",
   ),
   [SkillName.YingHun]: triggered(
     SkillName.YingHun,

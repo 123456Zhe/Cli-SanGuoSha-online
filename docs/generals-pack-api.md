@@ -1,6 +1,8 @@
 # 武将包 API
 
-对应 `docs/generals-pack-plan.md` §二/§三。M1 落地契约类型与「AI 只读本局武将技能」，M2 落地外部包加载与执行，M3 落地声明式规则数据化（`.skill.json` 的 `rules` 经 `skill-rules.ts` 谓词层参与结算），Phase 6 落地 7 个拦截点（见「触发点与拦截点」）。
+对应 `docs/generals-pack-plan.md` §二/§三。M1 落地契约类型与「AI 只读本局武将技能」，M2 落地外部包加载与执行，M3 落地声明式规则数据化（`.skill.json` 的 `rules` 经 `skill-rules.ts` 谓词层参与结算），Phase 6 落地拦截点，Phase 7 落地声明式当牌转换 `conversions` / `provide_response` / `useSlash` / 手牌上限（见「触发点与拦截点」「当牌转换」「手牌上限」）。
+
+**作者资源**（不读 `src/` 也能写出武将）：`schema/general.schema.json`、`schema/skill.schema.json`（机器可读结构约束，编辑器/agent 可直接消费）、`types/generals-pack.d.ts`（`SkillModule` / `SkillModuleCtx` 的完整作者接口签名）。
 
 ## 目录与文件格式
 
@@ -35,7 +37,8 @@ generals/                      # 项目根目录（在 src 之外，不进 typec
 完整的可运行示例见 `examples/generals/`：
 
 - `吕蒙/`：`克己`（声明式 `rules`）+ `涉猎`（代码主动技能）。
-- `神赵云/`：`绝境`（代码技能，数值是运行时变量 → `before_draw` 钩子）+ `龙魂`（`kind: "conversion"` 的**缺口标本**：当前格式写不出来，校验器会稳定报出两条警告）。
+- `神赵云/`：`绝境`（代码技能：`before_draw` 钩子 + `handLimit(player)` 纯函数）+ `龙魂`（声明式 `conversions`：红桃当桃/方块当火杀/梅花当闪/黑桃当无懈可击；校验器 **0 错误 / 0 警告**）。
+- 其余参考武将（覆盖改判/取消杀/支援型主动技/失去装备/使用锦囊等机制）见 `examples/generals/`，**默认不加载**。
 
 ## 技能身份与命名空间
 
@@ -55,7 +58,7 @@ type SkillModule = {
   displayName: string;
   kind: SkillKind;
   description: string;            // 必填：AI 与 UI 的唯一来源
-  triggers?: SkillTrigger[];      // 基础 4 个触发点 + Phase 6 的 7 个拦截点（见下表）
+  triggers?: SkillTrigger[];      // 4 个基础触发点 + 8 个拦截点（共 12 个，见下表）
   optional?: boolean;
   priority?: number;
   requiresTarget?: boolean;
@@ -224,7 +227,20 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 - `judgment` 钩子改判时，必须自己把替换牌从原区域移除（`removeHandCardAt` / `removeUsableCardBySourceId`）；引擎只负责把它置入弃牌堆。
 - `hand_card_lost` 属于"通知"型钩子：调用方没传 `logs` 时（如 `takeRandomHandCard`）钩子日志会被丢弃，别把关键状态只写进日志。
 - `peach_save` / `discard_phase_start` 是"拦截"型钩子：改的是 payload 字段（`peachSaveBonus` / `skipDiscardPhase`），不要自己直接改 `player.hp` 或跳过结算。
+- **触发性技能没有"交互式选目标"**：`InteractionRequest` 只有 `respond`/`collateral`/`choose-discard`/`choose-suit`/`optional-effect` 五种，没有"选一名玩家"。内置技能的做法是**自动挑选**（「英魂」按体力/手牌排序取第一个）或使用固定目标（「反馈」= 伤害来源、「奸雄」= 自己）。需要玩家真正点人的技能请做成 `kind: "active"`（`getTargets` + `play(targetId)`），或像内置那样自动挑并在 `description` 里说明。
+- **`judgment` 钩子只能改判"归属者自己"的判定**：`drawJudgmentCard` 的 payload 只有 `actor = owner`，包钩子又只在事件相关玩家（`actor`/`target`/`source`）拥有该技能时执行。所以外部「鬼道」这类技能影响不到别人的判定——内置「鬼才」不受限，因为它的实现在 `game.ts` 里做全局玩家搜索。这是内置与外部的一处真实能力不对称。
 - **别在钩子里做会再次触发同一钩子的事**：`card_used` 钩子里再"使用一张牌"、`hand_card_lost` 钩子里再移除手牌都会无限递归（引擎不设保护）。需要递归语义时用 `skillFlagsThisTurn` 之类的状态自己打断。
+
+## 作者类型补全与结构校验（§17 ②③）
+
+- **类型签名**：`types/generals-pack.d.ts` 是独立于 `src/` 的作者契约。代码技能顶部加
+  `import type { SkillModule, SkillModuleCtx } from "../../types/generals-pack.js";`（包在 `examples/generals/<武将>/` 下时多一层 `../../../`），
+  对象写成 `export default { … } satisfies SkillModule;`，即可获得补全与类型检查。`import type` 在运行时被完全擦除，因此该相对路径不影响加载。
+  > `.ts` 技能只有 bun/tsx（`npm run dev`/`host`/`generals:check`）会做语法转译；纯 node 环境请用 `.mjs` 或 `--generals-json-only`。
+- **结构约束**：`schema/general.schema.json` / `schema/skill.schema.json`（JSON Schema draft-07）供编辑器与 agent 机器读取。
+  两份 schema 与代码的枚举/字段一一对应，由 `src/tools/pack-schema.test.ts` 卡住漂移；`.skill.json` 里写代码技能专有字段（`play`/`onTrigger`/`handLimit`…）会被 schema 判为未知字段。
+- **可抄的参考实现**：`examples/generals/`（默认不加载），机制覆盖矩阵见 `examples/generals/README.md`。
+  注意外部包**不能与内置武将同名**（loader 会以"武将名重复"整包拒绝）。
 
 ## AI 如何认识本局武将（4 个消费点）
 
@@ -252,8 +268,9 @@ npm run generals:check -- --dir=generals --selfplay=3  # 每个武将强制上�
 
 1. **权威检查**：直接调用真实 loader，报告 schema/文件缺失/rules 非法等错误；
 2. **静态 lint**：抓 loader 会**静默吞掉**的东西——未知触发点名（会被丢弃）、未知顶层字段（拼错 `rule`/`trigers`）、
-   既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、尚未被引擎消费的 `kind: "conversion"`、
+   既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、`kind: "conversion"` 却没有 `conversions`、
    非主动技能上写了 `targetIntent`、`general.json` 的 name 与文件夹名不一致、技能同时存在 JSON 与代码版本……
+   （"合法但永远不会生效"的 `conversions`——比如 `to` 是闪却没有 `asResponse`——也在这一类。）
 
 退出码：有错误（或 `--strict` 下的警告）为 `1`，`--json` 时完整报告打到 stdout，可直接给 agent 当反馈。
 
@@ -292,7 +309,7 @@ cp -r examples/generals/吕蒙 generals/吕蒙 && npm run dev
 # 方式二：直接把示例目录当武将包目录（吕蒙 + 神赵云一起进池）
 npm run dev -- --generals-dir=examples/generals
 
-# 自检：0 错误；神赵云龙魂的 2 条已知缺口警告是预期输出
+# 自检：0 错误 / 0 警告（示例包是干净基线）
 npm run generals:check -- --dir=examples/generals
 
 # host 默认不含外部包；显式 all 才加载

@@ -4,7 +4,7 @@ import {
   cardNeedsTarget as cardNeedsTargetImpl,
   DamageKind,
   describeCard,
-  hasRemovableCard,
+  hasRemovableCard as cardUtilsHasRemovableCard,
   isDelayedTrickCard as isDelayedTrickCardImpl,
   isDistanceOneTrickCard,
   isEquipCard as isEquipCardImpl,
@@ -1219,7 +1219,10 @@ export class SanGuoGame {
         return ["需要选择目标"];
       }
       const target = this.mustGetPlayer(targetId);
-      if (!target.alive || target.id === player.id) {
+      // 铁索连环是唯一可以指定**自己**的有目标牌（`findTargetsByCard` 就是按"含自己"枚举的，
+      // 官方规则同样允许"横置/重置一名角色，包括你自己"）。此前这里一律拒绝自己，
+      // 导致 UI/AI 能选到一个 playAction 必然拒绝的目标 → 联机实测出现"目标无效"死循环。
+      if (!target.alive || (target.id === player.id && card.type !== CardType.IronChain)) {
         return ["目标无效"];
       }
       if ((this.isSlashCard(card.type) || card.type === CardType.Duel) && this.isKongChengProtected(target, card.type)) {
@@ -2220,7 +2223,7 @@ export class SanGuoGame {
       return targets.filter((id) => !this.isKongChengProtected(this.mustGetPlayer(id), cardType));
     }
     if (cardType === CardType.Dismantle) {
-      return targets.filter((id) => hasRemovableCard(this.mustGetPlayer(id)));
+      return targets.filter((id) => cardUtilsHasRemovableCard(this.mustGetPlayer(id)));
     }
     if (cardType === CardType.Snatch) {
       const user = this.mustGetPlayer(playerId);
@@ -2233,7 +2236,7 @@ export class SanGuoGame {
         if (!this.canReachForDistanceOneTrick(user, holder)) {
           return false;
         }
-        return hasRemovableCard(holder);
+        return cardUtilsHasRemovableCard(holder);
       });
     }
     if (cardType === CardType.Collateral) {
@@ -2626,6 +2629,18 @@ export class SanGuoGame {
 
   private hasSkill(player: Player, skill: SkillName): boolean {
     return playerHasSkill(player, skill);
+  }
+
+  /**
+   * 该玩家有没有"可被拿走/弃置"的牌（手牌或装备区）。
+   *
+   * 这是 `SkillHooksContext.hasRemovableCard` 的运行时实现——它此前只出现在类型与文档里、
+   * 没挂到实例上，导致内置「反馈」在玩家确认发动后抛 `ctx.hasRemovableCard is not a function`
+   * （测试里 `autoDecision` 默认不发动可选效果，所以长期被掩盖）。
+   * 回归守卫：`src/tools/generals-pack-types.test.ts` 会逐项断言 d.ts 里的 ctx 成员在真实实例上存在。
+   */
+  private hasRemovableCard(player: Player): boolean {
+    return cardUtilsHasRemovableCard(player);
   }
 
   /** 主公 +1 体力上限：标准身份局总人数 ≥ 5 时生效（rules.md §3.4）。 */

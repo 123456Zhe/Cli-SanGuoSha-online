@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/123456Zhe/Cli-SanGuoSha-online/schema/general.schema.json",
+  "title": "CLI 三国杀 武将包 general.json",
+  "description": "武将包元数据。放在 generals/<武将名>/general.json（examples/generals/ 下有可运行示例）。字段与语义见 docs/generals-pack-api.md；loader 的权威校验在 src/engine/general-pack.ts validateGeneralJson，本 schema 供编辑器/agent 使用，二者由 src/tools/pack-schema.test.ts 卡住漂移。注意：loader 会静默忽略未知字段（本 schema 用 additionalProperties:false 提前报错，npm run generals:check 也会给警告）。",
+  "type": "object",
+  "required": ["apiVersion", "name", "kingdom", "gender", "maxHp", "skills"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": 1,
+      "description": "必须是 1；其他值 loader 直接报错。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "武将名（展示用）。建议与文件夹名一致：技能 id 的命名空间前缀固定取文件夹名，不一致时 npm run generals:check 会警告。"
+    },
+    "kingdom": {
+      "type": "string",
+      "minLength": 1,
+      "description": "势力文本。内置武将为 魏/蜀/吴/群雄，示例包用到 神；loader 不校验取值。影响护驾/激将/救援/制霸等按势力判定的技能。"
+    },
+    "gender": {
+      "enum": ["男", "女"],
+      "description": "性别，只影响雌雄双股剑等按性别判定的效果。"
+    },
+    "maxHp": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "体力上限（正整数）。"
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_\\u4e00-\\u9fa5-]+$"
+      },
+      "description": "原始技能名列表（不是命名空间 id）。每个技能名对应同目录下 <技能名>.skill.json 或 .skill.ts/.skill.mjs，二选一。名称只允许字母/数字/下划线/连字符/中文（防路径穿越）。这里要求至少 1 个：loader 也能接受空数组，但没有技能的武将没有意义，schema 提前拦住。"
+    },
+    "description": {
+      "type": "string",
+      "description": "可选：一句话设定，保留进已加载武将池供 UI/未来 AI 使用；引擎结算不读它。"
+    }
+  }
+}

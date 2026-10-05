@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "张角",
+  "kingdom": "群雄",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["鬼道", "雷击"],
+  "description": "群雄武将，自称大贤良师，以鬼道改判、以雷击降罚。"
+}

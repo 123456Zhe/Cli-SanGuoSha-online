@@ -16,6 +16,10 @@ npm run host -- --players=3
 npm run join -- --host=192.168.1.20 --port=9527 --name=玩家名
 ```
 
+> ⚠️ **`npm run` 的参数必须用 `--` 分隔**。写成 `npm run host --players=3`（少了 `--`）时，npm 会打印
+> `npm warn Unknown cli config "--players"`，并且**不会把参数传给游戏**——服务器会按默认的 2 人房启动，
+> 看起来就像「参数没生效」。正确写法是 `npm run host -- --players=3`；`join`/`webui` 同理。
+
 **调试参数 `--general=<武将名>`（直接指定自己出场的武将）**：联机模式默认由服务端随机分配武将，这个调试能力让玩家跳过随机、自己点将。**它默认是关闭的，房主必须显式开启**：
 
 ```bash
@@ -269,7 +273,7 @@ generals/<武将名>/
 
 - 技能身份 = `<文件夹名>/<技能名>`（命名空间 id），展示用 `displayName`。
 - 完整文件格式、`SkillModule` 契约、Context 能力清单与隐式约定见 `docs/generals-pack-api.md`。
-- 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）、`examples/generals/神赵云/`（`绝境` 代码技能 + `龙魂` 这个**当前格式写不出来**的转换技标本）。
+- 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）、`examples/generals/神赵云/`（`绝境` 代码技能：`before_draw` 钩子 + `handLimit(player)` 纯函数 + `龙魂` 声明式 `conversions` 4 条花色映射，出牌阶段与响应时机都生效）。更多覆盖各机制的参考武将见 `examples/generals/`（默认不加载）。
 
 ```bash
 # 复制示例到项目根 generals/ 后，npm run dev 选将出现吕蒙
@@ -293,6 +297,8 @@ npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-ge
   不用写代码；`to` 只放行 `杀/火杀/雷杀/桃/闪/无懈可击`，其余牌类 loader 会明确拒绝。响应时机的接入点是 `provide_response`（第 12 个拦截点）。
 - **手牌上限**可以改：静态用 `rules.handLimitDelta`，运行时变量用代码技能的纯函数 `handLimit(player)`（绝境：上限 + 已损失体力值）。
 - AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）；LLM、Jev、本地策略三个消费点同源。
+- **作者资源（不读 `src/` 也能写对）**：`schema/general.schema.json` + `schema/skill.schema.json`（机器可读结构约束，编辑器/agent 可直接消费）、`types/generals-pack.d.ts`（`SkillModule` / `SkillModuleCtx` 的完整作者签名）、`examples/generals/` 参考武将 gallery（默认不加载，`examples/generals/README.md` 有机制覆盖矩阵）。
+- **触发性技能没有"交互式选目标"**：`InteractionRequest` 里没有"选一名玩家"，内置技能都是自动挑（「英魂」取体力最少者）或用固定目标（「反馈」= 伤害来源）；需要玩家点人的效果请做成 `kind: "active"`（`getTargets` + `play(targetId)`）。
 
 **写完就自检（M4）**——不读 `src/` 也能拿到反馈：
 
@@ -303,6 +309,6 @@ npm run generals:check -- --dir=generals --strict   # 警告也算失败
 npm run generals:check -- --dir=generals --selfplay=3   # 每个武将强制上场跑 3 局不变量断言
 ```
 
-- 校验器直接调用真实 loader，并额外抓 loader 会**静默吞掉**的写法：未知触发点名、拼错的字段名、既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、尚未被引擎枚举的 `kind: "conversion"`、非主动技能上的 `targetIntent`……避免"写错了却不报错"。
+- 校验器直接调用真实 loader，并额外抓 loader 会**静默吞掉**的写法：未知触发点名、拼错的字段名、既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、`kind: "conversion"` 却没有 `conversions` 的"空转换技"、非主动技能上的 `targetIntent`……避免"写错了却不报错"。
 - `--selfplay=N` 用无头自对弈（`src/tools/selfplay.ts`）断言"不崩、不卡死、体力/生死自洽"，同一 seed 可复现。
 - `rules.md` 的 §14 与 §16.3 由武将库 + 技能注册表生成：改完技能说明跑 `npm run rules:gen`，`npm run rules:check`（及 `src/tools/gen-rules.test.ts`）会卡住文档漂移。

@@ -1287,3 +1287,27 @@ void test("initNetworkGame：未知武将 / 重复指定武将时明确报错，
     /赵云/,
   );
 });
+
+void test("铁索连环可以指定自己：findTargetsByCard 与 playAction 口径一致（联机曾出现目标无效死循环）", async () => {
+  const { game, human } = await createGame(1);
+  const ironChain: Card = { id: "test-iron", type: CardType.IronChain, color: "black", suit: "club", rank: 7 };
+  human.hand.push(ironChain);
+  const index = human.hand.length - 1;
+
+  const action = game.getPlayableActions("human").find((item) => item.type === "play" && item.cardIndex === index);
+  assert.ok(action && action.type === "play", "铁索连环应出现在可玩动作里");
+  assert.ok(action.targets.includes("human"), "可玩动作的目标应包含自己（官方规则允许横置/重置自己）");
+
+  const logs = await game.playAction("human", action, "human");
+  assert.ok(!logs.includes("目标无效"), `指定自己的铁索连环不应被拒绝：${logs.join(" / ")}`);
+  assert.ok(human.chained, "结算后自己应处于横置状态");
+
+  // 其他有目标牌仍然不能指定自己：杀打自己必须被拒。
+  const slash: Card = { id: "test-slash", type: CardType.Slash, color: "red", suit: "heart", rank: 7 };
+  human.hand.push(slash);
+  const slashIndex = human.hand.length - 1;
+  const slashAction = game.getPlayableActions("human").find((item) => item.type === "play" && item.cardIndex === slashIndex);
+  assert.ok(slashAction && slashAction.type === "play");
+  assert.deepEqual(await game.playAction("human", slashAction, "human"), ["目标无效"]);
+  assert.equal(human.chained, true, "被杀拒绝不应影响横置状态");
+});

@@ -30,8 +30,13 @@ import { runSelfPlay, SelfPlayViolation } from "./selfplay.js";
  *   npm run generals:check -- --selfplay=3       # 每个武将跑 3 局自对弈
  */
 
-const KNOWN_GENERAL_KEYS = ["apiVersion", "name", "kingdom", "gender", "maxHp", "skills", "description"];
-const KNOWN_SKILL_KEYS = [
+/** `general.json` 已知字段；`schema/general.schema.json` 与它保持同步（`src/tools/pack-schema.test.ts` 卡住漂移）。 */
+export const KNOWN_GENERAL_KEYS = ["apiVersion", "name", "kingdom", "gender", "maxHp", "skills", "description"];
+/**
+ * `.skill.json` 已知字段。前 12 个是声明式可用字段，与 `schema/skill.schema.json` 一一对应；
+ * 后 5 个是代码技能（`.skill.ts`/`.mjs`）专有的函数字段，写进 JSON 会被 loader 忽略。
+ */
+export const KNOWN_SKILL_KEYS = [
   "id",
   "displayName",
   "kind",
@@ -50,6 +55,8 @@ const KNOWN_SKILL_KEYS = [
   "handLimit",
   "onTrigger",
 ];
+/** 只对代码技能有意义的字段（`.skill.json` 里出现 = 无效声明）。 */
+export const CODE_ONLY_SKILL_KEYS = ["canUse", "getTargets", "play", "handLimit", "onTrigger"];
 
 /** 出牌阶段真正能被引擎枚举为可玩动作的转换目标牌类（其余只能靠 `asResponse` 当响应打出）。 */
 const PLAY_PHASE_CONVERSION_TARGETS: string[] = [CardType.Slash, CardType.FireSlash, CardType.ThunderSlash, CardType.Peach];

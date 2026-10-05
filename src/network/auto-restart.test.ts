@@ -223,3 +223,49 @@ void test("autoRestartAfterGameOver false does nothing", async () => {
     console.log = originalConsoleLog;
   }
 });
+
+void test("重开时人数不足留下空对局：旧的回合推进不得抛错（联机实测曾杀死服务端进程）", async () => {
+  console.log = () => {};
+  const game = new SanGuoGame(() => 0.5);
+  await game.initNetworkGame(
+    [
+      { id: "p1", name: "甲" },
+      { id: "p2", name: "乙" },
+    ],
+    4,
+    false,
+  );
+  const server = new GameServer(
+    {
+      host: "127.0.0.1",
+      port: 0,
+      playerCount: 2,
+      openingHandCount: 4,
+      aiDriver: "simple",
+      autoRestartAfterGameOver: true,
+    },
+    game,
+  );
+  try {
+    const inner = server as unknown as {
+      gameGeneration: number;
+      isStaleGame(generation: number): boolean;
+      restartGame(): Promise<void>;
+      advanceIfCurrentPlayerDead(): Promise<void>;
+    };
+    const generation = inner.gameGeneration;
+    assert.equal(inner.isStaleGame(generation), false, "当前对局不该被判为 stale");
+    // 没有任何在线 peer：重开会留下一个"还没有玩家"的空对局。
+    await inner.restartGame();
+    assert.notEqual(inner.gameGeneration, generation, "重开应让对局代号 +1");
+    assert.equal(inner.isStaleGame(generation), true, "旧调用栈必须凭代号判定为 stale");
+    // 空对局确实没有 current player——这正是修复前旧调用栈会踩到的雷。
+    const restarted = (server as unknown as { game: SanGuoGame }).game;
+    assert.throws(() => restarted.getCurrentPlayer(), /current player missing/);
+    // 旧调用栈恢复后继续推进：修复前这里会 GET currentPlayer 抛 "current player missing"（未捕获即杀进程）。
+    await inner.advanceIfCurrentPlayerDead();
+    assert.equal(inner.isStaleGame(generation), true);
+  } finally {
+    console.log = originalConsoleLog;
+  }
+});

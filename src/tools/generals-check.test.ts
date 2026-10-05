@@ -44,16 +44,19 @@ const validGeneral = (overrides: Record<string, unknown> = {}): Record<string, u
   ...overrides,
 });
 
-void test("校验器：仓库自带的示例包零错误零警告", async () => {
+/** gallery（`examples/generals/`）的武将名；新增参考武将时同步这里（测试只要求"都扫描到"，不要求恰好这些）。 */
+const GALLERY_GENERALS = ["吕蒙", "神赵云", "张角", "凌统", "荀彧", "卧龙诸葛亮", "刘禅"];
+
+void test("校验器：仓库自带的 gallery 零错误零警告", async () => {
   const report = await checkGeneralPacks({ dir: join(process.cwd(), "examples", "generals") });
 
   assert.equal(report.errors, 0, `不应有错误：${report.issues.map((issue) => issue.message).join(" | ")}`);
   assert.equal(report.warnings, 0, `不应有警告：${report.issues.map((issue) => issue.message).join(" | ")}`);
-  assert.equal(report.scanned, 2);
-  assert.deepEqual(
-    report.packs.map((pack) => pack.name).sort(),
-    ["吕蒙", "神赵云"].sort(),
-  );
+  const names = report.packs.map((pack) => pack.name);
+  for (const name of GALLERY_GENERALS) {
+    assert.ok(names.includes(name), `${name} 应该被扫描到（实际 ${names.join("/")}）`);
+  }
+  assert.ok(report.scanned >= GALLERY_GENERALS.length, "scanned 应该覆盖整个 gallery");
   const lvMeng = report.packs.find((pack) => pack.name === "吕蒙");
   assert.equal(lvMeng?.loaded, true);
   assert.deepEqual(

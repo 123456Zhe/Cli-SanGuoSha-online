@@ -1,6 +1,8 @@
 import { CardType } from "../engine/cards.js";
-import { GameAction, GameSnapshot, PlayerRole, SanGuoGame } from "../engine/game.js";
+import { isArmorCard, isAttackHorseCard, isDefenseHorseCard, isSlashCard, isTreasureCard, isWeaponCard } from "../engine/card-utils.js";
+import { CardSource, GameAction, GameSnapshot, InteractionDecision, InteractionRequest, PlayerRole, SanGuoGame } from "../engine/game.js";
 import { resolveSkillDescriptor } from "../engine/skill-registry.js";
+import { FREE_BENEFIT_EFFECTS, HARMFUL_TRICKS } from "./system-one.js";
 import { buildMatchGeneralsText } from "./match-context.js";
 import { RoundPromptContext } from "./prompt.js";
 
@@ -32,6 +34,11 @@ type CardPrediction = {
 export type LocalAiDecision = {
   action: GameAction;
   targetId?: string;
+  insight: string;
+};
+
+export type LocalAiInteractionDecision = {
+  decision: InteractionDecision;
   insight: string;
 };
 
@@ -174,6 +181,160 @@ export class LocalAiEngine {
       }
     }
     return bestDecision;
+  }
+
+  /**
+   * 响应决策（simple 驱动的交互入口，供服务端 decideInteractionAi 调用）。
+   * 身份判断直接用快照里的真实身份（服务端 AI 本就全知）：桃只救自己和队友、无懈看清再交、
+   * 决斗智能出杀、白嫖技能自动发动、借刀选最没牌的敌方、弃低价值牌。
+   */
+  decideInteraction(
+    snapshot: GameSnapshot,
+    playerId: string,
+    request: InteractionRequest,
+  ): LocalAiInteractionDecision | null {
+    const self = snapshot.players.find((item) => item.id === playerId);
+    if (!self || !self.alive) {
+      return null;
+    }
+    const selfRole = self.role;
+    if (request.kind === "choose-suit") {
+      return null;
+    }
+    if (request.kind === "optional-effect") {
+      const enabled = this.shouldActivateEffect(self, request.effect);
+      return {
+        decision: { choice: "effect", enabled },
+        insight: enabled ? `发动${request.effect}（无代价收益）` : `不发动${request.effect}`,
+      };
+    }
+    if (request.kind === "collateral") {
+      const targetId = this.pickCollateralVictim(snapshot, self, request.victims);
+      if (targetId) {
+        const firstSlash = request.sources[0];
+        return {
+          decision: firstSlash
+            ? { choice: "target", targetId, sourceId: firstSlash.sourceId }
+            : { choice: "target", targetId },
+          insight: `借刀指向手牌最少的敌方`,
+        };
+      }
+      return { decision: { choice: "pass" }, insight: "无可借刀敌方" };
+    }
+    if (request.kind === "choose-discard") {
+      const sourceId = this.pickDiscardSource(request.sources);
+      if (sourceId) {
+        return { decision: { choice: "card", sourceId }, insight: "弃低价值牌" };
+      }
+      return { decision: { choice: "pass" }, insight: "无可弃牌" };
+    }
+    const usable = request.sources[0];
+    if (request.responseKind === "peach") {
+      const dying = snapshot.players.find((item) => item.id === request.trigger.actorId);
+      const ally = !dying || dying.id === self.id || this.isAlly(selfRole, dying.role);
+      if (usable && ally) {
+        return {
+          decision: { choice: "card", sourceId: usable.sourceId },
+          insight: dying && dying.id !== self.id ? "桃救队友" : "桃自救",
+        };
+      }
+      return { decision: { choice: "pass" }, insight: "不救敌人" };
+    }
+    if (request.responseKind === "slash") {
+      const slashCount = self.hand.filter((card) => isSlashCard(card.type)).length;
+      const duelist = snapshot.players.find((item) => item.id === request.trigger.actorId);
+      const lethal = duelist !== undefined && duelist.hp <= 1 && !this.isAlly(selfRole, duelist.role);
+      if (usable && (self.hp <= 1 || slashCount >= 2 || (lethal && slashCount >= 1))) {
+        return { decision: { choice: "card", sourceId: usable.sourceId }, insight: "决斗出杀" };
+      }
+      return { decision: { choice: "pass" }, insight: "决斗留杀" };
+    }
+    if (request.responseKind === "dodge") {
+      if (usable) {
+        return { decision: { choice: "card", sourceId: usable.sourceId }, insight: "出闪" };
+      }
+      return { decision: { choice: "pass" }, insight: "无闪" };
+    }
+    if (usable && this.shouldNegate(snapshot, self, request)) {
+      return { decision: { choice: "card", sourceId: usable.sourceId }, insight: "关键锦囊反制" };
+    }
+    return { decision: { choice: "pass" }, insight: "保留手牌" };
+  }
+
+  private shouldActivateEffect(self: { hand: Array<{ id: string }>; hp: number }, effect: string): boolean {
+    if (FREE_BENEFIT_EFFECTS.has(effect)) {
+      return true;
+    }
+    if (effect === "克己" || effect.endsWith("/克己")) {
+      return self.hand.length > self.hp;
+    }
+    return false;
+  }
+
+  private pickCollateralVictim(
+    snapshot: GameSnapshot,
+    self: { id: string; role: PlayerRole },
+    victims: string[],
+  ): string | undefined {
+    const hostiles = victims
+      .map((id) => snapshot.players.find((item) => item.id === id))
+      .filter(
+        (item): item is NonNullable<typeof item> =>
+          item !== undefined && item.alive && !this.isAlly(self.role, item.role),
+      );
+    if (hostiles.length === 0) {
+      return undefined;
+    }
+    hostiles.sort((a, b) => a.hand.length - b.hand.length || b.hp - a.hp);
+    return hostiles[0]?.id;
+  }
+
+  private shouldNegate(
+    snapshot: GameSnapshot,
+    self: { id: string; hp: number; role: PlayerRole },
+    request: Extract<InteractionRequest, { kind: "respond" }>,
+  ): boolean {
+    const trick = request.trigger.cardName;
+    const actor = snapshot.players.find((item) => item.id === request.trigger.actorId);
+    const actorIsAlly = actor !== undefined && (actor.id === self.id || this.isAlly(self.role, actor.role));
+    if (trick === (CardType.PeachGarden as string) || trick === (CardType.Harvest as string)) {
+      return this.groupTrickNetEnemyGain(snapshot, self.role) > 0;
+    }
+    if (HARMFUL_TRICKS.has(trick)) {
+      return !actorIsAlly;
+    }
+    return self.hp <= 2;
+  }
+
+  private groupTrickNetEnemyGain(snapshot: GameSnapshot, selfRole: PlayerRole): number {
+    let net = 0;
+    for (const player of snapshot.players) {
+      if (!player.alive) {
+        continue;
+      }
+      const ally = this.isAlly(selfRole, player.role);
+      const missing = Math.max(0, player.maxHp - player.hp);
+      const gain = missing > 0 ? missing : 0.3;
+      net += ally ? -gain : gain * 0.7;
+    }
+    return net;
+  }
+
+  /** 弃牌选价值最低的一张（桃/闪/无懈优先保留，装备次之）。 */
+  private pickDiscardSource(sources: CardSource[]): string | undefined {
+    if (sources.length === 0) {
+      return undefined;
+    }
+    const valueOf = (cardType?: CardType): number => {
+      if (cardType === CardType.Peach) return 100;
+      if (cardType === CardType.Dodge) return 80;
+      if (cardType === CardType.Negate) return 70;
+      if (cardType === CardType.ExNihilo) return 60;
+      if (cardType !== undefined && isSlashCard(cardType)) return 40;
+      return 10;
+    };
+    const ranked = [...sources].sort((a, b) => valueOf(a.card?.type) - valueOf(b.card?.type));
+    return ranked[0]?.sourceId;
   }
 
   private processRoundContext(round: RoundPromptContext): void {
@@ -361,14 +522,24 @@ export class LocalAiEngine {
     let baseScore = 0;
     if (cardType === CardType.Peach) {
       baseScore = self.hp <= 2 ? 12 : self.hp < self.maxHp ? 6 : -2;
+    } else if (cardType === CardType.Wine) {
+      // 酒杀连招：有杀在手时酒排 10.5（高于常规杀），保证先喝酒再出杀；无杀喝酒等于白给。
+      baseScore = self.hand.some((card) => isSlashCard(card.type)) ? 10.5 : -2;
     } else if (cardType === CardType.ExNihilo) {
       baseScore = 9;
-    } else if (cardType === CardType.Slash || cardType === CardType.FireSlash) {
-      baseScore = 8 + (1 - targetEval.cardPrediction.dodge) * 3;
+    } else if (isSlashCard(cardType)) {
+      // 手里有酒时杀稍降，让酒先行打出连招；酒喝完后杀恢复。
+      const hasWine = self.hand.some((card) => card.type === CardType.Wine);
+      baseScore = (hasWine ? 7.5 : 8) + (1 - targetEval.cardPrediction.dodge) * 3;
     } else if (cardType === CardType.Duel) {
       baseScore = 7 + (1 - targetEval.cardPrediction.slash) * 2;
     } else if (cardType === CardType.Dismantle || cardType === CardType.Snatch) {
       baseScore = 7 + targetEval.score * 0.6;
+      // 目标有装备时拆/顺价值大增（诸葛连弩/八卦阵这种关键装备必须拆）。
+      const target = targetEval.targetId ? snapshot.players.find((item) => item.id === targetEval.targetId) : undefined;
+      if (target && (target.weapon !== null || target.armor !== null || target.attackHorse !== null || target.defenseHorse !== null)) {
+        baseScore += 3;
+      }
     } else if (cardType === CardType.Barbarian) {
       baseScore = this.evaluateMassCard(snapshot, selfRole, "slash");
     } else if (cardType === CardType.ArrowRain) {
@@ -397,13 +568,14 @@ export class LocalAiEngine {
       cardType === CardType.ZiXing ||
       cardType === CardType.WoodenOx
     ) {
-      baseScore = 5;
+      // 别重复占槽：同槽位已有装备时再装等于白扔一张牌。
+      baseScore = this.equipSlotOccupied(self, cardType) ? 0 : 5;
     } else if (cardType === CardType.Negate || cardType === CardType.Dodge) {
       baseScore = -3;
     } else {
       baseScore = 2;
     }
-    const score = baseScore + targetEval.score;
+    const score = baseScore + targetEval.score + this.lethalBonus(snapshot, selfRole, targetEval.targetId, cardType);
     const insight = targetEval.targetId
       ? `目标${targetEval.roleGuess}，预判牌 杀${targetEval.cardPrediction.slash.toFixed(2)} 闪${targetEval.cardPrediction.dodge.toFixed(2)} 无懈${targetEval.cardPrediction.negate.toFixed(2)}`
       : "收益动作";
@@ -417,6 +589,55 @@ export class LocalAiEngine {
           score,
           insight,
         };
+  }
+
+  /** 斩杀加成：能直接带走 1 血敌方时 +6，优先补刀。 */
+  private lethalBonus(
+    snapshot: GameSnapshot,
+    selfRole: PlayerRole,
+    targetId: string | undefined,
+    cardType: CardType,
+  ): number {
+    if (!targetId) {
+      return 0;
+    }
+    const isDamage =
+      isSlashCard(cardType) ||
+      cardType === CardType.Duel ||
+      cardType === CardType.Barbarian ||
+      cardType === CardType.ArrowRain ||
+      cardType === CardType.FireAttack;
+    if (!isDamage) {
+      return 0;
+    }
+    const target = snapshot.players.find((item) => item.id === targetId);
+    if (!target || target.hp > 1) {
+      return 0;
+    }
+    return this.isAlly(selfRole, this.predictRole(snapshot, targetId)) ? 0 : 6;
+  }
+
+  /** 装备槽位是否已被占用（武器/防具/马/宝物各一槽）。 */
+  private equipSlotOccupied(
+    self: { weapon: unknown; armor: unknown; attackHorse: unknown; defenseHorse: unknown; treasure: unknown },
+    cardType: CardType,
+  ): boolean {
+    if (isWeaponCard(cardType)) {
+      return self.weapon !== null;
+    }
+    if (isArmorCard(cardType)) {
+      return self.armor !== null;
+    }
+    if (isAttackHorseCard(cardType)) {
+      return self.attackHorse !== null;
+    }
+    if (isDefenseHorseCard(cardType)) {
+      return self.defenseHorse !== null;
+    }
+    if (isTreasureCard(cardType)) {
+      return self.treasure !== null;
+    }
+    return false;
   }
 
   private pickTargetForAction(

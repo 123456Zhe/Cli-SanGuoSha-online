@@ -153,3 +153,133 @@ void test("本地AI持有本局武将技能文本（与 LLM/Jev 同源）", asyn
   assert.ok(engine.getMemorySummary().includes("matchSkills=2"), engine.getMemorySummary());
 });
 
+
+void test("simple 交互：桃只救自己和队友，不救敌人", async () => {
+  const { game, lord, ally, rebel } = await setupThree();
+  const engine = new LocalAiEngine("rules");
+  const peachRequest = (dyingId: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
+    kind: "respond",
+    requestId: 1,
+    responderId: lord.id,
+    trigger: { cardName: CardType.Slash, actorId: dyingId },
+    responseKind: "peach",
+    sources: [{ sourceId: "hand:0", origin: "hand", label: "桃", card: { id: "c1", type: CardType.Peach } as never }],
+    allowPass: true,
+    reason: "求桃",
+  });
+
+  // 自己濒死：出桃自救。
+  const self = engine.decideInteraction(game.getSnapshot(), lord.id, peachRequest(lord.id));
+  assert.ok(self?.decision && "choice" in self.decision && self.decision.choice === "card", `自救应出桃：${self?.insight}`);
+
+  // 队友（忠臣）濒死：出桃救援。
+  const friend = engine.decideInteraction(game.getSnapshot(), lord.id, peachRequest(ally.id));
+  assert.ok(friend?.decision && "choice" in friend.decision && friend.decision.choice === "card", `应救队友：${friend?.insight}`);
+
+  // 敌人（反贼）濒死：拒绝。
+  const foe = engine.decideInteraction(game.getSnapshot(), lord.id, peachRequest(rebel.id));
+  assert.ok(foe?.decision && "choice" in foe.decision && foe.decision.choice === "pass", `不应救敌人：${foe?.insight}`);
+});
+
+void test("simple 交互：无懈可击按阵营反制，借刀选手牌最少的敌方", async () => {
+  const { game, lord, ally, rebel } = await setupThree();
+  const engine = new LocalAiEngine("rules");
+  const snapshot = () => game.getSnapshot();
+  const negateRequest = (actorId: string, cardName: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
+    kind: "respond",
+    requestId: 2,
+    responderId: lord.id,
+    trigger: { cardName, actorId },
+    responseKind: "negate",
+    sources: [{ sourceId: "hand:0", origin: "hand", label: "无懈可击", card: { id: "c2", type: CardType.Negate } as never }],
+    allowPass: true,
+    reason: "无懈可击",
+  });
+
+  // 敌方对队友用决斗：反制。
+  const againstEnemy = engine.decideInteraction(snapshot(), lord.id, negateRequest(rebel.id, CardType.Duel));
+  assert.ok(againstEnemy?.decision && "choice" in againstEnemy.decision && againstEnemy.decision.choice === "card", `敌方有害锦囊应反制：${againstEnemy?.insight}`);
+
+  // 队友用决斗：不反制。
+  const againstAlly = engine.decideInteraction(snapshot(), lord.id, negateRequest(ally.id, CardType.Duel));
+  assert.ok(againstAlly?.decision && "choice" in againstAlly.decision && againstAlly.decision.choice === "pass", `队友锦囊不应反制：${againstAlly?.insight}`);
+
+  // 借刀杀人：选手牌最少的敌方。rebel 手牌 1 张，ally 手牌 3 张。
+  rebel.hand = [{ id: "r1", type: CardType.Slash, color: "black", suit: "spade", rank: 7 }];
+  ally.hand = [
+    { id: "a1", type: CardType.Slash, color: "black", suit: "spade", rank: 8 },
+    { id: "a2", type: CardType.Dodge, color: "red", suit: "heart", rank: 2 },
+    { id: "a3", type: CardType.Peach, color: "red", suit: "heart", rank: 6 },
+  ];
+  const collateral = engine.decideInteraction(snapshot(), lord.id, {
+    kind: "collateral",
+    requestId: 3,
+    targetId: lord.id,
+    actorId: rebel.id,
+    victims: [ally.id, rebel.id],
+    sources: [{ sourceId: "hand:0", origin: "hand", label: "杀" }],
+    allowHandOverWeapon: true,
+    reason: "借刀杀人",
+  });
+  assert.ok(
+    collateral?.decision && "choice" in collateral.decision && collateral.decision.choice === "target" && collateral.decision.targetId === rebel.id,
+    `借刀应指向手牌最少的敌方：${collateral?.insight}`,
+  );
+});
+
+void test("simple 交互：白嫖技能自动发动，决斗濒死必出杀", async () => {
+  const { game, lord, rebel } = await setupThree();
+  const engine = new LocalAiEngine("rules");
+  const snapshot = () => game.getSnapshot();
+
+  // 集智无代价：自动发动；未知技能保持保守。
+  const jizhi = engine.decideInteraction(snapshot(), lord.id, {
+    kind: "optional-effect",
+    requestId: 4,
+    playerId: lord.id,
+    effect: "集智",
+    reason: "技能",
+  });
+  assert.ok(jizhi?.decision && "enabled" in jizhi.decision && jizhi.decision.enabled === true, `集智应自动发动：${jizhi?.insight}`);
+  const unknown = engine.decideInteraction(snapshot(), lord.id, {
+    kind: "optional-effect",
+    requestId: 5,
+    playerId: lord.id,
+    effect: "未知技能",
+    reason: "技能",
+  });
+  assert.ok(unknown?.decision && "enabled" in unknown.decision && unknown.decision.enabled === false, `未知技能应保守不发动：${unknown?.insight}`);
+
+  // 决斗响应：自己 1 血时必出杀。
+  lord.hp = 1;
+  lord.hand = [{ id: "s1", type: CardType.Slash, color: "black", suit: "spade", rank: 7 }];
+  const duel = engine.decideInteraction(snapshot(), lord.id, {
+    kind: "respond",
+    requestId: 6,
+    responderId: lord.id,
+    trigger: { cardName: CardType.Duel, actorId: rebel.id },
+    responseKind: "slash",
+    sources: [{ sourceId: "hand:0", origin: "hand", label: "杀" }],
+    allowPass: true,
+    reason: "决斗",
+  });
+  assert.ok(duel?.decision && "choice" in duel.decision && duel.decision.choice === "card", `濒死决斗应出杀：${duel?.insight}`);
+
+  // 弃牌：桃不应被第一个弃掉（价值最低者优先）。
+  const discard = engine.decideInteraction(snapshot(), lord.id, {
+    kind: "choose-discard",
+    requestId: 7,
+    playerId: lord.id,
+    reason: "弃牌",
+    sources: [
+      { sourceId: "hand:0", origin: "hand", label: "桃", card: { id: "p1", type: CardType.Peach } as never },
+      { sourceId: "hand:1", origin: "hand", label: "杀", card: { id: "s2", type: CardType.Slash } as never },
+    ],
+    count: 1,
+    allowPass: false,
+  });
+  assert.ok(
+    discard?.decision && "choice" in discard.decision && discard.decision.choice === "card" && discard.decision.sourceId === "hand:1",
+    `弃牌应弃价值最低的杀而非桃：${discard?.insight}`,
+  );
+});

@@ -50,8 +50,9 @@ export const JUDGE_TURN_SCORE_GAP = 3;
 /**
  * 无代价白嫖型可选技能：发动只有收益没有代价（摸牌/拿牌/整理牌堆），AI 一律发动。
  * 有代价或需目标决策的（英魂/据守等）不在此列，保持保守不发动。
+ * （local-engine 的 simple 驱动共用同一份名单。）
  */
-const FREE_BENEFIT_EFFECTS: ReadonlySet<string> = new Set([
+export const FREE_BENEFIT_EFFECTS: ReadonlySet<string> = new Set([
   SkillName.JiZhi, // 集智：用锦囊摸 1
   SkillName.BiYue, // 闭月：结束阶段摸 1
   SkillName.TianDu, // 天妒：拿判定牌
@@ -64,8 +65,8 @@ const FREE_BENEFIT_EFFECTS: ReadonlySet<string> = new Set([
   SkillName.JianXiong, // 奸雄：拿造成伤害的牌
 ]);
 
-/** 指向性有害锦囊：响应者多为目标，非队友使用时值得交无懈可击。 */
-const HARMFUL_TRICKS: ReadonlySet<string> = new Set([
+/** 指向性有害锦囊：响应者多为目标，非队友使用时值得交无懈可击。（simple 驱动共用。） */
+export const HARMFUL_TRICKS: ReadonlySet<string> = new Set([
   CardType.Duel,
   CardType.Barbarian,
   CardType.ArrowRain,

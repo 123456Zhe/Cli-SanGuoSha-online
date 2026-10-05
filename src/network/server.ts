@@ -790,6 +790,10 @@ export class GameServer {
     if (this.aiLoop) {
       return (await this.aiLoop.decideInteraction(this.game, playerId, request)) ?? null;
     }
+    // simple 驱动（aiLoop 为 null）：走本地策略引擎，不再掉进引擎无脑 autoDecision。
+    if (this.localAiEngine) {
+      return this.localAiEngine.decideInteraction(this.game.getSnapshot(), playerId, request)?.decision ?? null;
+    }
     return null;
   }
 

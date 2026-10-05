@@ -2,9 +2,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getBuiltinGenerals, resetLoadedGenerals, setLoadedGenerals } from "./generals.js";
-import { SkillKind, SkillRules, TargetImmunityCard } from "./skill-registry.js";
+import { SKILL_TARGET_INTENTS, SkillKind, SkillRules, SkillTargetIntent, TargetImmunityCard } from "./skill-registry.js";
 import { registerPackSkill, resetPackSkills, PackSkillEntry, SkillModule } from "./skill-module.js";
-import { GeneralDefinition, SkillId, SkillTrigger } from "./types.js";
+import { GeneralDefinition, SKILL_TRIGGERS, SkillId, SkillTrigger } from "./types.js";
 
 /**
  * 外部武将包 loader（Phase 2）。
@@ -38,10 +38,20 @@ export type GeneralPackLoadReport = {
 };
 
 const SKILL_KINDS: SkillKind[] = ["active", "triggered", "conversion", "passive", "lord"];
-const SKILL_TRIGGERS: SkillTrigger[] = ["turn_start", "before_draw", "before_damage", "after_damage"];
 const IMMUNITY_CARDS: TargetImmunityCard[] = ["slash", "duel", "snatch", "indulgence", "supplies-cut"];
 
 const isString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/** 校验可选的 targetIntent（AI 选目标取向）。缺省合法，非法值即抛错。 */
+const parseTargetIntent = (raw: unknown, label: string): SkillTargetIntent | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== "string" || !SKILL_TARGET_INTENTS.includes(raw as SkillTargetIntent)) {
+    throw new Error(`${label} 的 targetIntent 非法（允许：${SKILL_TARGET_INTENTS.join("/")}）`);
+  }
+  return raw as SkillTargetIntent;
+};
 
 /** 校验声明式 rules：键名必须在词汇表内、类型正确；未知键/类型不符即抛错。 */
 const validateRules = (raw: unknown, label: string): SkillRules => {
@@ -64,7 +74,8 @@ const validateRules = (raw: unknown, label: string): SkillRules => {
         break;
       }
       case "trickDistanceExempt":
-      case "slashLimitExempt": {
+      case "slashLimitExempt":
+      case "skipDiscardPhaseIfNoSlash": {
         if (typeof value !== "boolean") {
           throw new Error(`${label} 的 rules.${key} 必须是布尔`);
         }
@@ -145,6 +156,7 @@ const parseDeclarativeSkill = (raw: unknown, fallbackId: string, namespacedId: s
   const triggers = Array.isArray(obj.triggers)
     ? obj.triggers.filter((item): item is SkillTrigger => SKILL_TRIGGERS.includes(item as SkillTrigger))
     : undefined;
+  const targetIntent = parseTargetIntent(obj.targetIntent, `${fallbackId}.skill.json`);
   return {
     id: namespacedId,
     displayName: isString(obj.displayName) ? obj.displayName : fallbackId,
@@ -154,6 +166,7 @@ const parseDeclarativeSkill = (raw: unknown, fallbackId: string, namespacedId: s
     ...(typeof obj.optional === "boolean" ? { optional: obj.optional } : {}),
     ...(typeof obj.priority === "number" ? { priority: obj.priority } : {}),
     ...(typeof obj.requiresTarget === "boolean" ? { requiresTarget: obj.requiresTarget } : {}),
+    ...(targetIntent ? { targetIntent } : {}),
     ...(isString(obj.label) ? { label: obj.label } : {}),
     ...("rules" in obj ? { rules: validateRules(obj.rules, `${fallbackId}.skill.json`) } : {}),
   };
@@ -174,6 +187,7 @@ const parseCodeSkill = (mod: unknown, fallbackId: string, namespacedId: string):
   const triggers = Array.isArray(obj.triggers)
     ? obj.triggers.filter((item): item is SkillTrigger => SKILL_TRIGGERS.includes(item as SkillTrigger))
     : undefined;
+  const targetIntent = parseTargetIntent(obj.targetIntent, `${fallbackId}.skill`);
   const entry: SkillModule = {
     id: namespacedId,
     displayName: isString(obj.displayName) ? obj.displayName : fallbackId,
@@ -183,6 +197,7 @@ const parseCodeSkill = (mod: unknown, fallbackId: string, namespacedId: string):
     ...(typeof obj.optional === "boolean" ? { optional: obj.optional } : {}),
     ...(typeof obj.priority === "number" ? { priority: obj.priority } : {}),
     ...(typeof obj.requiresTarget === "boolean" ? { requiresTarget: obj.requiresTarget } : {}),
+    ...(targetIntent ? { targetIntent } : {}),
     ...(isString(obj.label) ? { label: obj.label } : {}),
     ...("rules" in obj ? { rules: validateRules(obj.rules, `${fallbackId}.skill`) } : {}),
     ...(typeof obj.canUse === "function" ? { canUse: obj.canUse as NonNullable<SkillModule["canUse"]> } : {}),

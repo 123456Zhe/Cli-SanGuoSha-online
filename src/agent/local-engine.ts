@@ -1,5 +1,7 @@
 import { CardType } from "../engine/cards.js";
 import { GameAction, GameSnapshot, PlayerRole, SanGuoGame } from "../engine/game.js";
+import { resolveSkillDescriptor } from "../engine/skill-registry.js";
+import { buildMatchGeneralsText } from "./match-context.js";
 import { RoundPromptContext } from "./prompt.js";
 
 type RoleScore = {
@@ -72,6 +74,15 @@ export class LocalAiEngine {
   /** 联机断线托管：允许对 isAI=false 的人类座位做出牌决策。 */
   private allowNonAiSeats = false;
 
+  /** 本局在场武将技能文本（与 LLM/Jev 同源，见 match-context.ts）。 */
+  private matchGeneralsText = "";
+
+  /** 生成 matchGeneralsText 用的快照签名，避免每步重算。 */
+  private matchGeneralsKey = "";
+
+  /** 本局在场技能数（去重），用于 getMemorySummary 诊断。 */
+  private matchSkillCount = 0;
+
   constructor(rulesText: string) {
     this.rulesText = rulesText;
     this.memory = [];
@@ -97,6 +108,29 @@ export class LocalAiEngine {
     this.processedRounds.clear();
     this.behaviorByName.clear();
     this.roleScoreByName.clear();
+    this.matchGeneralsText = "";
+    this.matchGeneralsKey = "";
+    this.matchSkillCount = 0;
+  }
+
+  /**
+   * 本局在场武将技能文本（与 LLM / Jev 看到的同源，见 `match-context.ts`）。
+   * 本地策略没有 LLM，因此这份文本的用途是：让 `evaluateAction` 能按技能元数据（targetIntent 等）
+   * 选对目标，并让 `getMemorySummary()` 能报告"本局认识哪些武将技能"。
+   */
+  getMatchGeneralsText(): string {
+    return this.matchGeneralsText;
+  }
+
+  /** 按快照刷新在场武将技能文本；只有武将/技能集合变化时才重算。 */
+  private refreshMatchGenerals(snapshot: GameSnapshot): void {
+    const key = snapshot.players.map((player) => `${player.general}:${player.skills.join("|")}`).join(";");
+    if (key === this.matchGeneralsKey) {
+      return;
+    }
+    this.matchGeneralsKey = key;
+    this.matchGeneralsText = buildMatchGeneralsText(snapshot);
+    this.matchSkillCount = new Set(snapshot.players.flatMap((player) => player.skills)).size;
   }
 
   syncPreviousRounds(contexts: RoundPromptContext[]): void {
@@ -120,6 +154,7 @@ export class LocalAiEngine {
     if (actions.length === 0) {
       return null;
     }
+    this.refreshMatchGenerals(snapshot);
     let bestDecision: LocalAiDecision | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
     for (const action of actions) {
@@ -291,14 +326,19 @@ export class LocalAiEngine {
       return { score: -1, insight: "无可用角色信息" };
     }
     if (action.type === "skill") {
+      // 技能元数据来自注册表（内置 + 外部武将包同一入口）：
+      // targetIntent 决定这是"打敌人"还是"支援队友"的技能，避免把青囊/结姻/仁德丢到敌方身上。
+      const descriptor = resolveSkillDescriptor(action.skill);
+      const skillName = descriptor.displayName ?? action.skill;
+      const allyTarget = descriptor.targetIntent === "ally";
       const targetEval = action.requiresTarget
-        ? this.pickTargetForAction(snapshot, selfRole, action.targets, "skill")
+        ? this.pickTargetForAction(snapshot, selfRole, action.targets, allyTarget ? "skill-ally" : "skill")
         : { score: 0, targetId: undefined, roleGuess: "", cardPrediction: { slash: 0, dodge: 0, negate: 0 } };
       const hpUrgency = self.hp <= 2 ? 2.5 : 0.5;
       const skillScore = 4 + hpUrgency + targetEval.score;
       const skillInsight = targetEval.targetId
-        ? `技能压制 ${targetEval.roleGuess}，目标牌预判 杀${targetEval.cardPrediction.slash.toFixed(2)} 闪${targetEval.cardPrediction.dodge.toFixed(2)} 无懈${targetEval.cardPrediction.negate.toFixed(2)}`
-        : "技能收益";
+        ? `技能${skillName}${allyTarget ? "支援" : "压制"} ${targetEval.roleGuess}，目标牌预判 杀${targetEval.cardPrediction.slash.toFixed(2)} 闪${targetEval.cardPrediction.dodge.toFixed(2)} 无懈${targetEval.cardPrediction.negate.toFixed(2)}`
+        : `技能${skillName}收益`;
       return targetEval.targetId
         ? {
             score: skillScore,
@@ -383,13 +423,15 @@ export class LocalAiEngine {
     snapshot: GameSnapshot,
     selfRole: PlayerRole,
     targets: string[],
-    cardType: CardType | "skill",
+    cardType: CardType | "skill" | "skill-ally",
   ): {
     score: number;
     targetId?: string;
     roleGuess: string;
     cardPrediction: CardPrediction;
   } {
+    // `skill-ally`：支援型技能（青囊/结姻/仁德/制霸），利好队友、绝不主动丢给敌人。
+    const allySkill = cardType === "skill-ally";
     let bestScore = Number.NEGATIVE_INFINITY;
     let bestId: string | undefined;
     let bestRole = "";
@@ -402,9 +444,14 @@ export class LocalAiEngine {
       const roleGuess = this.predictRole(snapshot, target.id);
       const ally = this.isAlly(selfRole, roleGuess);
       const prediction = this.predictCards(target.name, target.hand.length);
-      let score = ally ? -14 : 8;
-      score += (4 - Math.max(target.hp, 0)) * 1.8;
-      score += target.hand.length * 0.35;
+      let score = allySkill ? (ally ? 8 : -14) : ally ? -14 : 8;
+      if (allySkill) {
+        // 支援型技能：优先把回复/牌交给损失体力最多的己方。
+        score += (target.maxHp - target.hp) * 2.2;
+      } else {
+        score += (4 - Math.max(target.hp, 0)) * 1.8;
+        score += target.hand.length * 0.35;
+      }
       if (cardType === CardType.Slash || cardType === CardType.FireSlash || cardType === CardType.ArrowRain) {
         score += (1 - prediction.dodge) * 3;
       }
@@ -414,7 +461,7 @@ export class LocalAiEngine {
       if (cardType === CardType.Dismantle || cardType === CardType.Snatch) {
         score += target.hand.length * 0.7 + prediction.negate * 0.9;
       }
-      if (cardType === "skill") {
+      if (cardType === "skill" || allySkill) {
         score += 1.8;
       }
       if (score > bestScore) {
@@ -463,6 +510,6 @@ export class LocalAiEngine {
   getMemorySummary(): string {
     const rounds = this.memory.map((item) => item.round).join(",");
     const hasRules = this.rulesText.length > 0;
-    return `memoryRounds=${rounds || "none"} rulesLoaded=${hasRules ? "yes" : "no"}`;
+    return `memoryRounds=${rounds || "none"} rulesLoaded=${hasRules ? "yes" : "no"} matchSkills=${this.matchSkillCount}`;
   }
 }

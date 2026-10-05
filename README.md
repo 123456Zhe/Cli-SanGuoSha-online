@@ -267,5 +267,7 @@ npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-ge
 
 - `dev`（`npm run dev`）默认加载 `generals/`；`host`（`npm run host`）默认 `builtin`，必须显式 `--generals-pool=all`。
 - `.ts` 技能依赖 bun/tsx 运行时；跨环境分发用 `.mjs`，或用 `--generals-json-only` 只放行声明式 JSON。
-- 声明式技能的 `rules`（`SkillRules` 词汇表：距离/杀次数/伤害/目标免疫等）经谓词层参与结算，内置与外部包统一；非词汇表可表达的效果留 Phase 6。详见 `docs/generals-pack-api.md`「规则词汇表」。
-- AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）。
+- 声明式技能的 `rules`（`SkillRules` 词汇表：距离/杀次数/伤害/目标免疫/跳过弃牌阶段等）经谓词层参与结算，内置与外部包统一。详见 `docs/generals-pack-api.md`「规则词汇表」。
+- 代码技能除 4 个基础触发点外，还可挂 7 个 Phase 6 拦截点：`judgment`（改判）、`slash_targeted`（取消杀）、`hand_card_lost`、`equip_lost`、`card_used`、`peach_save`（追加回复）、`discard_phase_start`（跳过弃牌阶段）。`provideResponse` 尚未开放。
+- 主动技能可声明 `targetIntent`（`enemy`/`ally`/`any`），让 AI 知道该打敌人还是支援队友。
+- AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）；LLM、Jev、本地策略三个消费点同源。

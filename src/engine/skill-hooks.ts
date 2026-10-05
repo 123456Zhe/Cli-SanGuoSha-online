@@ -3,9 +3,7 @@ import { countRemovableSelfCards, DamageKind } from "./card-utils.js";
 import { getPackHooksFor } from "./skill-module.js";
 import type { SkillModuleCtx } from "./skill-module.js";
 import { resolveSkillDescriptor } from "./skill-registry.js";
-import { InteractionDecision, InteractionRequest, Player, SkillHook, SkillName, SkillTrigger } from "./types.js";
-
-const PACK_TRIGGERS: SkillTrigger[] = ["turn_start", "before_draw", "before_damage", "after_damage"];
+import { InteractionDecision, InteractionRequest, Player, SKILL_TRIGGERS, SkillHook, SkillName, SkillTrigger } from "./types.js";
 
 export type SkillHooksContext = {
   players: Player[];
@@ -281,10 +279,18 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
         tryAwakenHunZi(ctx, payload.target, logs);
       },
     ],
+    // Phase 6 拦截点：目前没有内置技能占用，全部留给外部武将包（在内置钩子之后追加）。
+    judgment: [],
+    slash_targeted: [],
+    hand_card_lost: [],
+    equip_lost: [],
+    card_used: [],
+    peach_save: [],
+    discard_phase_start: [],
   };
   // 外部武将包技能：每个触发点在内置钩子之后追加。
   const packCtx = ctx as unknown as SkillModuleCtx;
-  for (const trigger of PACK_TRIGGERS) {
+  for (const trigger of SKILL_TRIGGERS) {
     for (const entry of getPackHooksFor(trigger)) {
       hooks[trigger].push((payload, logs) => entry.onTrigger?.[trigger]?.(packCtx, payload, logs));
     }

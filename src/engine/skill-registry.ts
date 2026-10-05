@@ -3,6 +3,17 @@ import { getPackSkill } from "./skill-module.js";
 
 export type SkillKind = "active" | "triggered" | "conversion" | "passive" | "lord";
 
+/**
+ * 主动技能的目标取向：让 AI（本地策略 / Jev / LLM）知道该技能的 `targets` 是敌人还是队友，
+ * 避免把"青囊/结姻/仁德"这类支援技丢到敌方身上。只影响 AI 的选目标启发式，不影响引擎合法性校验。
+ * - `enemy`：敌方（杀/强袭/反间/离间…）
+ * - `ally`：己方或自己（青囊/仁德/结姻/制霸…）
+ * - `any`：无所谓（默认）
+ */
+export type SkillTargetIntent = "enemy" | "ally" | "any";
+
+export const SKILL_TARGET_INTENTS: SkillTargetIntent[] = ["enemy", "ally", "any"];
+
 /** 目标免疫可覆盖的牌类（targetImmunity.cards 的取值）。 */
 export type TargetImmunityCard = "slash" | "duel" | "snatch" | "indulgence" | "supplies-cut";
 
@@ -27,6 +38,11 @@ export type SkillRules = {
   damageDelta?: number;
   /** 被桃救时额外回复 N（求和）。 */
   peachSaveBonus?: number;
+  /**
+   * 本回合未使用/打出过杀时，可以跳过弃牌阶段（OR；Phase 6 新增）。
+   * 由 `game.ts` 的弃牌阶段入口消费，需要玩家确认发动（`optional` 语义）。
+   */
+  skipDiscardPhaseIfNoSlash?: boolean;
 };
 
 export type SkillDescriptor = {
@@ -39,6 +55,8 @@ export type SkillDescriptor = {
   optional?: boolean;
   priority?: number;
   label?: string;
+  /** 主动技能的目标取向（供 AI 选择目标；缺省视为 `any`）。 */
+  targetIntent?: SkillTargetIntent;
   /** 声明式规则数值/豁免（Phase 3 谓词层消费）。 */
   rules?: SkillRules;
 };
@@ -91,6 +109,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.Assault]: active(
     SkillName.Assault,
     "出牌阶段每回合限一次：弃置 1 张牌（手牌或装备），对攻击范围内 1 名角色造成 1 点伤害。",
+    { targetIntent: "enemy" },
   ),
   [SkillName.JuShou]: triggered(
     SkillName.JuShou,
@@ -163,6 +182,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.RenDe]: active(
     SkillName.RenDe,
     "出牌阶段可反复发动（每次给 1 张手牌，每张一次询问）：将手牌交给其他角色；本回合累计给出 2 张时回复 1 点体力。",
+    { targetIntent: "ally" },
   ),
   [SkillName.JiJiang]: lord(SkillName.JiJiang, "主公技：需要杀时，可按座次请求其他蜀势力角色代为打出杀。"),
   [SkillName.WuSheng]: conversion(SkillName.WuSheng, "可将红色牌（手牌或木牛流马下）当杀使用或打出。"),
@@ -206,6 +226,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.FanJian]: active(
     SkillName.FanJian,
     "出牌阶段限一次：令 1 名角色声明一种花色并获得你 1 张手牌，若花色猜错则其受到你造成的 1 点伤害。",
+    { targetIntent: "enemy" },
   ),
   [SkillName.KuRou]: active(SkillName.KuRou, "出牌阶段可发动：失去 1 点体力并摸 2 张牌。"),
   [SkillName.QianXun]: passive(SkillName.QianXun, "锁定技：不能成为顺手牵羊与乐不思蜀的目标。", {
@@ -230,6 +251,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.JieYin]: active(
     SkillName.JieYin,
     "出牌阶段限一次：弃置 2 张手牌，令你与 1 名受伤男性角色各回复 1 点体力。",
+    { targetIntent: "ally" },
   ),
   [SkillName.XiaoJi]: triggered(
     SkillName.XiaoJi,
@@ -244,6 +266,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.LiJian]: active(
     SkillName.LiJian,
     "出牌阶段限一次：弃置 1 张牌，令两名男性角色相互决斗（你选择出杀方）。",
+    { targetIntent: "enemy" },
   ),
   [SkillName.BiYue]: triggered(
     SkillName.BiYue,
@@ -254,6 +277,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.QingNang]: active(
     SkillName.QingNang,
     "出牌阶段限一次：弃置 1 张手牌，令 1 名受伤角色回复 1 点体力。",
+    { targetIntent: "ally" },
   ),
   [SkillName.JiJiu]: conversion(
     SkillName.JiJiu,
@@ -280,6 +304,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   [SkillName.ZhiBa]: active(
     SkillName.ZhiBa,
     "出牌阶段限一次：与有制霸的主公拼点；你未赢则主公获得两张拼点牌，赢则按拼点规则结算（已觉醒的主公拒绝拼点）。",
+    { targetIntent: "ally" },
   ),
 };
 

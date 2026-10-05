@@ -1,6 +1,6 @@
 import type { SkillHooksContext } from "./skill-hooks.js";
 import type { SkillUseContext } from "./skills.js";
-import type { SkillKind, SkillRules } from "./skill-registry.js";
+import type { SkillKind, SkillRules, SkillTargetIntent } from "./skill-registry.js";
 import type { Player, SkillEventPayload, SkillId, SkillTrigger } from "./types.js";
 
 /**
@@ -33,6 +33,8 @@ export type SkillModule = {
   priority?: number;
   requiresTarget?: boolean;
   label?: string;
+  /** 主动技能的目标取向（供 AI 选择目标；缺省视为 `any`）。 */
+  targetIntent?: SkillTargetIntent;
   /** 声明式规则数值/豁免（Phase 3 谓词层消费；见 skill-registry.ts 的 SkillRules）。 */
   rules?: SkillRules;
   canUse?(ctx: SkillModuleCtx, player: Player): boolean;

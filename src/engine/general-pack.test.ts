@@ -173,3 +173,83 @@ void test("rules 校验：类型不符在 strict 下抛错", async () => {
 
   await assert.rejects(() => loadGeneralPacks({ dir: root, pool: "all", strict: true }), /distanceDelta/);
 });
+
+void test("rules 校验：Phase 6 新增的 skipDiscardPhaseIfNoSlash 被接受", async () => {
+  writePack(
+    "吕蒙",
+    validGeneral({ name: "吕蒙", skills: ["克己"] }),
+    {
+      克己: {
+        id: "克己",
+        kind: "triggered",
+        description: "若你未于出牌阶段使用或打出过杀，你可以跳过弃牌阶段。",
+        triggers: ["discard_phase_start"],
+        optional: true,
+        rules: { skipDiscardPhaseIfNoSlash: true },
+      },
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, ["吕蒙"]);
+  const skill = getPackSkill("吕蒙/克己");
+  assert.deepEqual(skill?.rules, { skipDiscardPhaseIfNoSlash: true });
+  assert.deepEqual(skill?.triggers, ["discard_phase_start"], "Phase 6 拦截点应通过 triggers 校验");
+});
+
+void test("rules 校验：skipDiscardPhaseIfNoSlash 类型不符被拒绝", async () => {
+  writePack(
+    "吕蒙",
+    validGeneral({ name: "吕蒙", skills: ["克己"] }),
+    {
+      克己: { id: "克己", kind: "passive", description: "测试", rules: { skipDiscardPhaseIfNoSlash: "yes" } },
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, []);
+  assert.match(report.errors[0]?.message ?? "", /skipDiscardPhaseIfNoSlash/);
+});
+
+void test("targetIntent 校验：合法值被保留", async () => {
+  writePack(
+    "吕蒙",
+    validGeneral({ name: "吕蒙", skills: ["支援"] }),
+    {
+      支援: {
+        id: "支援",
+        kind: "active",
+        description: "测试",
+        requiresTarget: true,
+        targetIntent: "ally",
+      },
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, ["吕蒙"]);
+  assert.equal(getPackSkill("吕蒙/支援")?.targetIntent, "ally");
+  assert.equal(getPackSkill("吕蒙/支援")?.requiresTarget, true);
+});
+
+void test("targetIntent 校验：非法值被拒绝（隔离进 errors）", async () => {
+  writePack(
+    "吕蒙",
+    validGeneral({ name: "吕蒙", skills: ["支援"] }),
+    {
+      支援: { id: "支援", kind: "active", description: "测试", targetIntent: "enemy-ish" },
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, []);
+  assert.match(report.errors[0]?.message ?? "", /targetIntent/);
+});
+
+void test("示例包 examples/generals/吕蒙 可加载，克己带 skipDiscardPhaseIfNoSlash", async () => {
+  const report = await loadGeneralPacks({ dir: join(process.cwd(), "examples", "generals"), pool: "all" });
+  assert.deepEqual(report.loaded, ["吕蒙"]);
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(getPackSkill("吕蒙/克己")?.rules, { skipDiscardPhaseIfNoSlash: true });
+  assert.equal(getPackSkill("吕蒙/涉猎")?.kind, "active");
+});

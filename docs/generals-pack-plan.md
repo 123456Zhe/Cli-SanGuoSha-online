@@ -2,7 +2,7 @@
 
 > 目标：让**武将 = 一个文件夹**（`generals/<武将名>/`），`general.json` 声明元数据与技能列表，技能各自成文件（JSON 或代码）；新增武将/技能不需要改本项目的 `src/`，也不需要重新编译。同时让**局内 AI 只注入本场出现的武将及其关联技能说明**，取代现在从 `rules.md` 注入全量武将知识的方式。
 
-状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；其余阶段待执行。附带的两项规则修正已完成，见 §7。
+状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；M4（Phase 5 校验器/批量生成）待执行。附带的两项规则修正已完成，见 §7。
 
 ## 一、已确认的决策
 
@@ -93,17 +93,21 @@ type SkillModule = {
   priority?: number;              // 钩子执行顺序（默认 100，升序）
   oncePerTurn?: boolean;
   optional?: boolean;             // 需要"是否发动"询问
-  triggers?: SkillTrigger[];      // 复用现有 4 个触发点
+  triggers?: SkillTrigger[];      // 基础 4 个触发点 + Phase 6 的 7 个拦截点（同一套 onTrigger）
   requiresTarget?: boolean;
+  targetIntent?: "enemy" | "ally" | "any";  // 主动技能目标取向（供 AI 选目标）
   label?: string;                 // 出牌动作标签（原 game.ts 手写标签迁到此处）
   rules?: SkillRules;             // 声明式数值/豁免
   canUse?(ctx, player): boolean;
   play?(ctx, player, targetId?): Promise<string[]>;
   onTrigger?: Partial<Record<SkillTrigger, SkillHook>>;
-  conversions?: ConversionRule[]; // 当牌规则
-  interceptors?: Partial<Record<InterceptorPoint, ...>>;  // Phase 6
+  conversions?: ConversionRule[]; // 当牌规则（未实现，走代码技能）
 };
 ```
+
+> Phase 6 实现时没有另开 `interceptors` 字段：拦截点与触发点共用 `onTrigger` 与同一张钩子表，
+> 区别只在 payload 里是否有"可改写/可否决"的字段（如 `skipDiscardPhase`、`canceled`、`judgmentCard`）。
+> 这样 loader 校验、注册表、AI 提示、测试桩全部复用同一条路径。
 
 `SkillRules` 词汇表（Phase 3 目标；"现状"列指今天的实现位置）：
 
@@ -117,6 +121,7 @@ type SkillModule = {
 | `drawPhaseDelta` | 摸牌阶段 ±N | 英姿、裸衣 | 钩子（skill-hooks.ts） |
 | `damageDelta` | 杀/决斗伤害 ±N | 裸衣、酒 | 硬编码于 resolveSlash/resolveDuel |
 | `peachSaveBonus` | 被桃救时额外回复 | 救援 | 硬编码于 resolve.ts |
+| `skipDiscardPhaseIfNoSlash` | 未出杀时可跳过弃牌阶段 | 克己（示例包） | ✅ Phase 6（`game.endPlayPhase`） |
 
 **能力清单（Context API）必须写进 API 文档**，尤其"调用方还需要自己做什么"这类隐式约定，例如：
 `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己 `discardPile.push`（见 `skills.ts` 现有写法）；伤害后必须走 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead`；失去手牌必须走 `removeHandCardAt`，否则连营不触发。
@@ -138,10 +143,10 @@ type SkillModule = {
 | 11 | 开关：`--generals-dir`、`--generals-pool=all\|builtin`（默认 all）、`--generals-json-only`、`--strict-generals` | 同上 + `host.ts` | 2 |
 | 12 | 抽将/选将池合并 + 按 id 排序保证确定性 | `game.ts`（`initDefaultGame`/`initNetworkGame`）、`generals.ts` | 2 |
 | 13 | 谓词查询层（8 个）+ `SkillRules` 数据化 | `resolve.ts`、`game.ts`、`skills.ts` | 3 |
-| 14 | AI 动态技能说明（详见 §6） | `src/agent/match-context.ts`（新增）、`prompt.ts`、`ai.ts`、`local-engine.ts`、`jev-advisor.ts`、`server.ts`、`app.ts` | 4 |
+| 14 | AI 动态技能说明（详见 §6） | `src/agent/match-context.ts`（新增）、`prompt.ts`、`ai.ts`、`local-engine.ts`、`jev-advisor.ts`、`server.ts`、`app.ts` | ✅ 4（`local-engine.ts` 见 §15 补齐） |
 | 15 | `rules.md` §14/§16.3 改为由注册表 + 武将库生成 | 新增生成脚本 | 4/5 |
 | 16 | 独立校验器 `npm run generals:check <dir>` + headless 自对弈不变量断言 | 新增 `src/tools/generals-check.ts` | 5 |
-| 17 | 拦截点（按需）：`onJudgment`、`onLoseHandCard`、`onLoseEquip`、`onSlashTargeted`、`onPeachSave`、`provideResponse`、`onCardUsed` | `resolve.ts`、`game.ts` | 6 |
+| 17 | 拦截点：`judgment`、`hand_card_lost`、`equip_lost`、`slash_targeted`、`peach_save`、`card_used`、`discard_phase_start` | `resolve.ts`、`game.ts`、`skill-hooks.ts`、`types.ts` | ✅ 6（`provideResponse` 未做，见 §15） |
 
 ## 五、阶段与里程碑
 
@@ -151,7 +156,7 @@ type SkillModule = {
 | **M2** 外部武将包进游戏 | 1 + 2 | ✅ 已完成（见 §13）：放个文件夹就能选将/对局/触发技能 | 1 天 |
 | **M3** 声明式技能 | 3 | ✅ 已完成（见 §14）：`SkillRules` 词表 + 谓词层，8 条硬编码规则数据化 | 半天 |
 | **M4** 可批量生成 | 5 | 校验器 + 自对弈 + 文档生成 | 半天 |
-| M5 | 6 | 按需开放更高阶挂载点 | 按需 |
+| M5 | 6 | ✅ 已完成按需子集（见 §15）：7 个拦截点；`provideResponse` 待做 | 按需 |
 
 关键路径 `0 → 1 → 2 → 3 → 5`；**Phase 4 只依赖 Phase 0，可与 Phase 2 并行**。
 
@@ -160,7 +165,7 @@ type SkillModule = {
 - **数据源以快照 `player.skills` 为准**，不是武将定义 —— 这样魂姿觉醒获得的英姿/英魂、以及未来任何"临时获得技能"都自动覆盖。
 - 新增 `match-context.ts`：从快照收集本场全部技能 id → 查注册表取 `displayName + description` → 生成"本局武将技能"文本块；**设总长上限**（武将多时截断，避免炸上下文）。
 - `prompt.ts` 把 `rulesText` 拆两块：`baseRules`（卡牌/流程，来自 `rules.md`，**剔除 §14 与 §16.3**）+ `matchGeneralsText`（动态）。
-- 三处消费点同步：LLM（`ai.ts`/`prompt.ts`）、本地策略（`local-engine.ts`）、Jev（`jev-advisor.ts` 的 `state.rules`）；构造入参在 `server.ts:180-201` 与 `app.ts:132-134`。
+- 三处消费点同步：LLM（`ai.ts`/`prompt.ts`）、本地策略（`local-engine.ts` 的 `getMatchGeneralsText()` + 技能元数据）、Jev（`jev-advisor.ts` 的 `state.rules` 与 `match_skills`）；构造入参在 `server.ts:180-201` 与 `app.ts:132-134`。
 - 验收：prompt 单测断言"在场武将的技能说明出现、未出场武将不出现、觉醒获得的技能出现"；把 `rules.md` §14 整段删除后 AI 行为不受影响。
 
 ## 七、已完成的规则修正（本次）
@@ -171,7 +176,7 @@ type SkillModule = {
 | 兵粮寸断距离限制 | 同上（乐不思蜀不受限） | `resolve.resolveDelayedTrick` + `findTargetsByCard` |
 | 奇才 | 锁定技：使用受距离限制的锦囊（顺手牵羊/兵粮寸断）无距离限制 | `resolve.canReachForDistanceOneTrick` |
 | 新增纯谓词 | `card-utils.isDistanceOneTrickCard` | `card-utils.ts` |
-| 测试 | `src/engine/trick-distance.test.ts`，6 例：默认受限 / -1 马 / 奇才豁免 / 兵粮寸断 / 乐不思蜀不受限 / 结算层兜底 | 全量 **140 tests 通过** |
+| 测试 | `src/engine/trick-distance.test.ts`，6 例：默认受限 / -1 马 / 奇才豁免 / 兵粮寸断 / 乐不思蜀不受限 / 结算层兜底 | 当时基线 **140 tests 通过**（当前基线见 §九） |
 | 文档 | `rules.md` §13.2、§13.2.1、§14.2 同步；`AGENTS.md` 测试数更新为 140 | — |
 
 Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行为不变。
@@ -193,7 +198,7 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 ## 九、验收门槛（每个阶段）
 
 - `npm run typecheck` 干净
-- `npm test` 全绿（当前 140；新增用例同步更新 `AGENTS.md` 计数）
+- `npm test` 全绿（**当前基线 188**；新增用例同步更新 `AGENTS.md` 计数）
 - `npm run lint` 不新增错误（存量 25 个不动）
 - 新增逻辑不引入 `no-explicit-any`、不引入浮动 Promise
 - 涉及线协议时：只做等价替换或加可选字段，**不 bump** `NETWORK_PROTOCOL_VERSION`，并同步 `webui/src/protocol.ts`
@@ -258,4 +263,35 @@ M2 明确未做：声明式 `.skill.json` 的 `rules` 只加载保留、不参�
 - **测试**：新增 `skill-rules.test.ts`（4）、`m3-rule-fixes.test.ts`（3，覆盖主公体力/激昂判色/魂姿），`general-pack.test.ts` +3（rules 校验），157 → **167**，`typecheck` 干净，lint 无新增。
 
 M3 明确未做：非 `rules` 词汇表可表达的效果（如克己跳弃牌、反击类）仍待 **Phase 6 拦截点**；`local-engine.ts` 仍读静态规则文本；`priority` 钩子顺序快照测试未做（Phase 4）。
+
+## 十五、Phase 6 拦截点（按需子集）+ row 14 收尾
+
+已完成，落点：
+
+- **触发点/拦截点合并为一套机制**：`types.ts` 新增 `SKILL_TRIGGERS` 常量数组（`SkillTrigger` 由它派生，单一真相），4 个基础触发点 + 7 个拦截点：
+  `judgment`（改判：payload `judgmentCard` 可替换）、`slash_targeted`（payload `canceled` 可取消杀）、
+  `hand_card_lost`、`equip_lost`（payload `equip`）、`card_used`（payload `reason` = 使用/打出）、
+  `peach_save`（payload `peachSaveBonus` 累加回复）、`discard_phase_start`（payload `skipDiscardPhase` 跳弃牌）。
+  没有另开 `interceptors` 字段：loader 校验、注册表、AI 提示、测试桩全部复用既有 `onTrigger` 路径。
+- **emit 位置**：`judgment`/`hand_card_lost`/`card_used`/`discard_phase_start` 在 `game.ts`；
+  `slash_targeted`/`equip_lost`/`peach_save` 在 `resolve.ts`（`ResolveContext` 新增 `emitSkillTrigger`）。
+  `skill-hooks.ts` 的 pack 钩子分发改为遍历 `SKILL_TRIGGERS`（原 `PACK_TRIGGERS` 局部清单已删）。
+- **使用 vs 打出（克己判定用）**：新增 `slashPlayedThisTurn`（打出响应杀，与出牌阶段"使用"的 `slashUsedThisTurn` 分开），
+  在 `consumeResponseCard` 里置位，`card_used` 同处发出——克己的"使用**或打出**过杀"才判得准。
+- **声明式规则 `skipDiscardPhaseIfNoSlash`**：`skill-registry.ts` 词表 + `skill-rules.ts` 谓词层（OR 合并）+
+  `findSkillWithBooleanRule(player, key)` 定位归属技能 + `general-pack.ts` schema 校验；
+  `game.endPlayPhase` 两条路径（代码钩子 / 声明式规则）任一命中即跳过弃牌阶段。
+  **示例包 `examples/generals/吕蒙/克己.skill.json` 由此真正生效**（原计划 §二 的示例写法终于兑现）。
+- **`targetIntent`**（`enemy`/`ally`/`any`）：`SkillDescriptor` + `SkillModule` + loader 校验 + 内置 7 个主动技能标注
+  （强袭/反间/离间=enemy，青囊/仁德/结姻/制霸=ally）。
+- **row 14 收尾（`local-engine.ts`）**：`getMatchGeneralsText()` 持有与 LLM/Jev 同源的在场技能文本（按快照签名缓存）；
+  `evaluateAction` 用 `resolveSkillDescriptor` 读技能元数据，支援技按 `ally` 选目标（修掉了"青囊丢给敌人"的旧启发式）。
+- **测试**：新增 `phase6-interceptors.test.ts`（14 例，含"加载 examples 后克己在真实对局里生效"的端到端用例）、
+  `general-pack.test.ts` +5、`local-engine.test.ts` +2，167 → **188**，`typecheck` 干净，lint 仍是 25 个存量错误（无新增）。
+
+Phase 6 明确未做：`provideResponse`（技能提供响应牌，需要改交互管线：请求牌前先问技能能否代为响应）；
+`priority` 钩子顺序快照测试；声明式 `conversions`（当牌规则）。
+
+已知不稳定用例：`src/network/lightning-death.test.ts` 的"闪电在判定阶段劈死玩家"是 90 秒上限的轮询型联机测试，
+在整包并行跑 + 机器负载高时偶发超时（单跑 ~5s）；重跑即可，不是回归。
 

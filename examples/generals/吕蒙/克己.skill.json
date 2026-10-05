@@ -2,8 +2,9 @@
   "id": "克己",
   "displayName": "克己",
   "kind": "triggered",
-  "triggers": ["turn_start"],
+  "triggers": ["discard_phase_start"],
   "optional": true,
   "priority": 100,
-  "description": "若你未于出牌阶段使用或打出过杀，你可以跳过弃牌阶段。"
+  "description": "若你未于出牌阶段使用或打出过杀，你可以跳过弃牌阶段。",
+  "rules": { "skipDiscardPhaseIfNoSlash": true }
 }

@@ -22,7 +22,12 @@ export type ResolvedSkillRules = {
   targetImmunity: { cards: Set<TargetImmunityCard>; requireEmptyHand: boolean }[];
   /** 被桃救时额外回复（求和）。 */
   peachSaveBonus: number;
+  /** 本回合未使用/打出过杀时可跳过弃牌阶段（OR）。 */
+  skipDiscardPhaseIfNoSlash: boolean;
 };
+
+/** 可查询归属技能的布尔类规则（需要"为哪个技能询问是否发动"的场景）。 */
+export type BooleanSkillRuleKey = "trickDistanceExempt" | "slashLimitExempt" | "skipDiscardPhaseIfNoSlash";
 
 const rulesOf = (id: SkillId) => resolveSkillDescriptor(id).rules;
 
@@ -35,6 +40,7 @@ export function getSkillRules(player: Player): ResolvedSkillRules {
     responseMultiplier: 1,
     targetImmunity: [],
     peachSaveBonus: 0,
+    skipDiscardPhaseIfNoSlash: false,
   };
   for (const skillId of new Set(player.skills)) {
     const rules = rulesOf(skillId);
@@ -49,6 +55,9 @@ export function getSkillRules(player: Player): ResolvedSkillRules {
     }
     if (rules.slashLimitExempt) {
       resolved.slashLimitExempt = true;
+    }
+    if (rules.skipDiscardPhaseIfNoSlash) {
+      resolved.skipDiscardPhaseIfNoSlash = true;
     }
     if (typeof rules.responseMultiplier === "number") {
       resolved.responseMultiplier = Math.max(resolved.responseMultiplier, rules.responseMultiplier);
@@ -100,4 +109,18 @@ export function isImmuneTo(player: Player, card: TargetImmunityCard): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * 找出玩家拥有的、声明了该布尔规则的第一个技能 id。
+ * 用于"需要为哪个技能询问是否发动"的场景（如克己跳弃牌），调用方据此拿展示名做提示。
+ * 只返回第一个声明者：同一玩家带多个同类技能时不做合并询问（与 rules 的 OR 合并语义一致）。
+ */
+export function findSkillWithBooleanRule(player: Player, key: BooleanSkillRuleKey): SkillId | null {
+  for (const skillId of new Set(player.skills)) {
+    if (rulesOf(skillId)?.[key]) {
+      return skillId;
+    }
+  }
+  return null;
 }

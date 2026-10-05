@@ -1,6 +1,7 @@
 import { SanGuoGame } from "../engine/game.js";
 import type { GameSnapshot, InteractionDecision, InteractionRequest, Player } from "../engine/game.js";
 import { resolveGeneralByName } from "../engine/generals.js";
+import { PlayerRole } from "../engine/types.js";
 import type { RngFn } from "../engine/types.js";
 
 /**
@@ -183,6 +184,14 @@ const playOneGame = async (
       player.gender = general.gender;
       player.maxHp = general.maxHp;
       player.hp = general.maxHp;
+    }
+    // initNetworkGame 内的 applyLordBonus（5 人以上主公 +1 上限/体力）已被上面的覆写抹掉，补回。
+    if (runtime.players.length >= 5) {
+      const lord = runtime.players.find((player) => player.role === PlayerRole.Lord);
+      if (lord) {
+        lord.maxHp += 1;
+        lord.hp += 1;
+      }
     }
   }
   for (const player of runtime.players) {

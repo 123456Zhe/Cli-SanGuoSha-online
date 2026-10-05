@@ -54,7 +54,7 @@ void test("主公 +1 体力上限：5 人局生效、4 人局不生效", async (
   assert.equal(lord4.maxHp, resolveGeneralByName(lord4.general).maxHp, "4 人局主公体力上限不加");
 });
 
-void test("激昂：红色决斗触发，黑色决斗不触发", async () => {
+void test("激昂：决斗不分颜色均触发（官方：使用【决斗】或红色【杀】）", async () => {
   const runDuel = async (suit: Card["suit"]): Promise<string[]> => {
     const game = new SanGuoGame(() => 0.5);
     await game.initNetworkGame(
@@ -87,10 +87,10 @@ void test("激昂：红色决斗触发，黑色决斗不触发", async () => {
   assert.ok(redLogs.some((line) => line.includes(SkillName.JiAng)), `红色决斗应触发激昂：${redLogs.join(" / ")}`);
 
   const blackLogs = await runDuel("spade");
-  assert.ok(!blackLogs.some((line) => line.includes(SkillName.JiAng)), `黑色决斗不应触发激昂：${blackLogs.join(" / ")}`);
+  assert.ok(blackLogs.some((line) => line.includes(SkillName.JiAng)), `黑色决斗也应触发激昂：${blackLogs.join(" / ")}`);
 });
 
-void test("魂姿：回合外掉血到 1 即时觉醒", async () => {
+void test("魂姿：受伤到 1 不立即觉醒，准备阶段开始时才觉醒（官方规则）", async () => {
   const game = new SanGuoGame(() => 0.5);
   await game.initNetworkGame(
     [
@@ -121,7 +121,13 @@ void test("魂姿：回合外掉血到 1 即时觉醒", async () => {
   await game.playAction(other.id, slash, me.id);
 
   assert.equal(me.hp, 1, "甲应被打到 1 体力");
-  assert.ok(me.skills.includes(SkillName.YingHun), "掉血到 1 应立即觉醒获得英魂");
+  assert.ok(!me.skills.includes(SkillName.YingHun), "受伤到 1 不应立即觉醒");
+  assert.equal(me.maxHp, maxBefore, "未觉醒时体力上限不变");
+
+  // 轮到甲的准备阶段：此时才觉醒。
+  runtime.currentPlayerIndex = 0;
+  await game.startTurn();
+  assert.ok(me.skills.includes(SkillName.YingHun), "准备阶段开始时应觉醒获得英魂");
   assert.ok(me.skills.includes(SkillName.Heroic), "觉醒应同时获得英姿");
   assert.equal(me.maxHp, maxBefore - 1, "觉醒后体力上限 -1");
 });

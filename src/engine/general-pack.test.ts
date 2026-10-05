@@ -77,6 +77,18 @@ void test("strict：任一包失败即抛出", async () => {
   await assert.rejects(() => loadGeneralPacks({ dir: root, pool: "all", strict: true }), /strict/);
 });
 
+void test("路径穿越：skills 里带 ../ 的包被拒绝，不跳出包目录", async () => {
+  writePack("好将", validGeneral({ name: "好将", skills: [] }));
+  writePack("坏将", validGeneral({ name: "坏将", skills: ["../../evil", "a/b"] }));
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, ["好将"]);
+  assert.equal(report.errors.length, 1);
+  assert.equal(report.errors[0]?.pack, "坏将");
+  assert.match(report.errors[0]?.message ?? "", /非法/);
+  assert.ok(resolveGeneralByName("好将"), "好包应正常入池");
+});
+
 void test("jsonOnly：拒绝代码技能", async () => {
   writePack(
     "吕蒙",

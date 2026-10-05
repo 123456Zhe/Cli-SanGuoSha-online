@@ -328,6 +328,10 @@ const loadOnePack = async (
   const skills: PackSkillEntry[] = [];
   const namespacedSkills: SkillId[] = [];
   for (const declared of meta.skills) {
+    // 安全：技能名只允许字母、数字、下划线、连字符与中文，杜绝 `../../evil` 类路径穿越。
+    if (!/^[\w\u4e00-\u9fa5-]+$/u.test(declared)) {
+      throw new Error(`技能名非法（只允许字母、数字、下划线、连字符与中文）：${folderName}/${declared}`);
+    }
     const base = join(dir, folderName, declared);
     const jsonPath = `${base}.skill.json`;
     const tsPath = `${base}.skill.ts`;

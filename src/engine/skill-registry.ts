@@ -396,9 +396,20 @@ const UNKNOWN_SKILL = (id: SkillId): SkillDescriptor => ({
   displayName: id,
 });
 
-/** 内置注册表查询（外部技能不会命中）。 */
+/** 已警告过的未知技能 id（去重：`resolveSkillDescriptor` 在热路径上被反复调用）。 */
+const warnedUnknownSkills = new Set<SkillId>();
+
+/** 内置注册表查询（外部技能不会命中）；未知 id 兜底为无效果被动技并警告一次（多为拼写错误）。 */
 export function describeSkill(id: SkillId): SkillDescriptor {
-  return (SKILL_REGISTRY as Record<SkillId, SkillDescriptor | undefined>)[id] ?? UNKNOWN_SKILL(id);
+  const found = (SKILL_REGISTRY as Record<SkillId, SkillDescriptor | undefined>)[id];
+  if (found) {
+    return found;
+  }
+  if (!warnedUnknownSkills.has(id)) {
+    warnedUnknownSkills.add(id);
+    console.warn(`[skill-registry] 未知技能 id「${id}」，已按无效果被动技处理（请检查拼写或技能注册）`);
+  }
+  return UNKNOWN_SKILL(id);
 }
 
 /** 统一查询：先外部武将包注册表，再回落内置，最后兜底“未知技能”。 */

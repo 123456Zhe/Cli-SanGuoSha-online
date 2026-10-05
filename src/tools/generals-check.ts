@@ -142,6 +142,10 @@ const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, me
 
   for (const skill of new Set(declared)) {
     skills.push(skill);
+    // 与 loader 的 loadOnePack 同口径：技能名只允许安全字符，防 `../../evil` 路径穿越。
+    if (!/^[\w\u4e00-\u9fa5-]+$/u.test(skill)) {
+      push("error", `general.json 的 skills 里 "${skill}" 含非法字符（只允许字母、数字、下划线、连字符与中文），loader 会拒绝加载`);
+    }
     const base = join(dir, folder, skill);
     const hasJson = existsSync(`${base}.skill.json`);
     const hasTs = existsSync(`${base}.skill.ts`);

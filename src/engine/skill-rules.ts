@@ -18,8 +18,8 @@ export type ResolvedSkillRules = {
   slashLimitExempt: boolean;
   /** 需 N 张闪/杀响应（取最大，默认 1）。 */
   responseMultiplier: number;
-  /** 不能成为的目标牌类（并集）。 */
-  targetImmunity: { cards: Set<TargetImmunityCard>; requireEmptyHand: boolean }[];
+  /** 不能成为的目标牌类（并集；每条记录带上来源技能 id，供日志展示真实技能名）。 */
+  targetImmunity: { skillId: SkillId; cards: Set<TargetImmunityCard>; requireEmptyHand: boolean }[];
   /** 被桃救时额外回复（求和）。 */
   peachSaveBonus: number;
   /** 本回合未使用/打出过杀时可跳过弃牌阶段（OR）。 */
@@ -73,6 +73,7 @@ export function getSkillRules(player: Player): ResolvedSkillRules {
     }
     if (rules.targetImmunity && rules.targetImmunity.cards.length > 0) {
       resolved.targetImmunity.push({
+        skillId,
         cards: new Set(rules.targetImmunity.cards),
         requireEmptyHand: rules.targetImmunity.requireEmptyHand ?? false,
       });
@@ -122,6 +123,11 @@ export function getHandLimit(player: Player): number {
 
 /** 目标免疫：命中任一技能的 targetImmunity.cards，且满足 requireEmptyHand 条件（空城需空手）。 */
 export function isImmuneTo(player: Player, card: TargetImmunityCard): boolean {
+  return immunitySource(player, card) !== undefined;
+}
+
+/** 返回实际生效的免疫来源技能 id（第一个命中的；无免疫时返回 undefined）。 */
+export function immunitySource(player: Player, card: TargetImmunityCard): SkillId | undefined {
   for (const entry of getSkillRules(player).targetImmunity) {
     if (!entry.cards.has(card)) {
       continue;
@@ -129,9 +135,15 @@ export function isImmuneTo(player: Player, card: TargetImmunityCard): boolean {
     if (entry.requireEmptyHand && player.hand.length > 0) {
       continue;
     }
-    return true;
+    return entry.skillId;
   }
-  return false;
+  return undefined;
+}
+
+/** 免疫来源技能的展示名（日志用；无免疫时返回 undefined）。 */
+export function immunitySourceName(player: Player, card: TargetImmunityCard): string | undefined {
+  const skillId = immunitySource(player, card);
+  return skillId === undefined ? undefined : (resolveSkillDescriptor(skillId).displayName ?? skillId);
 }
 
 /**

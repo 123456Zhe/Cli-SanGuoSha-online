@@ -804,10 +804,15 @@ export class SanGuoGame {
     if (!card || !viaSkillId || !convertTo) {
       return ["使用卡牌失败"];
     }
+    // 同一技能可声明多条相同 `to`、不同 `from` 的转换：必须找到"源牌也匹配"的那一条，
+    // 不能只按 skillId+to 取第一条（否则合法牌会被误拒）。
     const conversion = this.playerConversions(player).find(
-      (entry) => entry.skillId === viaSkillId && entry.conversion.to === convertTo,
+      (entry) =>
+        entry.skillId === viaSkillId &&
+        entry.conversion.to === convertTo &&
+        matchesConversionFilter(card, entry.conversion.from),
     )?.conversion;
-    if (!conversion || !matchesConversionFilter(card, conversion.from)) {
+    if (!conversion) {
       return ["使用卡牌失败"];
     }
     const displayName = resolveSkillDescriptor(viaSkillId).displayName ?? viaSkillId;
@@ -847,7 +852,7 @@ export class SanGuoGame {
       if (!getSkillRules(player).slashLimitExempt) {
         this.slashUsedThisTurn = true;
       }
-      logs.push(...(await this.useSlash(player, target, { kind: slashKindFromCardType(conversion.to), card: used })));
+      logs.push(...(await this.useSlash(player, target, { kind: slashKindOf(player, conversion.to), card: used })));
       return logs;
     }
     player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -2099,6 +2104,10 @@ export class SanGuoGame {
       logs.push(`${player.name} 摸了 ${drawn} 张牌`);
     }
     this.phase = TurnPhase.Play;
+    // 克己口径：官方是"出牌阶段内未使用/打出过杀"。杀只能在出牌阶段使用/打出，
+    // 在此重置后，这两个 flag 即精确等于"本出牌阶段"的使用记录。
+    this.slashUsedThisTurn = false;
+    this.slashPlayedThisTurn = false;
     if (this.skipPlayPhase === player.id) {
       this.skipPlayPhase = null;
       logs.push(`${player.name} 跳过出牌阶段`);
@@ -2146,7 +2155,7 @@ export class SanGuoGame {
    *
    * 两条路径，任一命中即跳过：
    * 1. `discard_phase_start` 钩子把 `payload.skipDiscardPhase` 置 true（钩子自行处理"是否发动"询问）；
-   * 2. 声明式规则 `rules.skipDiscardPhaseIfNoSlash`：本回合未使用/打出过杀时，询问玩家是否发动（克己）。
+   * 2. 声明式规则 `rules.skipDiscardPhaseIfNoSlash`：出牌阶段内未使用/打出过杀时，询问玩家是否发动（克己）。
    */
   private async shouldSkipDiscardPhase(player: Player, logs: string[]): Promise<boolean> {
     const payload: SkillEventPayload = { actor: player };

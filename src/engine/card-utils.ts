@@ -173,8 +173,9 @@ export function describeCard(card: Pick<Card, "type" | "suit" | "rank">): string
 export type SlashKind = "normal" | "fire" | "thunder";
 
 /**
- * 由牌类推出杀的属性（当牌转换用：`conversion.to` 是火杀/雷杀时结算要按属性走）。
- * 与 `slashKindOf` 不同：这里只看目标牌类，不看攻击者的武器（朱雀羽扇由 `resolveSlash` 内部处理）。
+ * 由牌类推出杀的属性（当牌转换的响应时机 `asResponse` 校验用：只看目标牌类）。
+ * 注意：出牌结算一律用 `slashKindOf(attacker, cardType)`，它还会看攻击者的武器
+ * （朱雀羽扇）；这里故意不看武器，不要在结算路径误用。
  */
 export function slashKindFromCardType(cardType: CardType): SlashKind {
   if (cardType === CardType.FireSlash) {

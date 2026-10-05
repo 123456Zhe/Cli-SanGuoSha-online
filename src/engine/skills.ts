@@ -536,10 +536,18 @@ export async function useSkillAction(
     return [`${player.name} 发动${SkillName.JieYin}，弃置 2 张手牌，${player.name}与${target.name}各回复 1 点体力`];
   }
   // 外部武将包主动技能（阶段 2）：委托给包的 play 实现，坏技能不炸对局。
+  // 不信任客户端：执行前校验技能归属（`player.skills` 存命名空间 id）与 `canUse`，
+  // 改包客户端发来自己没有的技能 id 直接拒绝。
   const packSkill = getPackSkill(action.skill);
   if (packSkill) {
+    if (!player.skills.includes(packSkill.id)) {
+      return [`${player.name} 没有技能${packSkill.displayName}，无法发动`];
+    }
     if (!packSkill.play) {
       return [`${player.name} 的${packSkill.displayName}没有可执行的出牌逻辑`];
+    }
+    if (packSkill.canUse && !packSkill.canUse(ctx as unknown as SkillModuleCtx, player)) {
+      return [`${player.name} 当前无法发动${packSkill.displayName}`];
     }
     try {
       return await packSkill.play(ctx as unknown as SkillModuleCtx, player, targetId);

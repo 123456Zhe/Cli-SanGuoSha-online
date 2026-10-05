@@ -174,6 +174,45 @@ void test("外部触发钩子挂到对应触发点并执行", async () => {
   const logs: string[] = [];
   const hook = hooks.after_damage[hooks.after_damage.length - 1];
   assert.ok(hook, "after_damage 应追加包钩子");
-  await hook({}, logs);
+  // 拥有该技能的 actor：钩子执行。
+  const owner = { skills: ["测试/钩子"] } as unknown as Player;
+  await hook({ actor: owner }, logs);
   assert.ok(logs.includes("PACK_HOOK_RAN"));
+});
+
+void test("外部触发钩子：actor 没有该技能时不执行（绝境乱触发回归）", async () => {
+  registerPackSkill({
+    id: "测试/归属",
+    displayName: "归属",
+    kind: "triggered",
+    description: "测试归属校验",
+    generalName: "测试",
+    onTrigger: {
+      before_draw: (_ctx, _payload, logs) => {
+        logs.push("PACK_HOOK_SHOULD_NOT_RUN");
+      },
+    },
+  });
+
+  const stub = {
+    players: [],
+    discardPile: [],
+    rng: () => 0,
+    hasSkill: () => false,
+    shouldActivateOptionalEffect: () => Promise.resolve(false),
+  } as unknown as SkillHooksContext;
+  const hooks = createSkillHooks(stub);
+  const hook = hooks.before_draw[hooks.before_draw.length - 1];
+  assert.ok(hook, "before_draw 应追加包钩子");
+
+  // 没有该技能的 actor：钩子必须跳过。
+  const stranger = { skills: ["别的/技能"] } as unknown as Player;
+  const logs: string[] = [];
+  await hook({ actor: stranger }, logs);
+  assert.ok(!logs.includes("PACK_HOOK_SHOULD_NOT_RUN"), "无技能者的触发器不应执行包钩子");
+
+  // 有该技能的 actor：钩子执行。
+  const owner = { skills: ["测试/归属"] } as unknown as Player;
+  await hook({ actor: owner }, logs);
+  assert.ok(logs.includes("PACK_HOOK_SHOULD_NOT_RUN"), "技能拥有者的触发器应执行包钩子");
 });

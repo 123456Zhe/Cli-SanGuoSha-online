@@ -13,6 +13,16 @@ const valueOf = (name: string, fallback: string): string => process.argv.find((a
 const port = Number.parseInt(valueOf("port", "9527"), 10);
 const host = valueOf("host", "127.0.0.1");
 const name = valueOf("name", `玩家${Math.floor(Math.random() * 1000)}`);
+/**
+ * 调试参数：`--general=<武将名>` 直接指定本座位武将（缺省由服务端随机分配）。
+ * **房主必须先用 `--allow-general-pick` 开启**（默认关闭，未开启时服务端直接拒绝该 join）。
+ * 名称必须与**主机已加载的武将池**完全一致——host 默认只加载内置武将（`--generals-pool=builtin`），
+ * 外部武将包需要主机用 `--generals-pool=all` 启动；不在池中或已被别人选走时服务端同样会明确拒绝。
+ */
+const general = valueOf("general", "").trim();
+if (general) {
+  console.log(`调试参数：指定武将「${general}」（房主需以 --allow-general-pick 启动且该武将存在于已加载的武将池）`);
+}
 let socket: Socket = connect({ host, port });
 let parser = new JsonLineParser<ServerMessage>();
 const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -173,6 +183,19 @@ const handle = async (message: ServerMessage): Promise<void> => {
   else if (message.type === "lobby") console.log(`等待玩家 (${message.players.length}/${message.roomSize})：${message.players.map((p) => p.name).join("、")}`);
   else if (message.type === "error") {
     console.error(`错误：${message.message}`);
+    // 调试参数 --general 指定失败（房主未开启 / 不在武将池 / 已被选走）：换时间重试也不可能成功，
+    // 直接退出并给出提示，而不是空转 10 次自动重连、每次重复同一条错误。
+    if (!playerId && message.message.includes("武将")) {
+      console.error(
+        message.message.includes("未开启武将自选")
+          ? "房主未开启武将自选：请去掉 --general 后重新加入，或让房主以 --allow-general-pick 启动"
+          : "请检查 --general=<武将名>：需与主机已加载的武将池完全一致（外部武将包要求主机以 --generals-pool=all 启动）",
+      );
+      left = true;
+      void rl.close();
+      socket.end();
+      return;
+    }
     if (message.message.includes("座位令牌")) {
       // 令牌失效或座位被复用：清掉本机座位，避免无限重连失败，提示用户按名字重新加入。
       seatToken = null;
@@ -276,7 +299,7 @@ const bindSocket = (s: Socket, p: JsonLineParser<ServerMessage>): void => {
         ...(seatToken ? { seatToken } : {}),
       }));
     } else {
-      send({ type: "join", name, version: NETWORK_PROTOCOL_VERSION });
+      send({ type: "join", name, version: NETWORK_PROTOCOL_VERSION, ...(general ? { general } : {}) });
     }
   });
   s.on("data", (chunk: string) => { for (const message of p.push(chunk)) enqueueMessage(message); });

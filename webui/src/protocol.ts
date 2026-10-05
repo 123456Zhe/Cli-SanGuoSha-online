@@ -136,7 +136,8 @@ export type InteractionDecision =
 // ─── 客户端 → 服务端 消息 ────────────────────────────
 
 export type ClientMessage =
-  | { type: "join"; name: string; version: number }
+  // `general` 为可选调试字段（CLI `--general=<武将名>` 指定武将）；WebUI 暂不发送。
+  | { type: "join"; name: string; version: number; general?: string }
   | { type: "action"; actionIndex: number; targetId?: string; selectedCardId?: string }
   | { type: "reconnect"; playerId: string; version: number; seatToken?: string }
   | { type: "discard"; handIndex: number }

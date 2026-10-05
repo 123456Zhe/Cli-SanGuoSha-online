@@ -1245,3 +1245,45 @@ void test("initNetworkGame：支持 isAI 配置并正确标记玩家", async () 
   assert.equal(ai.isAI, true);
   assert.equal(snapshot.players.length, 2);
 });
+
+void test("initNetworkGame：调试参数可指定武将（随机分配让位于显式指定）", async () => {
+  const game = new SanGuoGame(fixedRng);
+  await game.initNetworkGame(
+    [
+      { id: "p1", name: "甲", general: "赵云" },
+      { id: "p2", name: "乙" },
+      { id: "p3", name: "丙", general: "貂蝉" },
+    ],
+    1,
+    false,
+  );
+  const snapshot = game.getSnapshot();
+  assert.equal(snapshot.players.find((player) => player.id === "p1")!.general, "赵云");
+  assert.equal(snapshot.players.find((player) => player.id === "p3")!.general, "貂蝉");
+  // 未指定者仍走随机，且不得与显式指定重复。
+  const names = snapshot.players.map((player) => player.general);
+  assert.equal(new Set(names).size, names.length, "同一局武将不能重复");
+  assert.ok(GENERAL_LIBRARY.some((general) => general.name === "赵云"), "赵云应存在于内置武将池");
+});
+
+void test("initNetworkGame：未知武将 / 重复指定武将时明确报错，不静默换人", async () => {
+  const unknown = new SanGuoGame(fixedRng);
+  await assert.rejects(
+    () => unknown.initNetworkGame([{ id: "p1", name: "甲", general: "不存在的武将" }, { id: "p2", name: "乙" }], 1, false),
+    /未知武将/,
+  );
+
+  const duplicated = new SanGuoGame(fixedRng);
+  await assert.rejects(
+    () =>
+      duplicated.initNetworkGame(
+        [
+          { id: "p1", name: "甲", general: "赵云" },
+          { id: "p2", name: "乙", general: "赵云" },
+        ],
+        1,
+        false,
+      ),
+    /赵云/,
+  );
+});

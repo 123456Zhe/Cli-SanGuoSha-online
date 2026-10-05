@@ -292,8 +292,20 @@ export class SanGuoGame {
     const roles = this.buildRoleList(playerConfigs.length);
     const shuffledRoles = shuffle(roles, this.rng);
     const usedGeneralNames = new Set<string>();
+    // 调试指定武将：按座位顺序先到先得，随机分配永远优先让位于显式指定；
+    // 未知武将/被重复指定一律报错，绝不静默换人（否则玩家以为选上了实际没生效）。
+    const pickGeneralFor = (config: NetworkPlayerConfig, index: number): GeneralDefinition => {
+      if (config.general === undefined) {
+        return this.pickRandomUnusedGeneral(usedGeneralNames);
+      }
+      const general = this.resolveGeneralByName(config.general);
+      if (usedGeneralNames.has(general.name)) {
+        throw new Error(`联机建局失败：武将「${general.name}」被指定了多次（座位 ${index + 1}：${config.name}）`);
+      }
+      return general;
+    };
     this.players = playerConfigs.map((config, index) => {
-      const general = this.pickRandomUnusedGeneral(usedGeneralNames);
+      const general = pickGeneralFor(config, index);
       usedGeneralNames.add(general.name);
       return this.createPlayer(config.id, config.name, config.isAI ?? false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
     });

@@ -16,6 +16,8 @@ const aiStrategyValue = valueOf("ai-strategy", "own") as NonNullable<GameServerO
 const logLevelValue = valueOf("log-level", "info") as NonNullable<GameServerOptions["logLevel"]>;
 const hybridValue = valueOf("hybrid", process.env.SG_AI_HYBRID ?? "true");
 const allowMultiSource = valueOf("allow-multi-source", "false") === "true";
+// 调试能力开关：玩家的 --general=<武将名>（自选武将）只有房主显式开启后才可用，默认关闭。
+const allowGeneralPick = hasFlag("allow-general-pick");
 const interactionTimeoutSeconds = Number.parseInt(valueOf("interaction-timeout", "120"), 10);
 const maxConnections = Number.parseInt(valueOf("max-connections", "32"), 10);
 // 武将包：host 默认只内置（外部包是任意代码执行，联机主机需显式 --generals-pool=all 才加载他人包）。
@@ -53,6 +55,7 @@ const options: GameServerOptions = {
   /** 交互超时：超时视为"未响应"，按默认不响应（pass）继续结算，避免整局被一个不应答的连接挂死。 */
   interactionTimeoutMs: interactionTimeoutSeconds * 1000,
   maxConnections,
+  allowGeneralPick,
 };
 // 外部武将包必须在构造 GameServer（进而读取武将池）之前预载完成。
 const generalsReport = await loadGeneralPacks({

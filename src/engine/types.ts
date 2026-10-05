@@ -154,6 +154,11 @@ export type NetworkPlayerConfig = {
   id: string;
   name: string;
   isAI?: boolean;
+  /**
+   * 调试用：直接指定该座位使用的武将（`GENERAL_LIBRARY` 里的名字，联机 CLI `--general=<武将名>`）。
+   * 缺省为随机分配未占用的武将；指定的武将若不在池中或已被前面的座位占用，建局即报错（不静默改名）。
+   */
+  general?: string;
 };
 
 export type GeneralDefinition = {

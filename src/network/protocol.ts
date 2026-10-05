@@ -20,7 +20,12 @@ export type PublicPlayer = Omit<GameSnapshot["players"][number], "hand" | "role"
 export type ClientSnapshot = Omit<GameSnapshot, "players"> & { players: PublicPlayer[] };
 
 export type ClientMessage =
-  | { type: "join"; name: string; version: number }
+  /**
+   * 加入房间。`general` 是**调试参数**（CLI `--general=<武将名>`）：指定本座位使用的武将，
+   * 缺省仍为服务端随机分配。可选字段，老客户端不发即为原行为，因此不参与版本兼容判断。
+   * 服务端会校验它必须存在于已加载的武将池、且未被其他座位选走，否则明确报错拒绝加入。
+   */
+  | { type: "join"; name: string; version: number; general?: string }
   | { type: "action"; actionIndex: number; targetId?: string; selectedCardId?: string }
   /**
    * 重连：`seatToken` 由服务端在 welcome 里签发。

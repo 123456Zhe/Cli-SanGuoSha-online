@@ -561,4 +561,145 @@ void test("连接数上限：超过上限的连接被明确拒绝", async () => 
   }
 });
 
+void test("调试参数 --general：房主未开启 --allow-general-pick 时不可用（默认关闭）", async () => {
+  console.log = () => {};
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const game = new SanGuoGame(() => 0.5);
+  // 不给 allowGeneralPick：等价于房主按默认参数启动
+  const server = new GameServer(
+    { host: "127.0.0.1", port: 0, playerCount: 3, openingHandCount: 1, aiDriver: "simple", reconnectTimeoutMs: 60_000 },
+    game,
+  );
+  const port = await server.listen();
+  const withGeneral = await TestClient.connect(port);
+  const plain = await TestClient.connect(port);
+  try {
+    withGeneral.send({ type: "join", name: "甲", version: 4, general: "赵云" });
+    await wait(50);
+    assert.ok(
+      withGeneral.messages.some((m) => m.type === "error" && m.message.includes("未开启武将自选")),
+      "默认关闭时必须明确拒绝，而不是静默改成随机分配",
+    );
+    assert.equal(withGeneral.socket.destroyed, true, "被拒绝的连接应断开");
+    assert.ok(
+      !withGeneral.messages.some((m) => m.type === "welcome"),
+      "未开启时调试参数不得生效（连座位都不该给）",
+    );
+
+    // 去掉参数后同一武将名可以正常加入 → 说明拒绝的是调试参数本身，不是武将名
+    plain.send({ type: "join", name: "乙", version: 4 });
+    await wait(50);
+    assert.ok(plain.messages.some((m) => m.type === "welcome"), "不带 --general 的 join 不受开关影响");
+  } finally {
+    withGeneral.destroy();
+    plain.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+void test("调试参数 --general：未开局就离开的座位立刻释放武将名", async () => {
+  console.log = () => {};
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const game = new SanGuoGame(() => 0.5);
+  const server = new GameServer(
+    {
+      host: "127.0.0.1",
+      port: 0,
+      playerCount: 2,
+      openingHandCount: 1,
+      aiDriver: "simple",
+      reconnectTimeoutMs: 60_000,
+      allowGeneralPick: true,
+    },
+    game,
+  );
+  const port = await server.listen();
+  const first = await TestClient.connect(port);
+  const second = await TestClient.connect(port);
+  try {
+    first.send({ type: "join", name: "甲", version: 4, general: "赵云" });
+    await wait(50);
+    assert.ok(first.messages.some((m) => m.type === "welcome"), "第一名玩家应正常加入");
+    first.destroy();
+    await wait(50);
+
+    second.send({ type: "join", name: "乙", version: 4, general: "赵云" });
+    await wait(50);
+    assert.ok(second.messages.some((m) => m.type === "welcome"), "离开的座位不该继续占着武将名");
+    assert.ok(!second.messages.some((m) => m.type === "error"), "同一武将名在座位释放后应可再次指定");
+  } finally {
+    first.destroy();
+    second.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
+
+void test("调试参数 --general：可指定自己武将，未知/重复指定被明确拒绝", async () => {
+  console.log = () => {};
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  // 必须用全新的空对局：join 指定的武将只在 initNetworkGame 建局时生效。
+  const game = new SanGuoGame(() => 0.5);
+  const server = new GameServer(
+    {
+      host: "127.0.0.1",
+      port: 0,
+      playerCount: 3,
+      openingHandCount: 1,
+      aiDriver: "simple",
+      reconnectTimeoutMs: 60_000,
+      allowGeneralPick: true,
+    },
+    game,
+  );
+  const port = await server.listen();
+  const c1 = await TestClient.connect(port);
+  const bad = await TestClient.connect(port);
+  const dup = await TestClient.connect(port);
+  const c2 = await TestClient.connect(port);
+  const c3 = await TestClient.connect(port);
+  try {
+    c1.send({ type: "join", name: "甲", version: 4, general: "赵云" });
+    await wait(50);
+    assert.ok(c1.messages.some((m) => m.type === "welcome"), "合法武将名应正常加入");
+
+    bad.send({ type: "join", name: "乙", version: 4, general: "不存在的武将" });
+    await wait(50);
+    assert.ok(
+      bad.messages.some((m) => m.type === "error" && m.message.includes("不在已加载的武将池中")),
+      "未知武将应被拒绝并说明原因",
+    );
+    assert.equal(bad.socket.destroyed, true, "参数无法修正的 join 应断开连接而不是让客户端挂住");
+
+    dup.send({ type: "join", name: "丙", version: 4, general: "赵云" });
+    await wait(50);
+    assert.ok(
+      dup.messages.some((m) => m.type === "error" && m.message.includes("已被玩家「甲」选走")),
+      "同一武将不能被两个座位指定（先到先得）",
+    );
+
+    // 另外两名玩家不带调试参数正常加入 → 凑满 3 人开局（被拒绝的连接不占座位）
+    c2.send({ type: "join", name: "乙", version: 4 });
+    await wait(50);
+    c3.send({ type: "join", name: "丙", version: 4 });
+    await wait(300);
+    const state = [...c2.messages].reverse().find((m) => m.type === "state");
+    assert.ok(state && state.type === "state", "凑满人数后应收到开局 state");
+    const me = state.snapshot.players.find((p) => p.name === "甲");
+    assert.equal(me?.general, "赵云", "调试参数指定的武将应真正生效");
+    const generals = state.snapshot.players.map((p) => p.general);
+    assert.equal(new Set(generals).size, generals.length, "同一局武将不能重复");
+  } finally {
+    c1.destroy();
+    bad.destroy();
+    dup.destroy();
+    c2.destroy();
+    c3.destroy();
+    await server.close();
+    console.log = originalConsoleLog;
+  }
+});
+
 

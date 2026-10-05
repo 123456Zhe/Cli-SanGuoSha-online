@@ -28,7 +28,9 @@ generals/                      # 项目根目录（在 src 之外，不进 typec
 ```
 
 - `apiVersion` 必须为 `1`；`name`/`kingdom`/`gender`（`男`/`女`）/`maxHp`（正整数）/`skills`（字符串数组）必填。
+- `description` 可选：一句话设定，会保留进已加载池（`getGeneralLibrary()`），供 UI/未来 AI 使用；引擎结算逻辑不读它。
 - `skills` 是**原始技能名**数组；对应文件名为 `<技能名>.skill.json|.ts|.mjs`（二选一，不要 JSON+代码成对出现，避免双源真相）。
+- **未知字段会被 loader 静默忽略**——拼错字段名不会报错。跑 `npm run generals:check` 会让它变成一条警告。
 
 完整的可运行示例见 `examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）。
 
@@ -116,7 +118,7 @@ type SkillModule = {
 
 - `TargetImmunityCard` = `"slash" \| "duel" \| "snatch" \| "indulgence" \| "supplies-cut"`。
 - `drawPhaseDelta` / `damageDelta` 属「发动后本回合生效」：触发时机仍由技能自身的钩子 / `isSkillUsed` 门控，`rules` 只提供数值。
-- 外部包的 `rules` 会被 **schema 校验**（`general-pack.ts validateRules`）：未知键、类型不符、`targetImmunity.cards` 非法 → 抛错（隔离进 `report.errors`；`--strict-generals` 时整体失败）。
+- 外部包的 `rules` 会被 **schema 校验**（`general-pack.ts validateRules`）：未知键、类型不符、`targetImmunity.cards` 非法 → 抛错（隔离进 `report.errors`；`--strict-generals` 时整体失败）。词汇表的单一真相是 `skill-registry.ts` 的 `SKILL_RULE_KEY_KINDS`（校验器/文档/测试都读它；有测试卡住它与 `validateRules` 的漂移）。
 
 ## 执行语义（M2/M3）
 
@@ -156,6 +158,29 @@ type SkillModule = {
 | Jev 快决策 | `src/agent/jev-advisor.ts` | state 的 `match_skills` 字段 |
 | 本地策略 | `src/agent/local-engine.ts` | `getMatchGeneralsText()` 持有同一份文本（缓存），并用 `resolveSkillDescriptor` 读 `targetIntent` 等元数据选目标 |
 | 规则文本 | `src/agent/match-context.ts` | `stripGeneralsSections` 从 `rules.md` 剔除 §14/§16.3，避免与动态注入重复 |
+
+## 写完就自检（M4）
+
+**不读 `src/`** 也能拿到反馈的三条通道：
+
+```bash
+npm run generals:check -- --dir=generals          # schema + 语义 lint（文本报告）
+npm run generals:check -- --dir=generals --json   # 机器可读（CI / agent 消费）
+npm run generals:check -- --dir=generals --strict # 警告也算失败
+npm run generals:check -- --dir=generals --selfplay=3  # 每个武将强制上场跑 3 局不变量断言
+```
+
+校验器（`src/tools/generals-check.ts`）做两件事：
+
+1. **权威检查**：直接调用真实 loader，报告 schema/文件缺失/rules 非法等错误；
+2. **静态 lint**：抓 loader 会**静默吞掉**的东西——未知触发点名（会被丢弃）、未知顶层字段（拼错 `rule`/`trigers`）、
+   既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、尚未被引擎消费的 `kind: "conversion"`、
+   非主动技能上写了 `targetIntent`、`general.json` 的 name 与文件夹名不一致、技能同时存在 JSON 与代码版本……
+
+退出码：有错误（或 `--strict` 下的警告）为 `1`，`--json` 时完整报告打到 stdout，可直接给 agent 当反馈。
+
+`--selfplay=N` 会用 `src/tools/selfplay.ts` 的无头自对弈（`forceGeneral` 把该武将指派给全场，保证技能被走到），
+断言"不崩、不卡死、体力/生死自洽"，同一 seed 必然复现同一局。规则文档的武将章节则由 `npm run rules:check` 卡住漂移。
 
 ## 加载与开关
 

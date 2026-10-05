@@ -376,6 +376,7 @@ export class SanGuoGame {
       gender: item.gender,
       maxHp: item.maxHp,
       skills: [...item.skills],
+      ...(item.description !== undefined ? { description: item.description } : {}),
     }));
   }
 

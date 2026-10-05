@@ -2,7 +2,7 @@
 
 > 目标：让**武将 = 一个文件夹**（`generals/<武将名>/`），`general.json` 声明元数据与技能列表，技能各自成文件（JSON 或代码）；新增武将/技能不需要改本项目的 `src/`，也不需要重新编译。同时让**局内 AI 只注入本场出现的武将及其关联技能说明**，取代现在从 `rules.md` 注入全量武将知识的方式。
 
-状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；M4（Phase 5 校验器/批量生成）待执行。附带的两项规则修正已完成，见 §7。
+状态：**M1（Phase 0 + Phase 4）已完成**（见 §12）；**M2（Phase 1 + Phase 2）已完成**（见 §13）；**M3（Phase 3 谓词层 + §8 规则修复）已完成**（见 §14）；**Phase 6 拦截点（按需子集）与 §四 row 14 的本地策略尾巴已完成**（见 §15）；**M4（Phase 5 校验器 / 自对弈 / 文档生成）已完成**（见 §16）；下一步的关键缺口与排序见 §17。附带的两项规则修正已完成，见 §7。
 
 ## 一、已确认的决策
 
@@ -144,8 +144,8 @@ type SkillModule = {
 | 12 | 抽将/选将池合并 + 按 id 排序保证确定性 | `game.ts`（`initDefaultGame`/`initNetworkGame`）、`generals.ts` | 2 |
 | 13 | 谓词查询层（8 个）+ `SkillRules` 数据化 | `resolve.ts`、`game.ts`、`skills.ts` | 3 |
 | 14 | AI 动态技能说明（详见 §6） | `src/agent/match-context.ts`（新增）、`prompt.ts`、`ai.ts`、`local-engine.ts`、`jev-advisor.ts`、`server.ts`、`app.ts` | ✅ 4（`local-engine.ts` 见 §15 补齐） |
-| 15 | `rules.md` §14/§16.3 改为由注册表 + 武将库生成 | 新增生成脚本 | 4/5 |
-| 16 | 独立校验器 `npm run generals:check <dir>` + headless 自对弈不变量断言 | 新增 `src/tools/generals-check.ts` | 5 |
+| 15 | `rules.md` §14/§16.3 改为由注册表 + 武将库生成 | 新增生成脚本 | ✅ 4/5（`src/tools/gen-rules.ts` + `rules:gen`/`rules:check` + 漂移测试，见 §16） |
+| 16 | 独立校验器 `npm run generals:check <dir>` + headless 自对弈不变量断言 | 新增 `src/tools/generals-check.ts` | ✅ 5（`--json`/`--strict`/`--selfplay=N`，见 §16） |
 | 17 | 拦截点：`judgment`、`hand_card_lost`、`equip_lost`、`slash_targeted`、`peach_save`、`card_used`、`discard_phase_start` | `resolve.ts`、`game.ts`、`skill-hooks.ts`、`types.ts` | ✅ 6（`provideResponse` 未做，见 §15） |
 
 ## 五、阶段与里程碑
@@ -155,7 +155,7 @@ type SkillModule = {
 | **M1** 契约 + AI 认识本局武将 | 0 + 4 | ✅ 已完成（见 §12）：注册表 + 动态技能注入；AI 不再依赖 `rules.md` 武将章节 | 1 天 |
 | **M2** 外部武将包进游戏 | 1 + 2 | ✅ 已完成（见 §13）：放个文件夹就能选将/对局/触发技能 | 1 天 |
 | **M3** 声明式技能 | 3 | ✅ 已完成（见 §14）：`SkillRules` 词表 + 谓词层，8 条硬编码规则数据化 | 半天 |
-| **M4** 可批量生成 | 5 | 校验器 + 自对弈 + 文档生成 | 半天 |
+| **M4** 可批量生成 | 5 | ✅ 已完成（见 §16）：独立校验器（真实 loader + 静态 lint + 可选自对弈）+ headless 自对弈不变量断言 + `rules.md` 生成 | 半天 |
 | M5 | 6 | ✅ 已完成按需子集（见 §15）：7 个拦截点；`provideResponse` 待做 | 按需 |
 
 关键路径 `0 → 1 → 2 → 3 → 5`；**Phase 4 只依赖 Phase 0，可与 Phase 2 并行**。
@@ -198,9 +198,11 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 ## 九、验收门槛（每个阶段）
 
 - `npm run typecheck` 干净
-- `npm test` 全绿（**当前基线 188**；新增用例同步更新 `AGENTS.md` 计数）
+- `npm test` 全绿（**当前基线 206**；新增用例同步更新 `AGENTS.md` 计数）
 - `npm run lint` 不新增错误（存量 25 个不动）
 - 新增逻辑不引入 `no-explicit-any`、不引入浮动 Promise
+- 武将包相关改动：`npm run generals:check -- --dir=examples/generals` 零错误零警告
+- 改过技能 `description` / 武将库：`npm run rules:check` 干净（`rules.md` §14/§16.3 是生成物）
 - 涉及线协议时：只做等价替换或加可选字段，**不 bump** `NETWORK_PROTOCOL_VERSION`，并同步 `webui/src/protocol.ts`
 
 ## 十、不做的事
@@ -294,4 +296,59 @@ Phase 6 明确未做：`provideResponse`（技能提供响应牌，需要改交�
 
 已知不稳定用例：`src/network/lightning-death.test.ts` 的"闪电在判定阶段劈死玩家"是 90 秒上限的轮询型联机测试，
 在整包并行跑 + 机器负载高时偶发超时（单跑 ~5s）；重跑即可，不是回归。
+
+## 十六、M4 完成情况（Phase 5 校验器 / 自对弈 / 文档生成）
+
+已完成，落点：
+
+- **文档生成**（新 `src/tools/gen-rules.ts` + `npm run rules:gen` / `rules:check`）：`rules.md` §14（按势力的武将+技能详细说明）
+  与 §16.3（武将速查）改为**从武将库 + 技能注册表生成**，只替换 `<!-- GENERATED:… -->` 标记之间的内容
+  （标记缺失即报错，宁可失败也不误删文档）；生成幂等，`--check` 用首个不同行报错。
+  顺带修掉 §14 的顺序漂移与 §16.3 缺曹仁的漂移。**技能 `description` 从此是文档的唯一定义**（rules.md 说"以代码行为准"）。
+- **独立校验器**（新 `src/tools/generals-check.ts` + `npm run generals:check -- --dir=<dir>`）：
+  ①调用**真实 loader** 拿权威错误；②静态 lint 抓 loader **静默吞掉**的写法——未知触发点名（`triggers.filter` 会丢掉）、
+  未知顶层字段（拼错 `rule`/`trigers`/`titel`）、`.skill.json` 与 `.skill.ts` 双源真相、`kind: "active"` 但无 `play()`、
+  `kind: "triggered"` 但无 `triggers`/`rules` 的"空技能"、非主动技能上的 `targetIntent`、`general.json` 的 name 与文件夹名不一致、
+  代码技能 `onTrigger` 的键不是已知触发点；
+  ③`--selfplay=N` 对每个成功加载的武将强制上场跑 N 局不变量断言；`--json` 输出完整报告（可直接喂给 agent 当反馈），
+  `--strict` 警告即失败。示例包 `examples/generals/吕蒙` 零错误零警告。
+- **自对弈不变量框架**（新 `src/tools/selfplay.ts`）：`runSelfPlay` 用确定性 `mulberry32(seed)` + 全座位 `isAI` 打通整局，
+  统一应答交互（可选效果一律发动，走遍技能分支），把违规记成**结构化记录**而非抛错：
+  `crashed` / `turn-stuck` / `hp-over-max` / `alive-without-hp` / `dead-with-hp`（后两条只在延迟结算消费完后才判定）。
+  为模拟联机主机，`settleStagedTurn` 复刻 `server.ts` 的延迟结算链
+  （`resolvePendingDeaths`→`ensureTurnState`→`consumePendingTurnEnd`→`finishTurn`→`consumePendingNextTurn`→`startTurn`）
+  并**反复消费到没有挂起状态为止**——只消费一次会把局面停在"弃牌阶段但无人可动"的死角（`startTurn` 自身还会因
+  跳过出牌阶段/下个玩家已阵亡而再次挂起）。这是 M4 抓到的第一个真问题。
+- **`SKILL_RULE_KEY_KINDS`**（`skill-registry.ts`）：`SkillRules` 键→类型的**单一真相**，校验器/文档/测试都读它；
+  `general-pack.test.ts` 新增用例卡住它与 `validateRules` 的漂移（逐键生成合法取值试跑 loader）。
+- **`general.json` 的 `description` 不再被静默丢弃**：`GeneralDefinition.description?` 贯通 loader → `getGeneralLibrary()`
+  （此前 API 文档承诺了该字段、loader 却直接丢弃）。
+- **测试**：新增 `selfplay-invariants.test.ts`（2）、`src/tools/generals-check.test.ts`（8）、`src/tools/gen-rules.test.ts`（6）、
+  `general-pack.test.ts` +2，188 → **206**，`typecheck` 干净，lint 仍是 25 个存量错误（无新增）。
+
+M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七）：JSON Schema（`schema/*.json`，让编辑器/agent 有机器可读的结构约束）、
+武将包作者的 `.d.ts`、`conversions`（当牌转换，**目前 `kind: "conversion"` 写了完全不生效**，校验器只把它标成警告）。
+
+## 十七、"拿 API 文档独立写出一个武将"还差什么（下一步排序）
+
+目标：一个**只能读 `docs/generals-pack-api.md` + schema/类型声明，不能读 `src/`** 的 agent，能独立写出一个
+能加载、能对局、技能真的会触发的武将，并自己判断写对了。
+
+现状盘点（M4 之后）：
+
+| # | 缺口 | 影响 | 落点 |
+|---|------|------|------|
+| 1 | **`conversions` 完全没实现**（`kind: "conversion"` 只登记不生效，零引用） | 黄月英「奇才/集智」之外的"当牌转换"类武将（武圣/龙胆/国色/倾国/急救）**只能写代码技能**，声明式表达不了 | `skill-module.ts` + `game.ts getPlayableActions`（按 `conversion.toCard` 枚举虚拟动作）+ loader 校验 |
+| 2 | 没有 **JSON Schema**（`schema/general.schema.json` / `schema/skill.schema.json`） | 编辑器/agent 没有机器可读的结构约束，只能靠 `generals:check` 事后反馈 | 新增 `schema/`，`generals-check` 直接用它校验 |
+| 3 | 没有**作者用 `.d.ts`**（`SkillModuleCtx` 的能力清单只在文档里，没有签名） | 代码技能作者只能猜 `ctx.drawCards(...)` 的签名与返回值 | 新增 `types/generals-pack.d.ts`（从 `skill-module.ts` 导出，或生成） |
+| 4 | **参考实现只有 1 个**（`examples/generals/吕蒙`） | 每种机制（改判/取消杀/当牌转换/主公技/AI 选目标）都没有可抄的样例 | `examples/generals/` 增加 8–12 个覆盖各机制的武将（**默认不加载**） |
+| 5 | `priority` 是**空转**（`getPackHooksFor` 只按注册顺序追加，从不排序）；`kind` 的部分语义没有落点 | 钩子顺序不可控、`kind` 与实际行为可能不一致（校验器只能警告） | `skill-hooks.ts` 排序，或删掉 `priority` 字段 |
+| 6 | pack 钩子**没有 try/catch**（`skill-hooks.ts` 的 `onTrigger` 调用），只有 `play` 有 | 外部钩子抛错会**炸掉整局**（CLI/联机都一样） | 包一层 try/catch + 归属技能名写进日志（与 `useSkillAction` 对齐） |
+| 7 | 内置技能行为散在 74 个 `hasSkill` 分支（`game.ts` 38 / `resolve.ts` 14 / `skills.ts` 10 / `skill-hooks.ts` 12） | 外部包能表达的能力 = 这些分支能表达的子集；不一致会让作者"按内置抄却抄不出来" | 内置技能模块化迁移（**已决定先不做**） |
+
+验收标准（"独立写出武将"这件事算不算成立）：起一个**没有本仓库上下文**的 subagent，只给 `docs/generals-pack-api.md`
++ `schema/` + 作者 `.d.ts`（禁止读 `src/`、`examples/`），让它写三个武将：
+张飞（纯声明式）、司马懿（`judgment` 改判 + 反馈）、黄月英（奇才 + 集智 + 一张当牌转换）。
+判定：`npm run generals:check -- --json` 零错误、`--selfplay=100` 零违规、日志里三个技能都真的触发过、`src/` 一行未改。
+按现状，第 2/3/4 项不补则"写对"几乎全靠运气，第 1 项会让黄月英直接写不出来——所以顺序建议是 **1 → 2+3+4 → 5+6**。
 

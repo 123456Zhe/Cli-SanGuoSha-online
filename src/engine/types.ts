@@ -156,6 +156,8 @@ export type GeneralDefinition = {
   gender: "男" | "女";
   maxHp: number;
   skills: SkillId[];
+  /** 可选的一句话设定（外部包 `general.json` 的 `description`）；给 UI/未来 AI 用，引擎逻辑不读。 */
+  description?: string;
 };
 
 /**

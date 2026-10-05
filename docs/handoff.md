@@ -1,21 +1,23 @@
 # 交接文档（给接手的 agent）
 
 > 目的：让一个**没有上下文**的 agent 读完本文 + 下列材料后即可继续开发。
-> 当前分支 `main`；最近提交 `c8fc117`（`.gitattributes` 统一 LF），其前一项 `90bd494` 是 **M1–M3 的落地提交**。
-> 本文档描述的是**已提交的 M1–M3** + **本轮未提交的 Phase 6 / local-engine 改动**。
+> 当前分支 `main`；最近提交 `d9a0053`（**Phase 6 拦截点 + local-engine 接入本局武将技能**），其前一项 `c8fc117`（`.gitattributes` 统一 LF），
+> `90bd494` 是 **M1–M3 的落地提交**。
+> 本文档描述的是**已提交的 M1–M3 + Phase 6** + **本轮未提交的 M4 改动**。
 
 ## 0. 一句话状态
 
 「武将包与技能模块化」计划：**M1（契约 + AI 认识本局武将）、M2（外部武将包进游戏）、M3（声明式规则数据化）已完成并提交**；
-本轮的 **Phase 6 拦截点（7 个）与 §四 row 14 的本地策略尾巴已实现**（见 `docs/generals-pack-plan.md` §15）。
-基线：`typecheck` 干净、`npm test` **188 全绿**、`lint` 25 个存量错误（无新增）。
-**下一步是 M4（Phase 5）**：`npm run generals:check <dir>` 校验器 + headless 自对弈不变量断言 + 从注册表生成 `rules.md` §14/§16.3。
+**Phase 6 拦截点（7 个）与 §四 row 14 的本地策略尾巴已提交**（见 `docs/generals-pack-plan.md` §15）；
+**M4（Phase 5：校验器 + 自对弈不变量 + 文档生成）已实现**（见 §16，本轮未提交）。
+基线：`typecheck` 干净、`npm test` **206 全绿**、`lint` 25 个存量错误（无新增）；`generals:check` 与 `rules:check` 均干净。
+**下一步是 §17 的缺口清单**（①声明式 `conversions` ②JSON Schema ③作者 `.d.ts` ④参考实现 gallery ⑤`priority` ⑥pack 钩子 try/catch）。
 
 ## 1. 必读材料（按顺序）
 
 1. `AGENTS.md` — 命令、架构、约定、坑（**先读这个**，是给 agent 的项目宪法）。
 2. `README.md` — 启动流程、§8 规则→代码映射、§11 外部武将包。
-3. `docs/generals-pack-plan.md` — **总计划**（M1–M5 分阶段、决策表、遗留问题、验收门槛）；M1 见 §12、M2 见 §13、M3 见 §14、Phase 6 见 §15。
+3. `docs/generals-pack-plan.md` — **总计划**（M1–M5 分阶段、决策表、遗留问题、验收门槛）；M1 见 §12、M2 见 §13、M3 见 §14、Phase 6 见 §15、M4 见 §16、下一步缺口见 §17。
 4. `docs/generals-pack-api.md` — 外部武将包契约、`SkillModule`/Context 能力清单、触发点与拦截点表、隐式约定。
 5. `rules.md` — 规则参考（help 文本与 AI prompt 用；文档以当前实现为准）。
 6. `docs/interaction-refactor-plan.md` — 联机交互协议设计背景。
@@ -47,23 +49,46 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 - **`local-engine.ts` 收尾**：`getMatchGeneralsText()` 与 LLM/Jev 同源；`evaluateAction` 读技能元数据，
   修掉了"青囊/结姻/仁德 这类支援技被丢到敌人身上"的旧启发式。
 
-## 4. 下一步（按计划）
+## 4. 本轮（M4）与下一步
 
-**M4 — 可批量生成（Phase 5）**：
-- `npm run generals:check <dir>` 独立校验器（复用 `general-pack.ts` 的 schema 校验 + 注册表交叉校验）。
-- headless 自对弈不变量断言（对局不崩、回合能推进、体力/手牌守恒）。
-- 从注册表生成 `rules.md` §14/§16.3（现在仍是手写，容易与代码漂移）。
+### 本轮：M4 已完成（见计划 §16）
 
-**Phase 6 剩余项**：`provideResponse`（技能提供响应牌，需先问技能能否代为响应，再走 `InteractionRequest`）；
-`priority` 钩子顺序快照测试；声明式 `conversions`（当牌规则）。
+- **`src/tools/generals-check.ts`**（`npm run generals:check -- --dir=<dir>`）：真实 loader 的权威检查 + 静态 lint
+  （抓 loader **静默吞掉**的写法：未知触发点名、拼错字段、双源真相、`active` 无 `play()`、空技能、`conversion` 不生效……），
+  `--json` / `--strict` / `--selfplay=N`。示例包零错误零警告。
+- **`src/tools/selfplay.ts`**：`runSelfPlay` 确定性自对弈（`mulberry32(seed)`、全座位 `isAI`、违规记结构化记录）。
+  关键点：`initNetworkGame` 会把 `staged` 置 true，宿主必须**反复**消费延迟结算（`settleStagedTurn`），
+  只消费一次会把局面停在"弃牌阶段但无人可动"；"体力 0 但存活"在 `setDeferDyingResolution(true)` 下是合法中间态，
+  只有在结算消费完之后才能断言。
+- **`src/tools/gen-rules.ts`**（`rules:gen` / `rules:check`）：`rules.md` §14/§16.3 由武将库 + 技能注册表生成，
+  只替换 `<!-- GENERATED:… -->` 标记之间的内容。**改技能 `description` 后必须 `rules:gen`**（有漂移测试卡住）。
+- **`SKILL_RULE_KEY_KINDS`**（`skill-registry.ts`）：`SkillRules` 键→类型的单一真相（校验器/文档/测试都读）。
+- **`GeneralDefinition.description?`**：`general.json` 的 `description` 不再被静默丢弃。
+
+### 下一步（§17 的缺口，按建议顺序）
+
+1. **声明式 `conversions`**（当牌转换）：现在 `kind: "conversion"` 写了**完全不生效**，武圣/龙胆/国色/倾国/急救这类
+   只能写代码技能。落点 `skill-module.ts` + `game.ts getPlayableActions`（按 `conversion.toCard` 枚举虚拟动作）+ loader 校验。
+2. **JSON Schema**（`schema/*.json`）+ **作者 `.d.ts`**（`SkillModuleCtx` 只文档化、无签名）+ **参考实现 gallery**
+   （`examples/generals/` 8–12 个覆盖各机制的武将，默认不加载）。
+3. `priority` 钩子排序（**当前是空转**）或删字段；pack 钩子 `onTrigger` 补 try/catch（现在外部钩子抛错会炸掉整局）。
+4. Phase 6 剩余：`provideResponse`（技能提供响应牌，需改交互管线）。
+
+**验收方式**（"拿 API 文档独立写出武将"算不算成立）：起一个没有本仓库上下文的 subagent，只给
+`docs/generals-pack-api.md` + `schema/` + 作者 `.d.ts`（**禁止读 `src/`、`examples/`**），写张飞（纯声明式）、
+司马懿（`judgment` + 反馈）、黄月英（奇才 + 集智 + 一张当牌转换）；判定
+`generals:check --json` 零错误、`--selfplay=100` 零违规、日志里技能都真的触发过、`src/` 一行未改。
 
 ## 5. 验证命令与当前基线
 
 ```bash
 npm run typecheck   # 必须干净（当前 0 error）
-npm test            # 当前 188 全绿（node --test --import tsx）
+npm test            # 当前 206 全绿（node --test --import tsx）
 npm run lint        # 基线 25 存量错误，不得新增（不改存量）
-npm run host -- --players=3 --generals-pool=all   # 手动验收外部包
+npm run generals:check -- --dir=examples/generals            # 零错误零警告
+npm run generals:check -- --dir=examples/generals --selfplay=3
+npm run rules:check                                          # rules.md 与注册表同步
+npm run host -- --players=3 --generals-pool=all              # 手动验收外部包
 ```
 
 已知不稳定用例：`src/network/lightning-death.test.ts` 的"闪电在判定阶段劈死玩家"是 90 秒上限的轮询型联机测试，

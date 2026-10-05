@@ -133,12 +133,16 @@ const validateGeneralJson = (raw: unknown, packName: string): Omit<GeneralDefini
   if (!Array.isArray(obj.skills) || obj.skills.some((skill) => !isString(skill))) {
     throw new Error(`${packName}: general.json skills 必须为字符串数组`);
   }
+  if ("description" in obj && typeof obj.description !== "string") {
+    throw new Error(`${packName}: general.json description 必须为字符串`);
+  }
   return {
     kingdom: obj.kingdom,
     name: obj.name,
     gender: obj.gender,
     maxHp: obj.maxHp,
     skills: obj.skills as string[],
+    ...(typeof obj.description === "string" ? { description: obj.description } : {}),
   };
 };
 
@@ -251,6 +255,7 @@ const loadOnePack = async (
       gender: meta.gender,
       maxHp: meta.maxHp,
       skills: namespacedSkills,
+      ...(meta.description !== undefined ? { description: meta.description } : {}),
     },
     skills,
   };

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { GENERAL_LIBRARY, getBuiltinGenerals, resolveGeneralByName } from "./generals.js";
 import { loadGeneralPacks, resetGeneralPacks } from "./general-pack.js";
+import { SKILL_RULE_KEY_KINDS, SkillRuleKey } from "./skill-registry.js";
 import { getPackSkill, getPackSkills } from "./skill-module.js";
 
 let root: string;
@@ -252,4 +253,43 @@ void test("示例包 examples/generals/吕蒙 可加载，克己带 skipDiscardP
   assert.deepEqual(report.errors, []);
   assert.deepEqual(getPackSkill("吕蒙/克己")?.rules, { skipDiscardPhaseIfNoSlash: true });
   assert.equal(getPackSkill("吕蒙/涉猎")?.kind, "active");
+});
+
+/** 按 SKILL_RULE_KEY_KINDS 生成一个该键的合法取值（词汇表与 validateRules 必须同步）。 */
+const sampleRuleValue = (kind: (typeof SKILL_RULE_KEY_KINDS)[SkillRuleKey]): unknown => {
+  switch (kind) {
+    case "number":
+      return 1;
+    case "boolean":
+      return true;
+    case "targetImmunity":
+      return { cards: ["slash"] };
+  }
+};
+
+void test("rules 词汇表 SKILL_RULE_KEY_KINDS 与 validateRules 完全同步", async () => {
+  for (const [key, kind] of Object.entries(SKILL_RULE_KEY_KINDS)) {
+    writePack(
+      "吕蒙",
+      validGeneral({ name: "吕蒙", skills: ["克己"] }),
+      { 克己: { kind: "passive", description: "词汇表一致性", rules: { [key]: sampleRuleValue(kind) } } },
+    );
+    const report = await loadGeneralPacks({ dir: root, pool: "all" });
+    assert.deepEqual(report.errors, [], `词汇表里的 ${key} 应被 validateRules 接受`);
+    assert.ok(getPackSkill("吕蒙/克己")?.rules && key in (getPackSkill("吕蒙/克己")?.rules ?? {}), `${key} 应被保留`);
+    rmSync(join(root, "吕蒙"), { recursive: true, force: true });
+    resetGeneralPacks();
+  }
+});
+
+void test("武将包的 general.json description 会被保留进已加载池（不再被静默丢弃）", async () => {
+  writePack(
+    "吕蒙",
+    validGeneral({ name: "吕蒙", skills: ["克己"], description: "吴国武将，善于据守与突袭。" }),
+    { 克己: { kind: "passive", description: "测试", rules: { slashLimitExempt: true } } },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.loaded, ["吕蒙"]);
+  assert.equal(resolveGeneralByName("吕蒙").description, "吴国武将，善于据守与突袭。");
 });

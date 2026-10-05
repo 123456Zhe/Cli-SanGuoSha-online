@@ -12,7 +12,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "node --test --import tsx \"src/**/*.test.ts\""
+    "test": "node --test --import tsx \"src/**/*.test.ts\"",
+    "generals:check": "tsx src/tools/generals-check.ts",
+    "rules:gen": "tsx src/tools/gen-rules.ts",
+    "rules:check": "tsx src/tools/gen-rules.ts --check"
   },
   "keywords": [],
   "author": "",

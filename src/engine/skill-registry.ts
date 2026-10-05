@@ -45,6 +45,25 @@ export type SkillRules = {
   skipDiscardPhaseIfNoSlash?: boolean;
 };
 
+/**
+ * `SkillRules` 词表的**单一真相**（键 → 值类型），供校验器（`src/tools/generals-check.ts`）、
+ * 文档与测试查询；`general-pack.ts` 的 `validateRules` 按同一批键做逐键类型校验。
+ * 新增声明式规则时改这里 + `SkillRules` + `validateRules` + `docs/generals-pack-api.md`（测试会卡住漏改）。
+ */
+export const SKILL_RULE_KEY_KINDS = {
+  distanceDelta: "number",
+  trickDistanceExempt: "boolean",
+  slashLimitExempt: "boolean",
+  responseMultiplier: "number",
+  targetImmunity: "targetImmunity",
+  drawPhaseDelta: "number",
+  damageDelta: "number",
+  peachSaveBonus: "number",
+  skipDiscardPhaseIfNoSlash: "boolean",
+} as const;
+
+export type SkillRuleKey = keyof typeof SKILL_RULE_KEY_KINDS;
+
 export type SkillDescriptor = {
   id: SkillId;
   kind: SkillKind;
@@ -216,7 +235,7 @@ export const SKILL_REGISTRY: Record<BuiltinSkillId, SkillDescriptor> = {
   }),
   [SkillName.ZhiHeng]: active(
     SkillName.ZhiHeng,
-    "出牌阶段限一次：弃置任意张牌（可含装备，不弃视为未发动），摸等量牌。",
+    "出牌阶段限一次：弃置任意张牌（张数自选、可只弃 1 张、可含装备区；一张都不弃视为未发动、不消耗次数），摸等量牌。",
   ),
   [SkillName.JiuYuan]: lord(
     SkillName.JiuYuan,

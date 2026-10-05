@@ -271,3 +271,16 @@ npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-ge
 - 代码技能除 4 个基础触发点外，还可挂 7 个 Phase 6 拦截点：`judgment`（改判）、`slash_targeted`（取消杀）、`hand_card_lost`、`equip_lost`、`card_used`、`peach_save`（追加回复）、`discard_phase_start`（跳过弃牌阶段）。`provideResponse` 尚未开放。
 - 主动技能可声明 `targetIntent`（`enemy`/`ally`/`any`），让 AI 知道该打敌人还是支援队友。
 - AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）；LLM、Jev、本地策略三个消费点同源。
+
+**写完就自检（M4）**——不读 `src/` 也能拿到反馈：
+
+```bash
+npm run generals:check -- --dir=generals            # schema + 语义 lint
+npm run generals:check -- --dir=generals --json     # 机器可读报告（CI / agent 反馈）
+npm run generals:check -- --dir=generals --strict   # 警告也算失败
+npm run generals:check -- --dir=generals --selfplay=3   # 每个武将强制上场跑 3 局不变量断言
+```
+
+- 校验器直接调用真实 loader，并额外抓 loader 会**静默吞掉**的写法：未知触发点名、拼错的字段名、既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、尚未被引擎枚举的 `kind: "conversion"`、非主动技能上的 `targetIntent`……避免"写错了却不报错"。
+- `--selfplay=N` 用无头自对弈（`src/tools/selfplay.ts`）断言"不崩、不卡死、体力/生死自洽"，同一 seed 可复现。
+- `rules.md` 的 §14 与 §16.3 由武将库 + 技能注册表生成：改完技能说明跑 `npm run rules:gen`，`npm run rules:check`（及 `src/tools/gen-rules.test.ts`）会卡住文档漂移。

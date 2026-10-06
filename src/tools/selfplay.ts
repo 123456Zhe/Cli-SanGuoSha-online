@@ -185,8 +185,8 @@ const playOneGame = async (
       player.maxHp = general.maxHp;
       player.hp = general.maxHp;
     }
-    // initNetworkGame 内的 applyLordBonus（5 人以上主公 +1 上限/体力）已被上面的覆写抹掉，补回。
-    if (runtime.players.length >= 5) {
+    // initNetworkGame 内的 applyLordBonus（4 人以上主公 +1 上限/体力）已被上面的覆写抹掉，补回。
+    if (runtime.players.length >= 4) {
       const lord = runtime.players.find((player) => player.role === PlayerRole.Lord);
       if (lord) {
         lord.maxHp += 1;

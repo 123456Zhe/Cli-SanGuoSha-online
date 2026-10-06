@@ -185,8 +185,9 @@ export class LocalAiEngine {
 
   /**
    * 响应决策（simple 驱动的交互入口，供服务端 decideInteractionAi 调用）。
-   * 身份判断直接用快照里的真实身份（服务端 AI 本就全知）：桃只救自己和队友、无懈看清再交、
-   * 决斗智能出杀、白嫖技能自动发动、借刀选最没牌的敌方、弃低价值牌。
+   * 身份判断只用**可见信息**（自己 / 主公 / 已阵亡）+ 行为推断（`visibleRole`/`predictRole`）：
+   * 桃只救自己和推断出的队友、无懈看清再交、决斗智能出杀、白嫖技能自动发动、
+   * 借刀选推断出的敌方、弃低价值牌。**不得读 `player.role`**（那会让 AI 明牌作弊）。
    */
   decideInteraction(
     snapshot: GameSnapshot,
@@ -231,7 +232,7 @@ export class LocalAiEngine {
     const usable = request.sources[0];
     if (request.responseKind === "peach") {
       const dying = snapshot.players.find((item) => item.id === request.trigger.actorId);
-      const ally = !dying || dying.id === self.id || this.isAlly(selfRole, dying.role);
+      const ally = !dying || dying.id === self.id || this.isAlly(selfRole, this.visibleRole(snapshot, self.id, dying));
       if (usable && ally) {
         return {
           decision: { choice: "card", sourceId: usable.sourceId },
@@ -243,7 +244,7 @@ export class LocalAiEngine {
     if (request.responseKind === "slash") {
       const slashCount = self.hand.filter((card) => isSlashCard(card.type)).length;
       const duelist = snapshot.players.find((item) => item.id === request.trigger.actorId);
-      const lethal = duelist !== undefined && duelist.hp <= 1 && !this.isAlly(selfRole, duelist.role);
+      const lethal = duelist !== undefined && duelist.hp <= 1 && !this.isAlly(selfRole, this.visibleRole(snapshot, self.id, duelist));
       if (usable && (self.hp <= 1 || slashCount >= 2 || (lethal && slashCount >= 1))) {
         return { decision: { choice: "card", sourceId: usable.sourceId }, insight: "决斗出杀" };
       }
@@ -280,7 +281,7 @@ export class LocalAiEngine {
       .map((id) => snapshot.players.find((item) => item.id === id))
       .filter(
         (item): item is NonNullable<typeof item> =>
-          item !== undefined && item.alive && !this.isAlly(self.role, item.role),
+          item !== undefined && item.alive && !this.isAlly(self.role, this.visibleRole(snapshot, self.id, item)),
       );
     if (hostiles.length === 0) {
       return undefined;
@@ -296,9 +297,13 @@ export class LocalAiEngine {
   ): boolean {
     const trick = request.trigger.cardName;
     const actor = snapshot.players.find((item) => item.id === request.trigger.actorId);
-    const actorIsAlly = actor !== undefined && (actor.id === self.id || this.isAlly(self.role, actor.role));
+    const actorIsAlly = actor !== undefined && (actor.id === self.id || this.isAlly(self.role, this.visibleRole(snapshot, self.id, actor)));
     if (trick === (CardType.PeachGarden as string) || trick === (CardType.Harvest as string)) {
-      return this.groupTrickNetEnemyGain(snapshot, self.role) > 0;
+      return this.groupTrickNetEnemyGain(snapshot, self.id, self.role) > 0;
+    }
+    if (trick === (CardType.ExNihilo as string)) {
+      // 无中生有只补使用者自己：只反制敌人的补牌，不反制队友的。
+      return !actorIsAlly;
     }
     if (HARMFUL_TRICKS.has(trick)) {
       return !actorIsAlly;
@@ -306,13 +311,13 @@ export class LocalAiEngine {
     return self.hp <= 2;
   }
 
-  private groupTrickNetEnemyGain(snapshot: GameSnapshot, selfRole: PlayerRole): number {
+  private groupTrickNetEnemyGain(snapshot: GameSnapshot, selfId: string, selfRole: PlayerRole): number {
     let net = 0;
     for (const player of snapshot.players) {
       if (!player.alive) {
         continue;
       }
-      const ally = this.isAlly(selfRole, player.role);
+      const ally = this.isAlly(selfRole, this.visibleRole(snapshot, selfId, player));
       const missing = Math.max(0, player.maxHp - player.hp);
       const gain = missing > 0 ? missing : 0.3;
       net += ally ? -gain : gain * 0.7;
@@ -463,6 +468,22 @@ export class LocalAiEngine {
       return otherRole === PlayerRole.Rebel;
     }
     return false;
+  }
+
+  /**
+   * 视角内**可见**的身份：自己、主公、已阵亡玩家是公开信息（与客户端 `createClientSnapshot` 和
+   * LLM 侧 `prompt.maskRole` 同口径）；其余存活玩家的身份**只能靠行为推断**（`predictRole`）。
+   * 绝不读 `player.role` —— 否则 AI 就是明牌作弊（在线对局里等于开天眼）。
+   */
+  private visibleRole(
+    snapshot: GameSnapshot,
+    selfId: string,
+    player: { id: string; role: PlayerRole; alive: boolean },
+  ): PlayerRole {
+    if (player.id === selfId || player.role === PlayerRole.Lord || !player.alive) {
+      return player.role;
+    }
+    return this.predictRole(snapshot, player.id);
   }
 
   private predictCards(playerName: string, handCount: number): CardPrediction {

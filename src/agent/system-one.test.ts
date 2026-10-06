@@ -124,6 +124,30 @@ void test("System-One：无懈可击看清目标再交（敌人有害锦囊反�
   assert.equal(vsEnemy.decision.choice, "card");
 });
 
+void test("System-One：无中生有只反制敌人的补牌，自己/队友不反制", () => {
+  const { game, aiId } = setupPlayTurn();
+  const agent = new SystemOneAgent();
+  const snapshot = game.getSnapshot();
+  const negateRequest = (actorId: string, cardName: string) => ({
+    kind: "respond" as const,
+    requestId: 1,
+    responderId: aiId,
+    trigger: { cardName, actorId },
+    responseKind: "negate" as const,
+    sources: [{ sourceId: "hand:1", origin: "hand" as const, label: "无懈可击" }],
+    allowPass: true as const,
+    reason: "无懈",
+  });
+  // 敌人补牌：反制。
+  const vsEnemy = agent.decideInteraction(snapshot, aiId, negateRequest("human", CardType.ExNihilo));
+  assert.ok(vsEnemy);
+  assert.equal(vsEnemy.decision.choice, "card");
+  // 自己的补牌：不反制。
+  const vsSelf = agent.decideInteraction(snapshot, aiId, negateRequest(aiId, CardType.ExNihilo));
+  assert.ok(vsSelf);
+  assert.equal(vsSelf.decision.choice, "pass");
+});
+
 void test("System-One：无代价可选技能自动发动（集智）", () => {
   const { game, aiId } = setupPlayTurn();
   const agent = new SystemOneAgent();

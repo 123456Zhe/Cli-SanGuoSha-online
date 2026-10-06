@@ -9,7 +9,7 @@ export type AiPromptMessage = {
 };
 
 export type AiLogEntry = {
-  provider: "qwen" | "ollama";
+  provider: "qwen" | "ollama" | "jev";
   model: string;
   stage: string;
   playerId: string;

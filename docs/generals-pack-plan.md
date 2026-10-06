@@ -208,7 +208,7 @@ Phase 3 会把上述硬编码改造成 `trickDistanceExempt` 数据字段，行�
 ## 九、验收门槛（每个阶段）
 
 - `npm run typecheck` 干净
-- `npm test` 全绿（**当前基线 250**；新增用例同步更新 `AGENTS.md` 与本行计数）
+- `npm test` 全绿（**当前基线 252**；新增用例同步更新 `AGENTS.md` 与本行计数）
 - `npm run lint` 不新增错误（存量 25 个不动）
 - 新增逻辑不引入 `no-explicit-any`、不引入浮动 Promise
 - 武将包相关改动：`npm run generals:check -- --dir=examples/generals` **0 错误 / 0 警告**（Phase 7 修复 `conversions` 后已从"2 个已知警告"回到干净基线；任何新增警告视同回归）
@@ -490,7 +490,7 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 
 ### 测试与基线
 
-- 测试 226 → **250**：远端两个本地 AI 提交（System-One / simple 升级）先加到 232，本轮再加 18 —— `pack-schema.test.ts` 7 例 + `generals-pack-types.test.ts` 9 例 + 联机实测带出的 2 例回归（铁索连环自选目标、重开后空对局不崩服务端）；
+- 测试 226 → **252**：远端两个本地 AI 提交（System-One / simple 升级）先加到 232，本轮再加 18 —— `pack-schema.test.ts` 7 例 + `generals-pack-types.test.ts` 9 例 + 联机实测带出的 2 例回归（铁索连环自选目标、重开后空对局不崩服务端）；
   另按 gallery 更新了 `general-pack.test.ts`/`generals-check.test.ts` 里钉死"示例包恰好 2 个"的断言（改为"gallery 全员加载成功"）。
 - `typecheck` 干净；`lint` 仍是 25 个存量错误（新增文件里的 `void test(...)` 已按仓库惯例处理，无新增）；
   `generals:check --dir=examples/generals --strict` 与 `rules:check` 干净。

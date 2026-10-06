@@ -8,3 +8,6 @@
 - When handing work off to another agent, expects a single self-contained written handoff document that a fresh agent with no prior context can pick up — covering current status, an ordered reading list of the key docs, which changes are uncommitted, the next planned step, and known environment gotchas. Confidence: 0.7
 - For non-trivial work, expects the agent to write out a plan for review first (explicitly asks "先写计划") rather than diving straight into implementation. Confidence: 0.6
 - When a refactor and directly related bug/rule fixes are both pending, prefers batching them into a single delivery pass instead of doing them as separate milestones. Confidence: 0.5
+- After a milestone/chunk of work is finished and verified, expects the agent to commit the changes and push them to the remote (e.g. `origin/main`) as the closing step. Confidence: 0.5
+- Prefers LF line endings enforced repo-wide via a committed `.gitattributes` (e.g. `* text=auto eol=lf`) to prevent cross-platform/Windows editors from rewriting whole files as CRLF and producing large spurious diffs. Confidence: 0.6
+- Values clean diffs and a tidy commit — expects the agent to verify a commit didn't include unintended whole-file rewrites (e.g. line-ending churn) before pushing, and to avoid committing unrelated noise. Confidence: 0.5

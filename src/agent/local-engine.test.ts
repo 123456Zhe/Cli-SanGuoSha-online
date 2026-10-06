@@ -154,9 +154,12 @@ void test("本地AI持有本局武将技能文本（与 LLM/Jev 同源）", asyn
 });
 
 
-void test("simple 交互：桃只救自己和队友，不救敌人", async () => {
+void test("simple 交互：桃只救自己和队友，不救敌人（队友/敌人靠行为推断）", async () => {
   const { game, lord, ally, rebel } = await setupThree();
   const engine = new LocalAiEngine("rules");
+  // 身份必须由**可观测行为**推断：乙 救过人（忠臣倾向）、丙 打过主公（反贼倾向）。
+  // 引擎不得读 player.role —— 否则 AI 就是明牌作弊（回归测试见文件末尾「交换隐藏身份」用例）。
+  engine.syncPreviousRounds([{ round: 1, displayLines: ["乙 使用桃", "丙 对 主公 使用杀"], battlefieldLines: [] }]);
   const peachRequest = (dyingId: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
     kind: "respond",
     requestId: 1,
@@ -181,9 +184,10 @@ void test("simple 交互：桃只救自己和队友，不救敌人", async () =>
   assert.ok(foe?.decision && "choice" in foe.decision && foe.decision.choice === "pass", `不应救敌人：${foe?.insight}`);
 });
 
-void test("simple 交互：无懈可击按阵营反制，借刀选手牌最少的敌方", async () => {
+void test("simple 交互：无懈可击按阵营反制，借刀选手牌最少的敌方（阵营靠行为推断）", async () => {
   const { game, lord, ally, rebel } = await setupThree();
   const engine = new LocalAiEngine("rules");
+  engine.syncPreviousRounds([{ round: 1, displayLines: ["乙 使用桃", "丙 对 主公 使用杀"], battlefieldLines: [] }]);
   const snapshot = () => game.getSnapshot();
   const negateRequest = (actorId: string, cardName: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
     kind: "respond",
@@ -204,12 +208,12 @@ void test("simple 交互：无懈可击按阵营反制，借刀选手牌最少�
   const againstAlly = engine.decideInteraction(snapshot(), lord.id, negateRequest(ally.id, CardType.Duel));
   assert.ok(againstAlly?.decision && "choice" in againstAlly.decision && againstAlly.decision.choice === "pass", `队友锦囊不应反制：${againstAlly?.insight}`);
 
-  // 借刀杀人：选手牌最少的敌方。rebel 手牌 1 张，ally 手牌 3 张。
-  rebel.hand = [{ id: "r1", type: CardType.Slash, color: "black", suit: "spade", rank: 7 }];
-  ally.hand = [
-    { id: "a1", type: CardType.Slash, color: "black", suit: "spade", rank: 8 },
-    { id: "a2", type: CardType.Dodge, color: "red", suit: "heart", rank: 2 },
-    { id: "a3", type: CardType.Peach, color: "red", suit: "heart", rank: 6 },
+  // 借刀杀人：选手牌最少的**敌方**。这里故意让队友手牌更少（1 张）而敌方 2 张——
+  // 若 AI 分不清敌我（或读不到身份），它会挑到手牌更少的队友，用例即失败。
+  ally.hand = [{ id: "a1", type: CardType.Dodge, color: "red", suit: "heart", rank: 2 }];
+  rebel.hand = [
+    { id: "r1", type: CardType.Slash, color: "black", suit: "spade", rank: 7 },
+    { id: "r2", type: CardType.Slash, color: "black", suit: "club", rank: 9 },
   ];
   const collateral = engine.decideInteraction(snapshot(), lord.id, {
     kind: "collateral",
@@ -225,6 +229,30 @@ void test("simple 交互：无懈可击按阵营反制，借刀选手牌最少�
     collateral?.decision && "choice" in collateral.decision && collateral.decision.choice === "target" && collateral.decision.targetId === rebel.id,
     `借刀应指向手牌最少的敌方：${collateral?.insight}`,
   );
+});
+
+void test("simple 交互：无中生有只反制敌人的补牌，不反制队友", async () => {
+  const { game, lord, ally, rebel } = await setupThree();
+  const engine = new LocalAiEngine("rules");
+  engine.syncPreviousRounds([{ round: 1, displayLines: ["乙 使用桃", "丙 对 主公 使用杀"], battlefieldLines: [] }]);
+  const negateRequest = (actorId: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
+    kind: "respond",
+    requestId: 4,
+    responderId: lord.id,
+    trigger: { cardName: CardType.ExNihilo, actorId },
+    responseKind: "negate",
+    sources: [{ sourceId: "hand:0", origin: "hand", label: "无懈可击", card: { id: "c2", type: CardType.Negate } as never }],
+    allowPass: true,
+    reason: "无懈可击",
+  });
+
+  // 敌人补牌：反制。
+  const againstEnemy = engine.decideInteraction(game.getSnapshot(), lord.id, negateRequest(rebel.id));
+  assert.ok(againstEnemy?.decision && "choice" in againstEnemy.decision && againstEnemy.decision.choice === "card", `敌人无中生有应反制：${againstEnemy?.insight}`);
+
+  // 队友补牌：不反制。
+  const againstAlly = engine.decideInteraction(game.getSnapshot(), lord.id, negateRequest(ally.id));
+  assert.ok(againstAlly?.decision && "choice" in againstAlly.decision && againstAlly.decision.choice === "pass", `队友无中生有不应反制：${againstAlly?.insight}`);
 });
 
 void test("simple 交互：白嫖技能自动发动，决斗濒死必出杀", async () => {
@@ -282,4 +310,53 @@ void test("simple 交互：白嫖技能自动发动，决斗濒死必出杀", as
     discard?.decision && "choice" in discard.decision && discard.decision.choice === "card" && discard.decision.sourceId === "hand:1",
     `弃牌应弃价值最低的杀而非桃：${discard?.insight}`,
   );
+});
+
+/**
+ * 信息面回归：AI 决策**不得依赖隐藏身份**。
+ *
+ * 构造两个"可观测状态完全相同、只有隐藏身份互换"的世界，同一个请求必须得到同一个决策。
+ * 修复前 simple 引擎直接读 `player.role`，两个世界会给出相反答案（救/不救），
+ * 这在联机里等于给 AI 开天眼。
+ */
+void test("信息面：交换两名存活玩家的隐藏身份不应改变本地 AI 的决策", async () => {
+  const decisions: string[] = [];
+  for (const swap of [false, true]) {
+    const { game, lord, ally, rebel } = await setupThree();
+    const engine = new LocalAiEngine("rules");
+    if (swap) {
+      // 只互换"隐藏身份"，可观测状态（手牌/体力/武将/公开行为记录）完全不变。
+      ally.role = PlayerRole.Rebel;
+      rebel.role = PlayerRole.Loyalist;
+    }
+    const request = (dyingId: string): Parameters<LocalAiEngine["decideInteraction"]>[2] => ({
+      kind: "respond",
+      requestId: 9,
+      responderId: lord.id,
+      trigger: { cardName: CardType.Slash, actorId: dyingId },
+      responseKind: "peach",
+      sources: [{ sourceId: "hand:0", origin: "hand", label: "桃", card: { id: "c9", type: CardType.Peach } as never }],
+      allowPass: true,
+      reason: "求桃",
+    });
+    const saved = engine.decideInteraction(game.getSnapshot(), lord.id, request(rebel.id));
+    const other = engine.decideInteraction(game.getSnapshot(), lord.id, request(ally.id));
+    decisions.push(`${saved?.decision.choice ?? "?"}/${other?.decision.choice ?? "?"}`);
+  }
+  assert.equal(decisions[0], decisions[1], `隐藏身份不该影响决策：${decisions.join(" vs ")}`);
+});
+
+/**
+ * 信息面回归（system-one）：`relationOf` 同样不得读隐藏身份。
+ */
+void test("信息面：system-one 的敌我关系不随隐藏身份变化", async () => {
+  const { game, lord, ally, rebel } = await setupThree();
+  const { SystemOneAgent } = await import("./system-one.js");
+  const agent = new SystemOneAgent();
+  const before = [agent.relationOf(lord, ally), agent.relationOf(lord, rebel)].join("/");
+  ally.role = PlayerRole.Rebel;
+  rebel.role = PlayerRole.Loyalist;
+  const after = [agent.relationOf(lord, ally), agent.relationOf(lord, rebel)].join("/");
+  assert.equal(before, after, `隐藏身份不该影响敌我判定：${before} vs ${after}`);
+  void game;
 });

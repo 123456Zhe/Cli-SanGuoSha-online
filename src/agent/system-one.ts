@@ -430,6 +430,11 @@ export class SystemOneAgent implements FastAdvisor {
     return { names, values };
   }
 
+  /**
+   * 敌我关系判定。**信息面与客户端/LLM 一致**：只有自己、主公（公开）与已阵亡玩家的身份可见，
+   * 其余存活玩家一律用事件推断（`identityGuess`：打主公→反贼、帮主公→忠臣）。
+   * 绝不读 `other.role` —— 那等于给 AI 开天眼（在线对局里是作弊）。
+   */
   relationOf(self: Player, other: Player): RelationTag {
     if (other.id === self.id) {
       return "self";
@@ -437,26 +442,25 @@ export class SystemOneAgent implements FastAdvisor {
     if (!other.alive) {
       return "unknown-traitor";
     }
+    const guessed = this.identityGuess.get(other.name);
     if (other.role === PlayerRole.Lord) {
       return self.role === PlayerRole.Lord || self.role === PlayerRole.Loyalist ? "ally" : "enemy";
     }
     if (self.role === PlayerRole.Lord || self.role === PlayerRole.Loyalist) {
-      if (other.role === PlayerRole.Loyalist) {
+      if (guessed === PlayerRole.Loyalist) {
         return "ally";
       }
-      if (other.role === PlayerRole.Rebel) {
+      if (guessed === PlayerRole.Rebel) {
         return "enemy";
       }
       return "unknown-traitor";
     }
     if (self.role === PlayerRole.Rebel) {
-      const guessed = this.identityGuess.get(other.name);
-      if (other.role === PlayerRole.Rebel || guessed === PlayerRole.Rebel) {
+      if (guessed === PlayerRole.Rebel) {
         return "ally";
       }
       return "enemy";
     }
-    const guessed = this.identityGuess.get(other.name);
     if (guessed && !ENEMY_PRIOR[self.role]?.includes(guessed)) {
       return "ally";
     }
@@ -713,6 +717,10 @@ export class SystemOneAgent implements FastAdvisor {
     const actorIsAlly = actor !== undefined && (actor.id === self.id || this.relationOf(self, actor) === "ally");
     if (trick === (CardType.PeachGarden as string) || trick === (CardType.Harvest as string)) {
       return this.groupTrickNetEnemyGain(snapshot, self) > 0;
+    }
+    if (trick === (CardType.ExNihilo as string)) {
+      // 无中生有只补使用者自己：只反制敌人的补牌，不反制队友的。
+      return !actorIsAlly;
     }
     if (HARMFUL_TRICKS.has(trick)) {
       return !actorIsAlly;

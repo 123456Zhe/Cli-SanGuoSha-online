@@ -267,6 +267,29 @@ export const probeQwenConnectivity = async (baseUrl?: string): Promise<{ availab
   }
 };
 
+/** 带 HTTP 状态码的 LLM 调用错误：用于区分「可重试」与「确定性失败」。 */
+export class QwenHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "QwenHttpError";
+  }
+}
+
+/**
+ * 是否值得重试：429/5xx 与网络层错误（超时/连接失败）可重试；
+ * 其余 4xx（401/403/400/404/422）是确定性失败（密钥错、模型名错、参数错），
+ * 重试只是把每次决策都拖成三倍等待——联机实测出现过整局 AI 决策都卡在这类空转上。
+ */
+export const isRetryableQwenError = (error: unknown): boolean => {
+  if (error instanceof QwenHttpError) {
+    return error.status === 429 || error.status >= 500;
+  }
+  return true;
+};
+
 export const callQwen35PlusDetailed = async (
   messages: QwenMessage[],
   options: QwenChatOptions = {},
@@ -308,11 +331,7 @@ export const callQwen35PlusDetailed = async (
       });
       if (!response.ok) {
         const detail = await response.text();
-        if (response.status >= 500 && attempt < 2) {
-          await delay(250 * (attempt + 1));
-          continue;
-        }
-        throw new Error(`Qwen 调用失败: ${response.status} ${detail}`);
+        throw new QwenHttpError(response.status, `Qwen 调用失败: ${response.status} ${detail}`);
       }
       const payload = (await response.json()) as QwenResponse;
       const text = payload.choices?.[0]?.message?.content;
@@ -328,10 +347,12 @@ export const callQwen35PlusDetailed = async (
       };
     } catch (error) {
       lastError = error;
-      if (attempt < 2) {
+      if (attempt < 2 && isRetryableQwenError(error)) {
         await delay(250 * (attempt + 1));
         continue;
       }
+      // 确定性失败立即上报，不再空转重试
+      break;
     } finally {
       clearTimeout(timer);
     }

@@ -19,7 +19,7 @@
   `types/generals-pack.d.ts`（作者类型契约 + 防漂移测试）、`examples/generals/` 参考武将 gallery。
 - **剩余缺口**：§17 row 5（`priority` 钩子排序仍是空转）与 row 7（内置技能模块化，**已决定先不做**）；
   以及 §17 的残留：`conversions` 只吃一张源牌、`to` 不支持延时锦囊/装备。
-- 基线：`typecheck` 干净、`npm test` **250 全绿**、`lint` **25 个存量错误**（无新增）、
+- 基线：`typecheck` 干净、`npm test` **252 全绿**、`lint` **25 个存量错误**（无新增）、
   `generals:check --dir=examples/generals` **0 错误 / 0 警告**、`rules:check` 干净。
 
 ## 1. 必读材料（按顺序）
@@ -111,6 +111,16 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 对应回归测试：`src/engine/game.test.ts`（铁索连环指定自己成功 + 杀打自己仍被拒）、
 `src/network/auto-restart.test.ts`（重开留下空对局时旧调用栈不得抛错）。两条用例都验证过"修复前必失败"。
 
+3. **本地启发式 AI 明牌作弊（信息面口径不一致）**：`local-engine`（simple 驱动 / LLM 回退 / 断线托管 /
+   hybrid 的本地兜底）的交互决策（桃救谁、决斗是否出杀、借刀选谁、无懈是否反制、群体锦囊净收益）与
+   `system-one.relationOf` 都直接读 `player.role`，能看穿所有人的身份；而 LLM 侧（`prompt.maskRole`）
+   与 Jev 侧（`jev-advisor`）都是正确遮蔽的。
+   修复：`local-engine` 新增 `visibleRole()`（自己/主公/已阵亡 = 公开，其余走 `predictRole()` 行为推断），
+   `system-one.relationOf` 改用 `identityGuess`；`evaluateAction` 本来就是用 `predictRole` 的，未动。
+   代价：开局没有行为证据时 AI 更"钝"（判不出队友就先当敌人），这是公平的必然结果。
+   回归测试：`local-engine.test.ts` 的两条「交换两名存活玩家的隐藏身份不应改变决策 / system-one 敌我关系」，
+   已验证"修复前必失败"。
+
 同一轮还确认了两件事：同机单账号守卫按预期工作（第二个同 machineId 连接收到 `closed`「本机已有玩家…在线」）；
 30 秒交互超时、AI 托管、座位令牌、`--log-level=info/debug` 均正常。
 
@@ -125,7 +135,7 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 
 ```bash
 npm run typecheck   # 必须干净（当前 0 error）
-npm test            # 当前 250 全绿（node --test --import tsx）
+npm test            # 当前 252 全绿（node --test --import tsx）
 npm run lint        # 基线 25 存量错误，不得新增（不改存量）
 npm run generals:check -- --dir=examples/generals            # 0 错误 / 0 警告
 npm run generals:check -- --dir=examples/generals --selfplay=3
@@ -158,5 +168,5 @@ npm run host -- --players=3 --generals-pool=all              # 手动验收外�
 - **`schema/` 与 `types/` 不在 `tsc` 覆盖范围内**（与 `generals/` 同类）：`types/generals-pack.d.ts` 的语法/类型正确性由
   `src/tools/generals-pack-types.test.ts` 用 TS 编译器 API 独立校验；`schema/*.json` 由 `pack-schema.test.ts` 校验。
   新增声明式规则/触发点时，这两个测试会直接失败——别只改 `src/`。
-- **改测试数量时同步** `AGENTS.md` 与计划 §九的基线数字（当前 **250**）。
+- **改测试数量时同步** `AGENTS.md` 与计划 §九的基线数字（当前 **252**）。
 - **改动外部武将/技能/卡牌时同步** `docs/generals-pack-api.md`、`AGENTS.md`、`README.md`、`schema/`、`types/generals-pack.d.ts`。

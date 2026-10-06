@@ -30,7 +30,7 @@ const passAll = (game: SanGuoGame, ids: string[]): void => {
   }
 };
 
-void test("主公 +1 体力上限：5 人局生效、4 人局不生效", async () => {
+void test("主公 +1 体力上限：4/5 人局生效、3 人局不生效", async () => {
   const game5 = new SanGuoGame(() => 0.5);
   await game5.initNetworkGame(
     ["甲", "乙", "丙", "丁", "戊"].map((name, index) => ({ id: `p${index}`, name })),
@@ -51,7 +51,18 @@ void test("主公 +1 体力上限：5 人局生效、4 人局不生效", async (
   );
   const lord4 = (game4 as unknown as Runtime).players.find((player) => player.role === PlayerRole.Lord);
   assert.ok(lord4);
-  assert.equal(lord4.maxHp, resolveGeneralByName(lord4.general).maxHp, "4 人局主公体力上限不加");
+  assert.equal(lord4.maxHp, resolveGeneralByName(lord4.general).maxHp + 1, "4 人局主公体力上限应 +1");
+  assert.equal(lord4.hp, resolveGeneralByName(lord4.general).maxHp + 1, "主公初始体力应为加值后的上限");
+
+  const game3 = new SanGuoGame(() => 0.5);
+  await game3.initNetworkGame(
+    ["甲", "乙", "丙"].map((name, index) => ({ id: `p${index}`, name })),
+    4,
+    false,
+  );
+  const lord3 = (game3 as unknown as Runtime).players.find((player) => player.role === PlayerRole.Lord);
+  assert.ok(lord3);
+  assert.equal(lord3.maxHp, resolveGeneralByName(lord3.general).maxHp, "3 人局主公体力上限不加");
 });
 
 void test("激昂：决斗不分颜色均触发（官方：使用【决斗】或红色【杀】）", async () => {

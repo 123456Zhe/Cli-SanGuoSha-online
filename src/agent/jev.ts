@@ -16,6 +16,8 @@ import { resolve } from "node:path";
  *   JEV_API_KEY         密钥；未设置时回退读取 TYPESAFE_API_KEY（官方 SDK 惯例）
  *   JEV_TIMEOUT_MS      单次请求超时，默认 15000
  *   JEV_ACCEPT_THRESHOLD noul 判断的接受阈值，默认 0.5（见 jev-advisor.ts）
+ *   JEV_FAILURE_THRESHOLD 连续失败多少次后熔断跳过后台判断，默认 3（见 jev-advisor.ts）
+ *   JEV_COOLDOWN_MS     熔断冷却时间，默认 60000（冷却后自动再试一次）
  * 只要 JEV_BASE_URL 或 JEV_MODEL 任一被显式设置，即视为已配置并启用 Jev 判断层。
  */
 
@@ -83,6 +85,33 @@ type JevRawResponse = {
 const DEFAULT_JEV_BASE_URL = "https://api.typesafe.ai/v1";
 const DEFAULT_JEV_MODEL = "jev-latest";
 const DEFAULT_JEV_TIMEOUT_MS = 15_000;
+
+/** 单次 Jev 调用的总尝试次数（含首次）。 */
+const MAX_JEV_ATTEMPTS = 3;
+
+/** 带 HTTP 状态码的 Jev 调用错误，用于区分「可重试」与「确定性失败」。 */
+export class JevHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "JevHttpError";
+  }
+}
+
+/**
+ * 是否值得重试：429/529（限流/过载）、5xx、以及网络层错误（超时/连接被重置/`fetch failed`）可重试；
+ * 其余 4xx（401/403/400/404/422）是确定性失败——例如密钥错误或路由不存在，
+ * 重试只会让**每一次**决策都白等 3 轮超时（联机实测：Jev 端点返回 401 时，每个决策都空转约 45 秒，
+ * 表现为「Jev 卡住了」）。这类错误必须立刻上报，交给熔断器与上层回退。
+ */
+export const isRetryableJevError = (error: unknown): boolean => {
+  if (error instanceof JevHttpError) {
+    return error.status === 429 || error.status === 529 || error.status >= 500;
+  }
+  return true;
+};
 
 const loadDotEnv = (): void => {
   let content = "";
@@ -153,7 +182,7 @@ const buildHeaders = (config: JevConfig): Record<string, string> => ({
 
 /**
  * 调用 System One 评估端点：一次请求携带多个问题，返回逐问题的结构化答案。
- * 429 / 529 按官方建议做指数退避重试。
+ * 429 / 529 / 5xx / 网络错误按指数退避重试；确定性 4xx 立即失败（见 `isRetryableJevError`）。
  */
 export const callJevSystemOne = async (
   state: string | Record<string, unknown> | Array<unknown>,
@@ -163,7 +192,7 @@ export const callJevSystemOne = async (
   const config = resolveJevConfig(options);
   const url = `${config.baseUrl}/systemone`;
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_JEV_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.timeoutMs);
     try {
@@ -175,12 +204,10 @@ export const callJevSystemOne = async (
       });
       if (!response.ok) {
         const detail = await response.text();
-        // 429 Too Many Requests / 529 Overloaded：指数退避重试
-        if ((response.status === 429 || response.status === 529) && attempt < 2) {
-          await delay(400 * 2 ** attempt);
-          continue;
-        }
-        throw new Error(`Jev 调用失败: ${response.status} ${detail}`.replace(/\s+/g, " ").trim());
+        throw new JevHttpError(
+          response.status,
+          `Jev 调用失败: ${response.status} ${detail}`.replace(/\s+/g, " ").trim(),
+        );
       }
       const payload = (await response.json()) as JevRawResponse;
       if (!payload.answers) {
@@ -194,10 +221,12 @@ export const callJevSystemOne = async (
       };
     } catch (error) {
       lastError = error;
-      if (attempt < 2) {
+      if (attempt < MAX_JEV_ATTEMPTS - 1 && isRetryableJevError(error)) {
         await delay(400 * 2 ** attempt);
         continue;
       }
+      // 确定性失败（如 401）立即上报：绝不为了「重试」把每一次决策都拖成几十秒
+      break;
     } finally {
       clearTimeout(timer);
     }

@@ -68,6 +68,16 @@ const AI_NAME_PREFIX = "[AI]电脑-";
 const AI_NAME_SEQUENCE = ["甲", "乙", "丙", "丁", "戊"];
 const DEFAULT_CONTEXT_ROUNDS = 30;
 const AI_ACTION_PACING_MS = 800;
+/**
+ * AI 响应决策看门狗：AI 引擎（LLM/Jev/本地）应答一次交互（闪/桃/无懈/借刀…）的最长等待。
+ * 引擎在 `decide()` 里是无超时地 await 处理器的，所以 AI 侧一旦卡住（例如远端判断层被前面
+ * 一次 LLM 规划阻塞），整张桌子都会停在原地——这就是玩家看到的「Jev 卡住了」。
+ * 超时后立刻改用本地策略应答，宁可 AI 笨一点，也不能让全桌等它。
+ * 可用 SG_AI_DECISION_TIMEOUT_MS 覆盖；正常路径（Jev 1~4 秒、LLM 十几秒）远不会触发。
+ */
+const AI_DECISION_WATCHDOG_MS = 60_000;
+/** AI 决策看门狗超时哨兵。 */
+const AI_DECISION_TIMEOUT = Symbol("ai-decision-timeout");
 /** 服务端日志上限：无限长的 AI 托管对局（如无人干预的 AI 互打）不得让日志数组无限增长。 */
 const LOGS_MAX_LINES = 2000;
 
@@ -807,13 +817,53 @@ export class GameServer {
       return this.aiLoop.decideInteraction(this.game.getSnapshot(), playerId, request)?.decision ?? null;
     }
     if (this.aiLoop) {
-      return (await this.aiLoop.decideInteraction(this.game, playerId, request)) ?? null;
+      const raced = await this.raceAiDecision(
+        playerId,
+        "响应决策",
+        this.aiLoop.decideInteraction(this.game, playerId, request),
+      );
+      if (raced !== AI_DECISION_TIMEOUT) {
+        return raced ?? null;
+      }
+      // 看门狗超时：远端引擎（LLM/Jev）没能按时应答，立刻用本地策略兜底，绝不让全桌继续等。
+      return this.localAiEngine?.decideInteraction(this.game.getSnapshot(), playerId, request)?.decision ?? null;
     }
     // simple 驱动（aiLoop 为 null）：走本地策略引擎，不再掉进引擎无脑 autoDecision。
     if (this.localAiEngine) {
       return this.localAiEngine.decideInteraction(this.game.getSnapshot(), playerId, request)?.decision ?? null;
     }
     return null;
+  }
+
+  /**
+   * 给 AI 决策套上看门狗：超过 `AI_DECISION_WATCHDOG_MS` 未返回则返回超时哨兵。
+   * 被放弃的决策 Promise 仍在后台跑完（结果丢弃，不会再影响对局），但不会产生未处理拒绝。
+   */
+  private async raceAiDecision<T>(
+    playerId: string,
+    label: string,
+    task: Promise<T>,
+  ): Promise<T | typeof AI_DECISION_TIMEOUT> {
+    const raw = Number.parseInt(process.env.SG_AI_DECISION_TIMEOUT_MS ?? "", 10);
+    const timeoutMs = Number.isFinite(raw) && raw > 0 ? raw : AI_DECISION_WATCHDOG_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race<T | typeof AI_DECISION_TIMEOUT>([
+        task.catch(() => null as T | null) as Promise<T | typeof AI_DECISION_TIMEOUT>,
+        new Promise<typeof AI_DECISION_TIMEOUT>((resolve) => {
+          timer = setTimeout(() => {
+            this.log(
+              `[看门狗] ${this.labelPlayer(playerId)} 的${label}超过 ${Math.round(timeoutMs / 1000)} 秒未返回，改用本地策略兜底`,
+            );
+            resolve(AI_DECISION_TIMEOUT);
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   /** 断线托管：把人类座位的交互决策改路由给 AI，并为 LLM 驱动注册子代理。 */

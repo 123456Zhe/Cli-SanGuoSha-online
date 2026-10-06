@@ -1,0 +1,13 @@
+{
+  "id": "龙魂",
+  "displayName": "龙魂",
+  "kind": "conversion",
+  "optional": true,
+  "description": "你可以将一张手牌按花色当下列牌使用或打出：红桃当桃，方块当火杀，梅花当闪，黑桃当无懈可击。",
+  "conversions": [
+    { "from": { "suit": ["heart"] }, "to": "桃", "asResponse": ["peach"] },
+    { "from": { "suit": ["diamond"] }, "to": "火杀" },
+    { "from": { "suit": ["club"] }, "to": "闪", "asResponse": ["dodge"] },
+    { "from": { "suit": ["spade"] }, "to": "无懈可击", "asResponse": ["negate"] }
+  ]
+}

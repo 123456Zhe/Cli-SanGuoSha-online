@@ -8,6 +8,7 @@ import {
 } from "./system-one.js";
 import { CardSource, GameAction, GameSnapshot, InteractionDecision, InteractionRequest, Player, PlayerRole } from "../engine/game.js";
 import { buildMatchGeneralsText } from "./match-context.js";
+import { writeAiLog } from "../devlog/ailog.js";
 
 /**
  * JevAdvisor：hybrid 的判断层 = LLM + Jev（TypeSafe System One 决策模型）。
@@ -23,7 +24,34 @@ import { buildMatchGeneralsText } from "./match-context.js";
  * 由上层回退本地策略——绝不把"失败"当成一个决策结果返回（否则 AI 会假装正常、濒死时不求桃）。
  * 说明：Jev 官方标注英文准确率最高、CJK 可用但需自行验证，因此 instructions 用英文，
  * state 里的对局数据保持中文原名（武将/卡牌名无法翻译）。
+ *
+ * 熔断（防「Jev 卡住」）：连续失败 `JEV_FAILURE_THRESHOLD`（默认 3）次后，冷却
+ * `JEV_COOLDOWN_MS`（默认 60 秒）内直接跳过 Jev——否则 Jev 挂掉时**每一次**决策
+ * 都要白等一轮超时，整张桌子看起来就是卡死。冷却结束后自动放行一次探测调用，
+ * 成功即恢复；期间 `getLastFailureReason()` 仍保留失败原因（不是"跳过"）。
+ * 每次调用（成功/失败/跳过）都带耗时写入 `devlog/ai-log.md`，Jev 的耗时不再不可见。
  */
+/** 单次 Jev 调用的观测记录（默认写 devlog，可注入以测试）。 */
+export type JevCallLogEntry = {
+  label: string;
+  ok: boolean;
+  skipped: boolean;
+  elapsedMs: number;
+  questionCount: number;
+  answers?: Record<string, JevAnswer>;
+  error?: string;
+};
+
+export type JevAdvisorDeps = {
+  /** 日志出口；默认写 devlog/ai-log.md。 */
+  log?: (entry: JevCallLogEntry) => void;
+  /** 取当前时间；测试可注入假时钟验证熔断冷却。 */
+  now?: () => number;
+};
+
+const DEFAULT_FAILURE_THRESHOLD = 3;
+const DEFAULT_COOLDOWN_MS = 60_000;
+
 export class JevAdvisor implements FastAdvisor {
   private readonly acceptThreshold: number;
 
@@ -36,13 +64,36 @@ export class JevAdvisor implements FastAdvisor {
 
   private judgeFailures = 0;
 
+  /** 熔断期间被跳过的调用次数（Jev 不可用时不再逐个决策白等超时）。 */
+  private skippedCalls = 0;
+
+  private consecutiveFailures = 0;
+
+  /** 熔断打开到该时刻（毫秒时间戳）；0 表示未熔断。 */
+  private circuitOpenUntil = 0;
+
+  private readonly failureThreshold: number;
+
+  private readonly cooldownMs: number;
+
+  private readonly log: (entry: JevCallLogEntry) => void;
+
+  private readonly now: () => number;
+
   constructor(
     private readonly rulesText: string,
     private readonly options: JevOptions = {},
+    deps: JevAdvisorDeps = {},
   ) {
     this.acceptThreshold = resolveJevAcceptThreshold();
     const raw = Number.parseInt(process.env.JEV_MAX_CANDIDATES ?? "", 10);
     this.maxCandidates = Number.isInteger(raw) && raw > 0 ? Math.min(raw, 255) : 40;
+    const threshold = Number.parseInt(process.env.JEV_FAILURE_THRESHOLD ?? "", 10);
+    this.failureThreshold = Number.isInteger(threshold) && threshold > 0 ? threshold : DEFAULT_FAILURE_THRESHOLD;
+    const cooldown = Number.parseInt(process.env.JEV_COOLDOWN_MS ?? "", 10);
+    this.cooldownMs = Number.isFinite(cooldown) && cooldown >= 0 ? cooldown : DEFAULT_COOLDOWN_MS;
+    this.log = deps.log ?? this.writeDefaultLog.bind(this);
+    this.now = deps.now ?? Date.now;
   }
 
   /** 是否已配置 Jev（server/app 用它决定是否启用 Jev 判断层）。 */
@@ -54,12 +105,48 @@ export class JevAdvisor implements FastAdvisor {
     return this.lastFailureReason;
   }
 
-  getStats(): { judgeCalls: number; judgeFailures: number } {
-    return { judgeCalls: this.judgeCalls, judgeFailures: this.judgeFailures };
+  getStats(): {
+    judgeCalls: number;
+    judgeFailures: number;
+    skippedCalls: number;
+    circuitOpen: boolean;
+  } {
+    return {
+      judgeCalls: this.judgeCalls,
+      judgeFailures: this.judgeFailures,
+      skippedCalls: this.skippedCalls,
+      circuitOpen: this.isCircuitOpen(),
+    };
   }
 
   reset(): void {
     this.lastFailureReason = null;
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
+  }
+
+  /** 熔断是否打开（Jev 刚连续失败，冷却期内跳过调用）。 */
+  private isCircuitOpen(): boolean {
+    return this.now() < this.circuitOpenUntil;
+  }
+
+  /** 默认日志出口：写进 devlog/ai-log.md，Jev 的耗时/失败从此可见。 */
+  private writeDefaultLog(entry: JevCallLogEntry): void {
+    const detail = entry.skipped
+      ? `(熔断跳过，未调用) ${entry.error ?? ""}`.trim()
+      : entry.ok
+        ? JSON.stringify(entry.answers)
+        : `(失败) ${entry.error ?? ""}`;
+    writeAiLog({
+      provider: "jev",
+      model: this.options.model ?? process.env.JEV_MODEL ?? "jev",
+      stage: `jev-${entry.label}`,
+      playerId: "-",
+      playerName: "-",
+      prompt: [{ role: "user", content: `questions=${entry.questionCount} elapsed=${entry.elapsedMs}ms` }],
+      responseText: detail,
+      ...(entry.ok ? {} : { error: entry.error ?? "Jev 调用失败" }),
+    });
   }
 
   syncRounds(): void {
@@ -95,6 +182,7 @@ export class JevAdvisor implements FastAdvisor {
       {
         best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
       },
+      "decideTurn",
     );
     if (!answers) {
       // Jev 不可用：返回 null，由上层回退本地策略/启发式。
@@ -132,6 +220,7 @@ export class JevAdvisor implements FastAdvisor {
       {
         should_respond: { type: "noul", instructions: interactionInstruction },
       },
+      "decideInteraction",
     );
     if (!answers) {
       // Jev 不可用：返回 null 让上层走本地策略/默认响应。
@@ -198,6 +287,7 @@ export class JevAdvisor implements FastAdvisor {
         match_skills: buildMatchGeneralsText(snapshot),
       },
       questions,
+      "judgeTurnDecision",
     );
     if (!answers) {
       return { accepted: true, score: 0, bestScore: 0 };
@@ -241,6 +331,7 @@ export class JevAdvisor implements FastAdvisor {
         match_skills: buildMatchGeneralsText(snapshot),
       },
       questions,
+      "judgeInteractionDecision",
     );
     if (!answers) {
       return true;
@@ -249,19 +340,46 @@ export class JevAdvisor implements FastAdvisor {
     return answer?.type === "noul" ? answer.noul >= this.acceptThreshold : true;
   }
 
-  /** 单次 Jev 判断调用：返回 null 表示失败（调用方按"放行"处理，不阻塞对局）。 */
+  /**
+   * 单次 Jev 判断调用：返回 null 表示失败或被熔断跳过（调用方按"放行"处理，不阻塞对局）。
+   * 连续失败达到阈值时打开熔断，冷却期内不再发起请求——避免 Jev 挂掉后每个决策都白等超时。
+   */
   private async askJev(
     state: Record<string, unknown>,
     questions: Record<string, JevQuestion>,
+    label: string,
   ): Promise<Record<string, JevAnswer> | null> {
+    const questionCount = Object.keys(questions).length;
+    const startedAt = this.now();
+    if (this.isCircuitOpen()) {
+      this.skippedCalls += 1;
+      this.log({
+        label,
+        ok: false,
+        skipped: true,
+        elapsedMs: 0,
+        questionCount,
+        ...(this.lastFailureReason ? { error: this.lastFailureReason } : {}),
+      });
+      return null;
+    }
     this.judgeCalls += 1;
     try {
       const result = await callJevSystemOne({ ...state, rules: this.rulesText }, questions, this.options);
+      this.consecutiveFailures = 0;
+      this.circuitOpenUntil = 0;
       this.lastFailureReason = null;
+      this.log({ label, ok: true, skipped: false, elapsedMs: this.now() - startedAt, questionCount, answers: result.answers });
       return result.answers;
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.judgeFailures += 1;
-      this.lastFailureReason = error instanceof Error ? error.message : String(error);
+      this.consecutiveFailures += 1;
+      this.lastFailureReason = reason;
+      if (this.consecutiveFailures >= this.failureThreshold) {
+        this.circuitOpenUntil = this.now() + this.cooldownMs;
+      }
+      this.log({ label, ok: false, skipped: false, elapsedMs: this.now() - startedAt, questionCount, error: reason });
       return null;
     }
   }

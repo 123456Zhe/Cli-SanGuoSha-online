@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "神赵云",
+  "kingdom": "神",
+  "gender": "男",
+  "maxHp": 2,
+  "skills": ["绝境", "龙魂"],
+  "description": "神势力武将，绝境求生、龙魂化牌。"
+}

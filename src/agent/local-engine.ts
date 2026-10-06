@@ -42,6 +42,17 @@ export type LocalAiInteractionDecision = {
   insight: string;
 };
 
+/** 助手/复盘用的身份猜测：只基于行为账本，绝不读隐藏身份（见 visibleRole 约定）。 */
+export type RoleGuess = {
+  playerId: string;
+  name: string;
+  /** 公开身份（自己/主公/已阵亡）直接给真实值；其余为推断值。 */
+  role: PlayerRole;
+  inferred: boolean;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+};
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
 const initRoleScore = (): RoleScore => ({
@@ -484,6 +495,43 @@ export class LocalAiEngine {
       return player.role;
     }
     return this.predictRole(snapshot, player.id);
+  }
+
+  /**
+   * 玩家助手用的身份猜测表（以 viewerId 为视角）。
+   * 公开信息（自己/主公/已阵亡）直接给真实身份；其余只读行为账本推断，
+   * 与局内决策同一口径，调用前先 `syncPreviousRounds` 同步战报。
+   */
+  getRoleGuesses(snapshot: GameSnapshot, viewerId: string): RoleGuess[] {
+    return snapshot.players.map((player) => {
+      if (player.id === viewerId || player.role === PlayerRole.Lord || !player.alive) {
+        return { playerId: player.id, name: player.name, role: player.role, inferred: false, confidence: "high" as const, reasons: [] };
+      }
+      const behavior = this.ensureBehavior(player.name);
+      const roleScore = this.ensureRoleScore(player.name);
+      const handFactor = Math.min(player.hand.length, 6) * 0.1;
+      const scored = [
+        { role: PlayerRole.Loyalist, score: roleScore.loyalist + behavior.supportive * 0.5 + handFactor * 0.2 },
+        { role: PlayerRole.Rebel, score: roleScore.rebel + behavior.aggressive * 0.2 + behavior.attackedLord * 0.8 },
+        { role: PlayerRole.Traitor, score: roleScore.traitor + handFactor * 0.4 },
+      ].sort((a, b) => b.score - a.score);
+      const best = scored[0] ?? { role: PlayerRole.Rebel, score: 0 };
+      const margin = best.score - (scored[1]?.score ?? 0);
+      const reasons: string[] = [];
+      if (behavior.attackedLord > 0) reasons.push(`攻击主公${behavior.attackedLord}次`);
+      if (behavior.attackedLoyalist > 0) reasons.push(`攻击忠臣${behavior.attackedLoyalist}次`);
+      if (behavior.attackedRebel > 0) reasons.push(`攻击反贼${behavior.attackedRebel}次`);
+      if (behavior.supportive > 0) reasons.push(`支援（用桃）${behavior.supportive}次`);
+      if (behavior.aggressive > 0 && behavior.attackedLord === 0) reasons.push(`主动出击${behavior.aggressive}次`);
+      return {
+        playerId: player.id,
+        name: player.name,
+        role: best.role,
+        inferred: true,
+        confidence: margin >= 2 ? "high" : margin >= 0.5 ? "medium" : "low",
+        reasons,
+      };
+    });
   }
 
   private predictCards(playerName: string, handCount: number): CardPrediction {

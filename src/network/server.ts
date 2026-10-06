@@ -7,12 +7,14 @@ import { LocalAiEngine } from "../agent/local-engine.js";
 import { SystemOneAgent } from "../agent/system-one.js";
 import { JevAdvisor } from "../agent/jev-advisor.js";
 import { buildBattlefieldLines, buildRoundContexts, trackRoundBattlefield } from "../agent/round-context.js";
+import { buildRuleAdvisorReport } from "../agent/advisor.js";
 import { stripGeneralsSections } from "../agent/match-context.js";
 import { computeAiTurnActionLimit, pickAiTurnDecision } from "../agent/turn-decision.js";
 import { GameAction, GameSnapshot, InteractionDecision, InteractionRequest, NetworkPlayerConfig, SanGuoGame, SkillName } from "../engine/game.js";
 import { GENERAL_LIBRARY } from "../engine/generals.js";
 import { hotReloadEngine } from "../engine/hot-reload.js";
 import { CardType } from "../engine/cards.js";
+import { resolveSkillDescriptor } from "../engine/skill-registry.js";
 import { ClientMessage, createClientSnapshot, encodeMessage, NETWORK_PROTOCOL_VERSION, ServerMessage } from "./protocol.js";
 import { JsonLineParser, LineTooLongError } from "./line-parser.js";
 
@@ -110,6 +112,8 @@ export class GameServer {
   private seatTokens: Map<string, string> | undefined; // playerId -> 座位令牌（join 时签发）
   private seatSources: Map<string, string> | undefined; // playerId -> 加入时的来源指纹（令牌缺失时的兜底校验）
   private seatGenerals: Map<string, string> | undefined; // playerId -> join 时用调试参数指定的武将（重开一局仍沿用）
+  private advisorCooldownUntil: Map<string, number> | undefined; // playerId -> LLM 助手冷却截止（毫秒时间戳）
+  private advisorRunning: Set<string> | undefined; // 正在生成 LLM 复盘的 playerId（防并发重复请求）
   private server: Server | null = null;
   private restarting = false;
   /**
@@ -560,6 +564,8 @@ export class GameServer {
       void this.handleDiscard(peer, message.handIndex);
     } else if (message.type === "interaction") {
       this.handleInteraction(peer, message.decision);
+    } else if (message.type === "advisor") {
+      void this.handleAdvisor(peer, message.kind);
     } else if (message.type === "confirm_next") {
       // 结算画面：真人玩家点「确认下一局」→ 手动重启（需对局已结束）
       void this.requestRestart().then((ok) => {
@@ -1070,6 +1076,13 @@ export class GameServer {
           this.aiLoop.syncRounds(previousRounds);
         }
         this.localAiEngine.syncPreviousRounds(previousRounds);
+        // Hybrid-Jev 的身份推断账本：不同步它就只能看到"未知"，忠臣杀主公多半出在这里。
+        if (this.aiLoop instanceof GameAiLoop) {
+          const advisor = this.aiLoop.getFastAdvisor();
+          if (advisor instanceof JevAdvisor) {
+            advisor.syncRounds(previousRounds);
+          }
+        }
         this.log(`${seatLabel} ${current.name} 正在思考...`);
         this.broadcastInterimState();
         const picked = await pickAiTurnDecision(this.game, aiId, this.aiLoop, this.localAiEngine);
@@ -1334,6 +1347,110 @@ export class GameServer {
     }
   }
 
+  /** LLM 助手按座位冷却（毫秒时间戳；迟初始化以兼容热重载后缺少新字段的存活实例）。 */
+  private advisorCooldownMap(): Map<string, number> {
+    this.advisorCooldownUntil ??= new Map<string, number>();
+    return this.advisorCooldownUntil;
+  }
+
+  /** 正在跑的 LLM 助手座位（防并发重复请求）。 */
+  private advisorRunningSet(): Set<string> {
+    this.advisorRunning ??= new Set<string>();
+    return this.advisorRunning;
+  }
+
+  /** 规则助手用的行为账本同步（幂等：已处理过的轮次自动跳过）。 */
+  private syncAdvisorEngine(): void {
+    if (!this.localAiEngine) {
+      return;
+    }
+    const snapshot = this.game.getSnapshot();
+    this.localAiEngine.syncPreviousRounds(
+      buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds),
+    );
+  }
+
+  private buildRuleAdvisorLines(viewerId: string): string[] {
+    if (!this.localAiEngine) {
+      return ["规则助手暂不可用"];
+    }
+    this.syncAdvisorEngine();
+    const snapshot = this.game.getSnapshot();
+    return buildRuleAdvisorReport(snapshot, viewerId, this.localAiEngine.getRoleGuesses(snapshot, viewerId));
+  }
+
+  private async handleAdvisor(peer: Peer, kind: "rule" | "llm"): Promise<void> {
+    const generation = this.gameGeneration;
+    if (kind === "rule") {
+      this.send(peer.socket, {
+        type: "advisor_report",
+        kind: "rule",
+        lines: this.buildRuleAdvisorLines(peer.id),
+      });
+      return;
+    }
+    // LLM 助手：冷却 60 秒 + 单座位防并发；失败/未配置时回退规则结论。
+    const now = Date.now();
+    const cooldownUntil = this.advisorCooldownMap().get(peer.id) ?? 0;
+    if (now < cooldownUntil) {
+      this.send(peer.socket, {
+        type: "advisor_report",
+        kind: "llm",
+        lines: [],
+        notice: `LLM 助手冷却中（${Math.ceil((cooldownUntil - now) / 1000)}秒后再试），规则助手可即时使用`,
+      });
+      return;
+    }
+    if (this.advisorRunningSet().has(peer.id)) {
+      this.send(peer.socket, {
+        type: "advisor_report",
+        kind: "llm",
+        lines: [],
+        notice: "上一次 LLM 复盘还在生成中，稍后再试",
+      });
+      return;
+    }
+    this.advisorRunningSet().add(peer.id);
+    try {
+      const ruleLines = this.buildRuleAdvisorLines(peer.id);
+      const snapshot = this.game.getSnapshot();
+      let advice: string | null = null;
+      if (this.aiLoop instanceof GameAiLoop) {
+        this.aiLoop.setPreviousRoundContexts(
+          buildRoundContexts(this.logs, this.roundBattlefieldHistory, snapshot.turn, this.contextRounds),
+        );
+        advice = await this.aiLoop.requestPlayerAdvice(snapshot, peer.id, ruleLines);
+      }
+      if (this.isStaleGame(generation)) {
+        return; // 等待期间对局已重开：旧快照的复盘不再下发
+      }
+      if (advice) {
+        this.advisorCooldownMap().set(peer.id, Date.now() + 60_000);
+        this.send(peer.socket, { type: "advisor_report", kind: "llm", lines: [...ruleLines, "—— LLM 复盘 ——", ...advice.split("\n")] });
+      } else {
+        this.send(peer.socket, {
+          type: "advisor_report",
+          kind: "llm",
+          lines: ruleLines,
+          notice: "LLM 暂不可用（未配置模型或请求失败），已附规则助手结论",
+        });
+      }
+    } finally {
+      this.advisorRunningSet().delete(peer.id);
+    }
+  }
+
+  /** 本局所有玩家技能 id → 说明文本（内置+外部包统一走注册表，WebUI 展示用）。 */
+  private buildSkillDescriptions(): Record<string, string> {
+    const descriptions: Record<string, string> = {};
+    for (const player of this.game.getSnapshot().players) {
+      for (const skillId of player.skills) {
+        descriptions[skillId] ??= resolveSkillDescriptor(skillId).description;
+      }
+    }
+    return descriptions;
+  }
+
   private sendStateToPeer(peer: Peer): void {
     const snapshot = this.game.getSnapshot();
     const actions = this.game.getPlayableActions(peer.id);
@@ -1350,6 +1467,7 @@ export class GameServer {
       removableCards,
       pendingDiscardCount: snapshot.currentPlayerId === peer.id ? this.game.getPendingDiscardCount(peer.id) : 0,
       logs: this.logs.slice(-30),
+      skillDescriptions: this.buildSkillDescriptions(),
     });
   }
 
@@ -1372,6 +1490,7 @@ export class GameServer {
    * resolution starts, without prompting them for new input.
    */
   private broadcastInterimState(): void {
+    const skillDescriptions = this.buildSkillDescriptions();
     for (const peer of this.peers.values()) {
       const snapshot = this.game.getSnapshot();
       this.send(peer.socket, {
@@ -1381,6 +1500,7 @@ export class GameServer {
         removableCards: {},
         pendingDiscardCount: 0,
         logs: this.logs.slice(-30),
+        skillDescriptions,
       });
     }
   }

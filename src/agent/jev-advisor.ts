@@ -1,4 +1,6 @@
 import { callJevSystemOne, isJevConfigured, JevAnswer, JevOptions, JevQuestion, resolveJevAcceptThreshold } from "./jev.js";
+import { LocalAiEngine, RoleGuess } from "./local-engine.js";
+import { RoundPromptContext } from "./prompt.js";
 import {
   FastAdvisor,
   JudgeVerdict,
@@ -80,6 +82,9 @@ export class JevAdvisor implements FastAdvisor {
 
   private readonly now: () => number;
 
+  /** 身份推断账本（与规则助手/本地策略同源；syncRounds 喂战报，决策时读 guesses）。 */
+  private readonly roleEngine: LocalAiEngine;
+
   constructor(
     private readonly rulesText: string,
     private readonly options: JevOptions = {},
@@ -94,6 +99,7 @@ export class JevAdvisor implements FastAdvisor {
     this.cooldownMs = Number.isFinite(cooldown) && cooldown >= 0 ? cooldown : DEFAULT_COOLDOWN_MS;
     this.log = deps.log ?? this.writeDefaultLog.bind(this);
     this.now = deps.now ?? Date.now;
+    this.roleEngine = new LocalAiEngine(rulesText);
   }
 
   /** 是否已配置 Jev（server/app 用它决定是否启用 Jev 判断层）。 */
@@ -149,8 +155,9 @@ export class JevAdvisor implements FastAdvisor {
     });
   }
 
-  syncRounds(): void {
-    // Jev 判断只看当前 state，不做跨回合记忆。
+  /** 跨回合记忆只用于身份推断账本（决策仍只看当前 state + guesses）。 */
+  syncRounds(contexts: RoundPromptContext[]): void {
+    this.roleEngine.syncPreviousRounds(contexts);
   }
 
   /** 不做本地预排序：返回空列表，LLM 拿到完整候选自行决策。 */
@@ -169,18 +176,25 @@ export class JevAdvisor implements FastAdvisor {
     actions: GameAction[],
     plan?: string,
   ): Promise<SystemOneTurnDecision | null> {
-    const candidates = actions.slice(0, this.maxCandidates);
+    // 候选按"动作×目标"展开：Jev 选中的就是最终目标，不再取 targets[0]
+    //（曾经取第一个，座位顺序下主公经常中枪）。
+    const candidates = expandActionCandidates(actions, this.maxCandidates);
     if (candidates.length === 0) {
       return null;
     }
+    const guesses = this.roleEngine.getRoleGuesses(snapshot, playerId);
     const criteria = buildActionCriteria(candidates);
     const answers = await this.askJev(
       {
-        ...decisionsState(snapshot, playerId, candidates, undefined, plan),
+        ...decisionsState(snapshot, playerId, candidates, undefined, plan, guesses),
         match_skills: buildMatchGeneralsText(snapshot),
       },
       {
-        best_action: { type: "choice", instructions: "Which single action is best for this player right now?", criteria },
+        best_action: {
+          type: "choice",
+          instructions: bestActionInstruction(snapshot, playerId, guesses),
+          criteria,
+        },
       },
       "decideTurn",
     );
@@ -189,7 +203,7 @@ export class JevAdvisor implements FastAdvisor {
       // 绝不能在这里随便挑一个动作——否则失败会被当成"Jev 的决策"，日志与 modelUsed 都会说谎。
       return null;
     }
-    const picked = pickActionFromAnswer(answers.best_action, candidates, criteria);
+    const picked = pickActionFromAnswer(answers.best_action, candidates);
     if (!picked) {
       // Jev 有响应但解析不出可用动作，同样交回上层决定。
       return null;
@@ -255,9 +269,11 @@ export class JevAdvisor implements FastAdvisor {
     if (!decision) {
       return { accepted: false, score: 0, bestScore: 0 };
     }
-    const candidates = actions.slice(0, this.maxCandidates);
+    const candidates = expandActionCandidates(actions, this.maxCandidates);
     const criteria = buildActionCriteria(candidates);
-    const proposed = describeAction(decision.action) + (decision.targetId ? ` -> target ${decision.targetId}` : "");
+    const guesses = this.roleEngine.getRoleGuesses(snapshot, playerId);
+    const proposedEntry = findCandidateIndex(candidates, decision.action, decision.targetId);
+    const proposed = proposedEntry >= 0 ? describeCandidate(candidates[proposedEntry] as ActionCandidate) : proposedActionText(decision);
     const questions: Record<string, JevQuestion> = {
       decision_ok: {
         type: "noul",
@@ -275,7 +291,7 @@ export class JevAdvisor implements FastAdvisor {
         ? {
             best_action: {
               type: "choice" as const,
-              instructions: "Which single action is best for this player right now?",
+              instructions: bestActionInstruction(snapshot, playerId, guesses),
               criteria,
             },
           }
@@ -283,7 +299,7 @@ export class JevAdvisor implements FastAdvisor {
     };
     const answers = await this.askJev(
       {
-        ...decisionsState(snapshot, playerId, candidates, proposed),
+        ...decisionsState(snapshot, playerId, candidates, proposed, undefined, guesses),
         match_skills: buildMatchGeneralsText(snapshot),
       },
       questions,
@@ -294,8 +310,8 @@ export class JevAdvisor implements FastAdvisor {
     }
     const ok = answers.decision_ok;
     const accepted = ok?.type === "noul" ? ok.noul >= this.acceptThreshold : true;
-    const best = pickActionFromAnswer(answers.best_action, candidates, criteria);
-    const proposedProbability = probabilityOf(answers.best_action, proposedActionKey(decision, candidates, criteria));
+    const best = pickActionFromAnswer(answers.best_action, candidates);
+    const proposedProbability = probabilityOf(answers.best_action, proposedEntry >= 0 ? `action_${proposedEntry + 1}` : null);
     return {
       accepted,
       score: proposedProbability,
@@ -390,40 +406,83 @@ const interactionInstruction =
   "Answer yes for life-saving responses (求桃, 残血应闪/应杀). " +
   "Answer no for wasting key cards (无懈可击/闪) with no real threat.";
 
-const buildActionCriteria = (candidates: GameAction[]): Record<string, string> => {
+/** 展开后的候选：目标已定死，Jev 选中哪个就是哪个，不再二次解释。 */
+export type ActionCandidate = {
+  action: GameAction;
+  targetId?: string;
+};
+
+/**
+ * 把可玩动作按"动作×目标"展开（有目标动作每个目标占一项）。
+ * 曾经只按动作枚举、命中后取 targets[0]——座位顺序下主公经常排第一，
+ * 杀出去落到主公头上，而 Jev 从头到尾没见过这个选择。
+ */
+export const expandActionCandidates = (actions: GameAction[], max: number): ActionCandidate[] => {
+  const out: ActionCandidate[] = [];
+  for (const action of actions) {
+    if (action.type !== "end" && action.requiresTarget && action.targets.length > 0) {
+      for (const targetId of action.targets) {
+        out.push({ action, targetId });
+        if (out.length >= max) {
+          return out;
+        }
+      }
+    } else {
+      out.push({ action });
+      if (out.length >= max) {
+        return out;
+      }
+    }
+  }
+  return out;
+};
+
+export const describeCandidate = (candidate: ActionCandidate): string => {
+  if (candidate.action.type === "end") {
+    return "结束出牌阶段";
+  }
+  const kind = candidate.action.type === "skill" ? "发动技能" : "使用";
+  return `${kind} ${candidate.action.label}${candidate.targetId ? `（目标：${candidate.targetId}）` : ""}`;
+};
+
+/** 在展开候选中定位 LLM 决策（动作相同 + 目标相同），找不到返回 -1。 */
+export const findCandidateIndex = (
+  candidates: ActionCandidate[],
+  action: GameAction,
+  targetId?: string,
+): number =>
+  candidates.findIndex(
+    (entry) => sameAction(entry.action, action) && (entry.targetId ?? undefined) === (targetId ?? undefined),
+  );
+
+/** LLM 决策不在候选里时的兜底描述（Judge 的 proposed_decision 用）。 */
+const proposedActionText = (decision: { action: GameAction; targetId?: string }): string =>
+  describeCandidate({ action: decision.action, ...(decision.targetId ? { targetId: decision.targetId } : {}) });
+
+export const buildActionCriteria = (candidates: ActionCandidate[]): Record<string, string> => {
   const criteria: Record<string, string> = {};
-  candidates.forEach((action, index) => {
-    criteria[`action_${index + 1}`] = describeAction(action);
+  candidates.forEach((candidate, index) => {
+    criteria[`action_${index + 1}`] = describeCandidate(candidate);
   });
   return criteria;
 };
 
-const pickActionFromAnswer = (
+export const pickActionFromAnswer = (
   answer: JevAnswer | undefined,
-  candidates: GameAction[],
-  criteria: Record<string, string>,
+  candidates: ActionCandidate[],
 ): { action: GameAction; targetId?: string; probability: number } | null => {
   if (!answer || answer.type !== "choice") {
     return null;
   }
   const index = Number.parseInt(answer.choice.replace(/^action_/, ""), 10) - 1;
-  const action = candidates[index];
-  if (!action) {
+  const candidate = candidates[index];
+  if (!candidate) {
     return null;
   }
   const probability = answer.probabilities?.[answer.choice] ?? answer.confidence ?? 0;
-  const targetId = action.type !== "end" && action.requiresTarget ? action.targets[0] : undefined;
-  return targetId ? { action, targetId, probability } : { action, probability };
-};
-
-/** 在候选集里找到与 LLM 决策等价的选项键，用于读它的概率。 */
-const proposedActionKey = (
-  decision: { action: GameAction },
-  candidates: GameAction[],
-  criteria: Record<string, string>,
-): string | null => {
-  const index = candidates.findIndex((action) => sameAction(action, decision.action));
-  return index >= 0 ? `action_${index + 1}` : null;
+  return candidate.targetId
+    ? { action: candidate.action, targetId: candidate.targetId, probability }
+    : { action: candidate.action, probability };
 };
 
 const probabilityOf = (answer: JevAnswer | undefined, key: string | null): number => {
@@ -449,20 +508,32 @@ const sameAction = (left: GameAction, right: GameAction): boolean => {
   return false;
 };
 
-/** 构造给 Jev 的 state：结构化对局快照 + 候选动作（+ 待审核决策）。 */
+/** 构造给 Jev 的 state：结构化对局快照 + 候选动作（+ 待审核决策 + 身份推断）。 */
 const decisionsState = (
   snapshot: GameSnapshot,
   playerId: string,
-  candidates: GameAction[],
+  candidates: ActionCandidate[],
   proposed?: string,
   plan?: string,
+  guesses: RoleGuess[] = [],
 ): Record<string, unknown> => ({
   acting_player: describePlayerContext(snapshot, playerId),
   players: snapshot.players.map((player) => describePlayer(player, playerId)),
-  legal_actions: candidates.map((action, index) => ({ id: `action_${index + 1}`, action: describeAction(action) })),
+  legal_actions: candidates.map((candidate, index) => ({ id: `action_${index + 1}`, action: describeCandidate(candidate) })),
   ...(proposed ? { proposed_decision: proposed } : {}),
   ...(plan ? { strategic_plan: plan } : {}),
+  role_guesses: describeRoleGuesses(guesses),
 });
+
+/** 身份推断喂给 Jev：公开的直给，隐藏的只给行为结论（与规则助手同一账本）。 */
+const describeRoleGuesses = (guesses: RoleGuess[]): string[] =>
+  guesses.map((guess) => {
+    if (!guess.inferred) {
+      return `${guess.name}: ${guess.role} (public knowledge)`;
+    }
+    const basis = guess.reasons.length > 0 ? ` based on ${guess.reasons.join("; ")}` : " (no clear behavior yet)";
+    return `${guess.name}: guessed ${guess.role} (confidence ${guess.confidence})${basis}`;
+  });
 
 const interactionState = (
   snapshot: GameSnapshot,
@@ -500,14 +571,40 @@ const describePlayer = (player: Player, viewerId: string): string => {
   return `${player.name}（${role}，武将${player.general}，体力${player.hp}/${player.maxHp}，手牌${player.hand.length}${equip ? `，装备${equip}` : ""}）`;
 };
 
-const describeAction = (action: GameAction): string => {
-  if (action.type === "end") {
-    return "结束出牌阶段";
+/**
+ * 出牌 choice 问题的指令：阵营约束 + 目标已定死声明。
+ * 曾经这里只有一句话，导致 Jev 不知道谁是敌人、也不知道目标不可改——
+ * 忠臣/内奸杀主公大多出自这一问。
+ */
+export const bestActionInstruction = (
+  snapshot: GameSnapshot,
+  playerId: string,
+  guesses: RoleGuess[],
+): string => {
+  const self = snapshot.players.find((player) => player.id === playerId);
+  const lord = snapshot.players.find((player) => player.role === PlayerRole.Lord);
+  const lines = [
+    "Which single action is best for this player right now?",
+    "Each option already includes its FIXED target in parentheses: choosing an option also chooses that target, you cannot retarget.",
+    "Targeting an ally or the wrong faction loses the game for your side; when in doubt prefer 结束出牌阶段 (end turn) over attacking an unknown player.",
+  ];
+  if (self) {
+    lines.push(`You are ${self.name}, role ${self.role}.`);
   }
-  if (action.type === "skill") {
-    return `发动技能 ${action.label}${action.requiresTarget ? `（目标可选：${action.targets.join("/")}）` : ""}`;
+  if (lord && self && self.id !== lord.id) {
+    if (self.role === PlayerRole.Loyalist) {
+      lines.push(`The lord is ${lord.name}: NEVER choose an action targeting the lord, you are on the same side.`);
+    } else if (self.role === PlayerRole.Rebel) {
+      lines.push(`The lord ${lord.name} is your enemy: prefer actions targeting the lord or known rebels' enemies.`);
+    } else {
+      lines.push(`The lord is ${lord.name}: do not attack the lord unless role_guesses give high-confidence rebel cover.`);
+    }
   }
-  return `使用 ${action.label}${action.requiresTarget ? `（目标可选：${action.targets.join("/")}）` : ""}`;
+  const inferred = guesses.filter((guess) => guess.inferred);
+  if (inferred.length > 0) {
+    lines.push(`Suspected identities: ${inferred.map((guess) => `${guess.name}=${guess.role}(${guess.confidence})`).join(", ")}.`);
+  }
+  return lines.join(" ");
 };
 
 const describeInteractionChoice = (decision: InteractionDecision): string => {

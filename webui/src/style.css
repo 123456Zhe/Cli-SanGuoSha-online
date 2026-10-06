@@ -185,6 +185,64 @@ main {
   color: var(--muted);
 }
 
+.pc-skills {
+  font-size: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+}
+
+.pc-skills-summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.pc-skill-desc {
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.pc-skill-name {
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+/* ── Advisor ─────────────────────────────────────── */
+
+.advisor {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.advisor-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.advisor-title {
+  font-weight: 700;
+}
+
+.advisor-report {
+  margin-top: 8px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.advisor-kind {
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.advisor-notice {
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
 /* ── Game Log ─────────────────────────────────────── */
 
 .game-log {

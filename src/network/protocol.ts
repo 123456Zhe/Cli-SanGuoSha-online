@@ -38,6 +38,8 @@ export type ClientMessage =
   | { type: "leave" }
   /** 结算画面：真人玩家点击「确认下一局」→ 服务端手动重启（配合 autoRestartAfterGameOver=false） */
   | { type: "confirm_next" }
+  /** 玩家助手请求：rule=行为记账复盘（免费即时），llm=LLM 复盘（需服务端配模型，有冷却）。 */
+  | { type: "advisor"; kind: "rule" | "llm" }
   // 机器标识（同机账号校验用，普通客户端在 join/reconnect 前发送）：
   // - CLI：从 ~/.clisanguo/machine-id 持久化读取；WebUI：localStorage 持久化。
   // - 中继会补上浏览器真实 IP 后转发给服务器，服务器以 sha1(IP:机器ID) 作为来源指纹。
@@ -58,7 +60,11 @@ export type ServerMessage =
       removableCards: Record<string, RemovableCardOption[]>;
       pendingDiscardCount: number;
       logs: string[];
+      /** 技能 id → 说明文本（服务端用 resolveSkillDescriptor 生成，覆盖内置+外部包；可选字段，旧客户端忽略）。 */
+      skillDescriptions?: Record<string, string>;
     }
+  /** 玩家助手报告：lines 为展示文本行，notice 为空表示正常。 */
+  | { type: "advisor_report"; kind: "rule" | "llm"; lines: string[]; notice?: string }
   | { type: "error"; message: string }
   | { type: "closed"; message: string }
   | { type: "game_over"; winner: "human" | "ai" | "draw" | null; message: string }

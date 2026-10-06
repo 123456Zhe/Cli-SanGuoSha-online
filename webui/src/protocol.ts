@@ -144,6 +144,8 @@ export type ClientMessage =
   | { type: "interaction"; decision: InteractionDecision }
   | { type: "leave" }
   | { type: "confirm_next" }
+  /** 玩家助手请求：rule=行为记账复盘（免费即时），llm=LLM 复盘（有冷却）。 */
+  | { type: "advisor"; kind: "rule" | "llm" }
   | { type: "source"; machineId: string; ip?: string };
 
 // ─── 服务端 → 客户端 消息 ────────────────────────────
@@ -162,7 +164,11 @@ export type ServerMessage =
       removableCards: Record<string, RemovableCardOption[]>;
       pendingDiscardCount: number;
       logs: string[];
+      /** 技能 id → 说明文本（服务端下发；旧服务端不发时为 undefined）。 */
+      skillDescriptions?: Record<string, string>;
     }
+  /** 玩家助手报告：lines 为展示文本行，notice 为空表示正常。 */
+  | { type: "advisor_report"; kind: "rule" | "llm"; lines: string[]; notice?: string }
   | { type: "error"; message: string }
   | { type: "closed"; message: string }
   | { type: "game_over"; winner: "human" | "ai" | "draw" | null; message: string }

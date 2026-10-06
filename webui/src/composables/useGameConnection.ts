@@ -43,6 +43,8 @@ const roomSize = ref(0);
 
 // 游戏状态
 const snapshot = ref<ClientSnapshot | null>(null);
+/** 技能 id → 说明文本（随 state 下发；旧服务端不发时为空对象）。 */
+const skillDescriptions = ref<Record<string, string>>({});
 const actions = ref<GameAction[]>([]);
 const removableCards = ref<Record<string, RemovableCardOption[]>>({});
 const pendingDiscardCount = ref(0);
@@ -50,6 +52,10 @@ const logs = ref<string[]>([]);
 
 // 交互
 const interactionRequest = ref<InteractionRequest | null>(null);
+
+// 玩家助手报告（最新一份；kind 区分规则/LLM）
+const advisorReport = ref<{ kind: "rule" | "llm"; lines: string[]; notice?: string } | null>(null);
+const advisorPending = ref(false);
 
 // 结算
 const gameOverMessage = ref("");
@@ -172,8 +178,14 @@ const handle = async (message: ServerMessage) => {
       interactionRequest.value = message.request;
       break;
 
+    case "advisor_report":
+      advisorReport.value = { kind: message.kind, lines: message.lines, notice: message.notice };
+      advisorPending.value = false;
+      break;
+
     case "state":
       snapshot.value = message.snapshot;
+      skillDescriptions.value = message.skillDescriptions ?? {};
       actions.value = message.actions;
       removableCards.value = message.removableCards;
       pendingDiscardCount.value = message.pendingDiscardCount;
@@ -331,6 +343,16 @@ const confirmNext = () => {
   send({ type: "confirm_next" });
 };
 
+const requestAdvisor = (kind: "rule" | "llm") => {
+  advisorPending.value = true;
+  send({ type: "advisor", kind });
+};
+
+const clearAdvisor = () => {
+  advisorReport.value = null;
+  advisorPending.value = false;
+};
+
 // ─── 暴露 ───────────────────────────────────────────
 
 export function useGameConnection() {
@@ -360,11 +382,14 @@ export function useGameConnection() {
     lobbyPlayers,
     roomSize,
     snapshot,
+    skillDescriptions,
     actions,
     removableCards,
     pendingDiscardCount,
     logs,
     interactionRequest,
+    advisorReport,
+    advisorPending,
     gameOverMessage,
     gameOverVisible,
     asking,
@@ -383,5 +408,7 @@ export function useGameConnection() {
     setAsking,
     clearActions,
     confirmNext,
+    requestAdvisor,
+    clearAdvisor,
   };
 }

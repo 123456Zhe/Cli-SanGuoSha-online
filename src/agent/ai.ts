@@ -1,5 +1,6 @@
 import { callOllamaChatDetailed, listOllamaModels, OllamaCallResult, probeOllamaConnectivity } from "./ollama.js";
 import {
+  buildAdvisorPrompt,
   buildAgentPrompt,
   buildInteractionPrompt,
   buildPlanPrompt,
@@ -233,6 +234,47 @@ export class GameAiLoop {
   /** AI 自己回合开始的规划：允许阻塞等 LLM，失败回退策略记忆/上一回合规划。 */
   private async getHybridPlan(snapshot: GameSnapshot, agent: SubAgent): Promise<string | undefined> {
     return await this.hybridPlans.ensure(agent.playerId, snapshot.turn, this.getStrategyNotePlan(agent), snapshot);
+  }
+
+  /**
+   * 玩家助手（LLM 复盘）：以人类玩家为视角做一次性局势总结 + 身份猜测 + 行动建议。
+   * provider 不可用/失败时返回 null（由调用方回退规则助手结论），绝不抛错。
+   */
+  async requestPlayerAdvice(
+    snapshot: GameSnapshot,
+    viewerId: string,
+    ruleReportLines: string[],
+  ): Promise<string | null> {
+    const viewer = snapshot.players.find((player) => player.id === viewerId);
+    if (!viewer) {
+      return null;
+    }
+    const promptPackage = buildAdvisorPrompt({
+      rulesText: this.rulesText,
+      matchGeneralsText: buildMatchGeneralsText(snapshot),
+      snapshot,
+      agent: { playerId: viewer.id, name: viewer.name, role: viewer.role, general: viewer.general },
+      previousRoundContexts: this.previousRoundContexts,
+      ruleReportLines,
+    });
+    const messages: AgentMessage[] = [
+      { role: "system", content: promptPackage.systemPrompt },
+      { role: "user", content: promptPackage.userPrompt },
+    ];
+    const callResult = await this.requestDecisionWithRetry(messages, "fast");
+    if (!callResult) {
+      return null;
+    }
+    this.writeDecisionLog({
+      callResult,
+      stage: "player-advice",
+      playerId: viewer.id,
+      playerName: viewer.name,
+      prompt: messages,
+      responseText: callResult.content,
+    });
+    const text = callResult.content.trim().slice(0, 1200);
+    return text || null;
   }
 
   /** 响应决策用的规划：同步返回（缓存/策略记忆），需要时后台预热，绝不阻塞响应。 */

@@ -7,6 +7,7 @@ import Lobby from "./components/Lobby.vue";
 import Battlefield from "./components/Battlefield.vue";
 import GameLog from "./components/GameLog.vue";
 import ActionPanel from "./components/ActionPanel.vue";
+import AdvisorPanel from "./components/AdvisorPanel.vue";
 import InteractionPanel from "./components/InteractionPanel.vue";
 import MyHand from "./components/MyHand.vue";
 import GameOver from "./components/GameOver.vue";
@@ -32,6 +33,7 @@ onMounted(() => {
     <!-- 对局 -->
     <template v-if="!inLobby && snapshot">
       <Battlefield />
+      <AdvisorPanel />
       <GameLog />
       <InteractionPanel />
       <ActionPanel />

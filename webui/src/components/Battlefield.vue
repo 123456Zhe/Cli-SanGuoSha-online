@@ -3,7 +3,12 @@ import { computed } from "vue";
 import { useGameConnection } from "../composables/useGameConnection.js";
 import type { PublicPlayer } from "../protocol.js";
 
-const { snapshot, playerId } = useGameConnection();
+const { snapshot, playerId, skillDescriptions } = useGameConnection();
+
+/** 技能 id 可能是外部包的命名空间形式（"包名/技能名"），展示时只取简称。 */
+const shortSkillName = (id: string) => id.split("/").pop() ?? id;
+
+const skillTextOf = (id: string) => skillDescriptions.value[id] ?? "（暂无说明）";
 
 const players = computed<PublicPlayer[]>(() => snapshot.value?.players ?? []);
 
@@ -76,6 +81,17 @@ const extraInfo = (p: PublicPlayer) => {
       <div v-if="extraInfo(p).length > 0" class="pc-extra">
         {{ extraInfo(p).join(" · ") }}
       </div>
+
+      <!-- 技能说明（自己的默认展开，别人的折叠，点击切换） -->
+      <details v-if="p.skills.length > 0" class="pc-skills" :open="p.id === playerId">
+        <summary class="pc-skills-summary" :title="p.skills.map(skillTextOf).join('\n')">
+          {{ p.skills.map(shortSkillName).join(" · ") }}
+        </summary>
+        <div v-for="s in p.skills" :key="s" class="pc-skill-desc">
+          <span class="pc-skill-name">{{ shortSkillName(s) }}</span>
+          <span>{{ skillTextOf(s) }}</span>
+        </div>
+      </details>
     </div>
   </div>
 </template>

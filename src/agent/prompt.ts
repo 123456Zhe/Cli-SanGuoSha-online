@@ -247,6 +247,54 @@ export const buildPlanPrompt = (input: PlanPromptInput): AgentPromptPackage => {
   return { systemPrompt, userPrompt };
 };
 
+/**
+ * 玩家助手（LLM 复盘）用 prompt：以人类玩家为视角做局势总结 + 身份猜测 + 行动建议。
+ * 与出牌 prompt 不同：输出自由文本（300字以内），且只给该玩家可见的信息
+ *（战场行已按 viewerId 遮蔽；规则助手结论可一并附上供模型参考/纠偏）。
+ */
+export type AdvisorPromptInput = {
+  rulesText: string;
+  matchGeneralsText?: string;
+  snapshot: GameSnapshot;
+  agent: PromptAgentIdentity;
+  previousRoundContexts: RoundPromptContext[];
+  ruleReportLines?: string[];
+};
+
+export const buildAdvisorPrompt = (input: AdvisorPromptInput): AgentPromptPackage => {
+  const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
+  const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
+  const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
+  const matchBlock = input.matchGeneralsText ? ["", "本局武将技能：", input.matchGeneralsText] : [];
+  const systemPrompt = [
+    "你是三国杀游戏高手，正在场边为一位人类玩家做实时复盘参谋。",
+    `你服务的玩家是 ${input.agent.name}，身份是${input.agent.role}，武将是${input.agent.general}。`,
+    "你只能基于给你的可见信息判断：除该玩家自己、主公、已阵亡者外，其他存活玩家的身份都是「未知」，只能按行为（攻击过谁、支援过谁）推测，绝不许编造你没看到的身份信息。",
+    "直接输出中文复盘文本（300字以内），不要输出JSON，不要解释格式。",
+    "",
+    "三国杀游戏rules：",
+    input.rulesText,
+    ...matchBlock,
+  ].join("\n");
+  const userPrompt = [
+    `游戏之前轮次上下文（保留最近 ${input.previousRoundContexts.length} 轮）：`,
+    previousRoundsText,
+    "",
+    "游戏本轮状态：",
+    currentRoundStatus,
+    "",
+    "游戏当前战场状态（「未知」表示该身份对你服务的玩家不可见）：",
+    battlefieldText,
+    ...(input.ruleReportLines && input.ruleReportLines.length > 0
+      ? ["", "规则助手（行为记账）的结论，供你参考或纠偏：", ...input.ruleReportLines]
+      : []),
+    "",
+    "请输出三段：1) 局势总结（谁占优、谁濒危）；2) 身份猜测（逐人给推断+一句话依据）；3) 给你服务玩家的行动建议（集火/保核/观望）。",
+    "300字以内。",
+  ].join("\n");
+  return { systemPrompt, userPrompt };
+};
+
 const buildRequestDescription = (request: InteractionRequest): string => {
   // 必须同时给出 label 与 sourceId，否则模型无法输出校验通过的来源ID（尤其木牛流马的 choose-discard）
   const sourceText = (sources: Array<{ sourceId: string; label: string }>): string =>

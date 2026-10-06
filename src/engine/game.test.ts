@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CARD_LIBRARY, CARD_LIBRARY_SUMMARY, Card, CardType, createDeck } from "./cards.js";
 import { GENERAL_LIBRARY, Player, PlayerRole, SanGuoGame, SkillName, InteractionDecision, InteractionRequest } from "./game.js";
+import { pickRandomUnusedGeneral } from "./generals.js";
 
 const fixedRng = (): number => 0;
 
@@ -122,6 +123,11 @@ void test("AI 武将会随机且一局内不重复（包含不与玩家武将重
   const generalNames = snapshot.players.map((player) => player.general);
   const uniqueNames = new Set(generalNames);
   assert.equal(uniqueNames.size, generalNames.length);
+});
+
+void test("武将池耗尽时明确抛错而不是发重名武将", async () => {
+  const used = new Set(GENERAL_LIBRARY.map((general) => general.name));
+  assert.throws(() => pickRandomUnusedGeneral(used, fixedRng), /武将池已耗尽/);
 });
 
 void test("6人局默认身份配比符合推荐", async () => {

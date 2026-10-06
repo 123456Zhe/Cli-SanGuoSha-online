@@ -55,6 +55,7 @@ import {
   resolveSlash as resolveSlashImpl,
   resolveSnatch as resolveSnatchImpl,
   resolveWinner as resolveWinnerImpl,
+  tryNegateGlobal as tryNegateGlobalImpl,
 } from "./resolve.js";
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
 import { getPackSkills } from "./skill-module.js";
@@ -192,6 +193,18 @@ export class SanGuoGame {
    * 迟初始化：热重载会让已存活的实例缺少新字段，因此统一经 damageCreditMap() 访问。
    */
   private damageCredit: Map<string, string | null> | undefined;
+
+  /**
+   * 木牛流马存牌回合（存牌 id → 存入时的 `turn`）。本回合刚置入的牌本回合不许取出，
+   * 掐掉"置入/取出"零收益 2-循环（跨回合取出不受影响）。迟初始化（见 damageCredit）。
+   */
+  private woodenOxStoredTurn: Map<string, number> | undefined;
+
+  /**
+   * AI 回合防空转：本回合已出现过的局面签名。局面重复出现即决策器在零收益打转，
+   * 调用方（runAITurn / 联机 driveAiTurn）应强制结束出牌。迟初始化（见 damageCredit）。
+   */
+  private aiTurnSeenStates: Set<string> | undefined;
 
   constructor(rng: () => number = Math.random) {
     this.rng = rng;
@@ -582,7 +595,8 @@ export class SanGuoGame {
           needsTargetCard: card.type === CardType.Snatch || card.type === CardType.Dismantle,
         });
       });
-      if (player.treasureCards.length > 0) {
+      // 取出：本回合刚置入的牌不能本回合就取出（防置入/取出无收益空转），跨回合取出不受影响
+      if (player.treasureCards.some((card) => this.canTakeStoredCard(card))) {
         actions.push({
           type: "play",
           cardIndex: -13,
@@ -1117,13 +1131,16 @@ export class SanGuoGame {
         return [`${player.name} 当前无法发动${CardType.WoodenOx}`];
       }
       player.treasureCards.push(moved);
+      this.oxStoredTurnMap().set(moved.id, this.turn);
       return [`${player.name} 将 ${moved.type} 置于${CardType.WoodenOx}下方`];
     }
     if (action.cardIndex === -13) {
       if (player.treasure !== CardType.WoodenOx || player.treasureCards.length === 0) {
         return [`${player.name} 当前无法从${CardType.WoodenOx}取牌`];
       }
-      const oxSources = this.buildUsableSources(player).filter((source) => source.origin === "treasure");
+      const oxSources = this.buildUsableSources(player).filter(
+        (source) => source.origin === "treasure" && this.canTakeStoredCard(source.card),
+      );
       const [taken] = await this.requestDiscardSelection(player, 1, "木牛流马：选择取出1张牌", oxSources);
       if (!taken) {
         return [`${player.name} 当前无法从${CardType.WoodenOx}取牌`];
@@ -1245,33 +1262,10 @@ export class SanGuoGame {
 
   /**
    * 全体/无指向锦囊的无懈可击询问（无中生有/桃园结义/五谷丰登）：
-   * 使用者本人不参与（无反无懈链时，自己无懈自己的牌没有意义），其余存活角色按座次
-   * 从使用者下家开始依次响应，一人打出即整张抵消。响应者没有无懈可击来源时
-   * `requestCardResponse` 直接返回 false，不会打扰该座位。
+   * 统一走 `resolve.ts` 的 `tryNegateGlobal`（与闪电自贴同口径）。
    */
   private async tryNegateGlobal(user: Player, trickType: CardType, logs: string[]): Promise<boolean> {
-    const userIndex = this.players.findIndex((player) => player.id === user.id);
-    const start = userIndex >= 0 ? userIndex : 0;
-    for (let offset = 1; offset <= this.players.length; offset += 1) {
-      const responder = this.players[(start + offset) % this.players.length];
-      if (!responder || responder.id === user.id || !responder.alive) {
-        continue;
-      }
-      if (!this.canPlayerRespond(responder.id, "negate")) {
-        continue;
-      }
-      const negated = await this.requestCardResponse(
-        responder,
-        "negate",
-        { cardName: trickType, actorId: user.id },
-        logs,
-      );
-      if (negated) {
-        logs.push(`${responder.name} 打出无懈可击，抵消了 ${trickType}`);
-        return true;
-      }
-    }
-    return false;
+    return tryNegateGlobalImpl(this as unknown as ResolveContext, user, trickType, logs);
   }
 
   private async resolveUsedCard(
@@ -1361,6 +1355,7 @@ export class SanGuoGame {
       return [];
     }
     const logs: string[] = [];
+    this.beginAiTurnProgress();
     while (true) {
       const ai = this.currentPlayer;
       const actions = this.getPlayableActions(ai.id);
@@ -1372,6 +1367,12 @@ export class SanGuoGame {
       const targetId = best.requiresTarget ? pickBestTarget(this as unknown as AiHeuristicsContext, best.targets) : undefined;
       logs.push(...(await this.playAction(ai.id, best, targetId)));
       if (this.winner !== null) {
+        return logs;
+      }
+      // 兜底：决策器零收益打转（局面重复出现）时强制结束，不再无限出牌
+      if (this.noteAiTurnProgress()) {
+        logs.push(`${ai.name} 的出牌陷入重复局面，强制结束出牌阶段`);
+        logs.push(...(await this.endPlayPhase(ai.id)));
         return logs;
       }
     }
@@ -2107,6 +2108,7 @@ export class SanGuoGame {
     this.phase = TurnPhase.Judgment;
     this.slashUsedThisTurn = false;
     this.slashPlayedThisTurn = false;
+    this.aiTurnSeenStatesSet().clear();
     this.wineBuffPlayerIds = new Set();
     this.wineUsedPlayerIds = new Set();
     const player = this.currentPlayer;
@@ -2358,8 +2360,13 @@ export class SanGuoGame {
     await this.emitSkillTrigger("judgment", judgmentPayload, logs);
     if (judgmentPayload.judgmentCard && judgmentPayload.judgmentCard.id !== card.id) {
       const replacement = judgmentPayload.judgmentCard;
+      // 兜底：替换牌若还留在其他区域（外部钩子漏移除），先清掉再入弃牌堆，保证单区唯一
+      const cleaned = this.removeCardFromAllZones(replacement.id);
       this.discardPile.push(replacement);
       logs.push(`${reason}判定牌被替换：${describeCard(card)} → ${describeCard(replacement)}`);
+      if (cleaned > 0) {
+        logs.push(`${reason}改判替换牌残留在其他区域，已清理 ${cleaned} 处`);
+      }
       card = replacement;
     }
     const guiCaiPlayer = this.players.find((item) => item.alive && this.hasSkill(item, SkillName.GuiCai));
@@ -2635,6 +2642,8 @@ export class SanGuoGame {
         }
       }
     }
+    // after_damage 钩子看到的是实际造成的伤害（白银狮子等压过之后的值），而非原始数值
+    payload.damage = finalDamage;
     await this.emitSkillTrigger("after_damage", payload, logs);
   }
 
@@ -2911,6 +2920,89 @@ export class SanGuoGame {
   private damageCreditMap(): Map<string, string | null> {
     this.damageCredit ??= new Map<string, string | null>();
     return this.damageCredit;
+  }
+
+  /**
+   * 把一张牌从所有已知区域移除（牌堆/弃牌堆/所有人手牌/木牛流马存牌），返回移除数量。
+   * 外部改判钩子漏移除时的兜底：保证同一张牌只存在于一个区域。
+   */
+  private removeCardFromAllZones(cardId: string): number {
+    let removed = 0;
+    const sweep = (pool: Card[]): void => {
+      for (let index = pool.length - 1; index >= 0; index -= 1) {
+        if (pool[index]?.id === cardId) {
+          pool.splice(index, 1);
+          removed += 1;
+        }
+      }
+    };
+    sweep(this.deck);
+    sweep(this.discardPile);
+    for (const player of this.players) {
+      sweep(player.hand);
+      sweep(player.treasureCards);
+    }
+    return removed;
+  }
+
+  private oxStoredTurnMap(): Map<string, number> {
+    this.woodenOxStoredTurn ??= new Map<string, number>();
+    return this.woodenOxStoredTurn;
+  }
+
+  private aiTurnSeenStatesSet(): Set<string> {
+    this.aiTurnSeenStates ??= new Set<string>();
+    return this.aiTurnSeenStates;
+  }
+
+  /** 木牛流马取出资格：本回合刚置入的牌本回合不能取出（防置入/取出空转）。 */
+  private canTakeStoredCard(card: Card): boolean {
+    return (this.oxStoredTurnMap().get(card.id) ?? -1) < this.turn;
+  }
+
+  private buildAiTurnProgressKey(): string {
+    const parts: string[] = [`t${this.turn}`, `p${this.phase}`, `d${this.deck.length}`, `x${this.discardPile.length}`];
+    for (const player of this.players) {
+      parts.push(
+        [
+          player.id,
+          player.alive ? 1 : 0,
+          player.hp,
+          player.hand.map((card) => card.id).join(","),
+          player.weapon ?? "",
+          player.armor ?? "",
+          player.defenseHorse ?? "",
+          player.attackHorse ?? "",
+          player.treasure ?? "",
+          player.treasureCards.map((card) => card.id).join(","),
+          player.chained ? 1 : 0,
+        ].join("|"),
+      );
+    }
+    return parts.join("#");
+  }
+
+  /**
+   * AI 驱动每执行一个动作后调用：当前局面若本回合已出现过则返回 true
+   *（决策器在零收益打转，调用方应强制结束出牌），否则记录并返回 false。
+   */
+  public noteAiTurnProgress(): boolean {
+    const seen = this.aiTurnSeenStatesSet();
+    const key = this.buildAiTurnProgressKey();
+    if (seen.has(key)) {
+      return true;
+    }
+    if (seen.size > 1000) {
+      seen.clear();
+    }
+    seen.add(key);
+    return false;
+  }
+
+  /** AI 驱动在回合开始时调用：清空局面记录并记下初始局面。 */
+  public beginAiTurnProgress(): void {
+    this.aiTurnSeenStatesSet().clear();
+    this.noteAiTurnProgress();
   }
 
   private noteDamageSource(sourceId: string | null, targetId: string): void {

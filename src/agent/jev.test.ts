@@ -96,6 +96,74 @@ void test("Jev 返回 503（临时失败）时按退避重试到上限", async (
   }
 });
 
+void test("连接被重置时不等退避、立刻换新连接重试一次", async () => {
+  // 首个请求直接断连接（模拟复用池里的旧连接被对端 RST），之后正常响应
+  const stub: Stub = { baseUrl: "", requests: 0, close: async () => {} };
+  const server = createServer((request, response) => {
+    stub.requests += 1;
+    if (stub.requests === 1) {
+      request.socket.destroy();
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end('{"answers":{"q":{"type":"noul","noul":0.9}}}');
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  stub.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  stub.close = async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  };
+  try {
+    const startedAt = Date.now();
+    const result = await callJevSystemOne("state", question, { baseUrl: stub.baseUrl, model: "jev-test", apiKey: "k", timeoutMs: 5_000 });
+    assert.equal(stub.requests, 2, "网络层失败应立刻重试一次，不等退避");
+    assert.ok(Date.now() - startedAt < 1_500, "即时重试不应叠加退避等待");
+    assert.equal((result.answers.q as { noul: number }).noul, 0.9);
+  } finally {
+    await stub.close();
+  }
+});
+
+void test("持续网络失败时错误信息截断、不带整页 HTML", async () => {
+  const stub: Stub = { baseUrl: "", requests: 0, close: async () => {} };
+  const server = createServer((request, response) => {
+    stub.requests += 1;
+    request.socket.destroy();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  stub.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  stub.close = async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  };
+  try {
+    await assert.rejects(
+      callJevSystemOne("state", question, { baseUrl: stub.baseUrl, model: "jev-test", apiKey: "k", timeoutMs: 2_000 }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error && error.message.startsWith("Jev 连接失败:"));
+        assert.ok(error.message.length <= 320, `错误信息应截断，实际 ${error.message.length}`);
+        return true;
+      },
+    );
+    assert.equal(stub.requests, 3, "1 次即时重试 + 退避重试到上限");
+  } finally {
+    await stub.close();
+  }
+});
+
 void test("Jev 连续失败后熔断：冷却期内不再发起请求，冷却结束自动恢复", async () => {
   const stub = await startStub(401, '{"error":"unauthorized"}');
   const logs: Array<{ skipped: boolean; ok: boolean; elapsedMs: number; error?: string }> = [];

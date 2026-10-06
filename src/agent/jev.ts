@@ -177,8 +177,22 @@ const delay = async (ms: number): Promise<void> => {
 
 const buildHeaders = (config: JevConfig): Record<string, string> => ({
   "Content-Type": "application/json",
+  // 每次决策都用新连接：复用池里的空闲连接可能已被对端关闭，
+  // 下一次 POST 复用它会立刻 RST（"fetch failed"），而 POST 不会被 undici 透明重试。
+  Connection: "close",
   ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
 });
+
+/** 网络层失败（连接重置/旧复用连接失效等）：非 HTTP 错误、非超时取消，一律立刻换新连接重试。 */
+const isNetworkError = (error: unknown): boolean =>
+  !(error instanceof JevHttpError) && (error as { name?: string } | null)?.name !== "AbortError";
+
+const describeJevError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const inner = error instanceof Error ? error.cause : null;
+  const causeText = inner instanceof Error ? ` cause=${inner.message}` : "";
+  return `${message}${causeText}`.replace(/\s+/g, " ").trim().slice(0, 300);
+};
 
 /**
  * 调用 System One 评估端点：一次请求携带多个问题，返回逐问题的结构化答案。
@@ -192,6 +206,7 @@ export const callJevSystemOne = async (
   const config = resolveJevConfig(options);
   const url = `${config.baseUrl}/systemone`;
   let lastError: unknown = null;
+  let retriedNetwork = false;
   for (let attempt = 0; attempt < MAX_JEV_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -221,6 +236,12 @@ export const callJevSystemOne = async (
       };
     } catch (error) {
       lastError = error;
+      // 网络层失败不等退避：立刻换新连接重试一次（connection: close 保证是新连接）。
+      // 超时取消不走这里，仍按原退避处理，避免给本就慢的服务端加压。
+      if (isNetworkError(error) && !retriedNetwork) {
+        retriedNetwork = true;
+        continue;
+      }
       if (attempt < MAX_JEV_ATTEMPTS - 1 && isRetryableJevError(error)) {
         await delay(400 * 2 ** attempt);
         continue;
@@ -231,8 +252,7 @@ export const callJevSystemOne = async (
       clearTimeout(timer);
     }
   }
-  const reason = (lastError instanceof Error ? lastError.message : String(lastError)).replace(/\s+/g, " ").trim();
-  throw new Error(`Jev 连接失败: ${reason}`);
+  throw new Error(`Jev 连接失败: ${describeJevError(lastError)}`);
 };
 
 /** 连通性探测：GET {base}/models（官方接口，需鉴权）。 */

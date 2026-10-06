@@ -622,7 +622,12 @@ export function resolveDelayedTrick(ctx: ResolveContext, user: Player, usedCard:
       logs.push(`${target.name} 距离 ${user.name} 超过 1，${CardType.SuppliesCut}无效`);
       return logs;
     }
-    if (usedCard.type !== CardType.Lightning && await tryNegate(ctx, target, usedCard.type, logs, user.id)) {
+    if (usedCard.type === CardType.Lightning) {
+      // 闪电是贴给自己的延时锦囊：询问其他存活角色（使用者本人不参与），一人打出即整张抵消
+      if (await tryNegateGlobal(ctx, user, usedCard.type, logs)) {
+        return logs;
+      }
+    } else if (await tryNegate(ctx, target, usedCard.type, logs, user.id)) {
       return logs;
     }
     target.delayedTricks.push({ cardType: usedCard.type, sourcePlayerId: user.id, card: usedCard });
@@ -1240,6 +1245,34 @@ export function tryNegate(ctx: ResolveContext, target: Player, trickType: CardTy
       logs.push(`${target.name} 打出无懈可击，抵消了 ${trickType}`);
     }
     return negated;
+  })();
+}
+
+/**
+ * 全体/无指向锦囊的无懈可击询问（无中生有/桃园结义/五谷丰登、自贴的闪电）：
+ * 使用者本人不参与（无反无懈链时，自己无懈自己的牌没有意义），其余存活角色按座次
+ * 从使用者下家开始依次响应，一人打出即整张抵消。响应者没有无懈可击来源时
+ * `requestCardResponse` 直接返回 false，不会打扰该座位。
+ */
+export function tryNegateGlobal(ctx: ResolveContext, user: Player, trickType: CardType, logs: string[]): Promise<boolean> {
+  return (async () => {
+    const userIndex = ctx.players.findIndex((player) => player.id === user.id);
+    const start = userIndex >= 0 ? userIndex : 0;
+    for (let offset = 1; offset <= ctx.players.length; offset += 1) {
+      const responder = ctx.players[(start + offset) % ctx.players.length];
+      if (!responder || responder.id === user.id || !responder.alive) {
+        continue;
+      }
+      if (!ctx.canPlayerRespond(responder.id, "negate")) {
+        continue;
+      }
+      const negated = await ctx.requestCardResponse(responder, "negate", { cardName: trickType, actorId: user.id }, logs);
+      if (negated) {
+        logs.push(`${responder.name} 打出无懈可击，抵消了 ${trickType}`);
+        return true;
+      }
+    }
+    return false;
   })();
 }
 

@@ -1028,6 +1028,7 @@ export class GameServer {
     const seatLabel = this.aiPlayerIds.includes(aiId) ? "[AI]" : "（托管）";
     try {
       let actionsTaken = 0;
+      this.game.beginAiTurnProgress();
       while (true) {
         if (this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
           return; // 玩家已重连，交还控制权
@@ -1098,6 +1099,17 @@ export class GameServer {
         this.log(...actionLogs);
         this.log(...(await this.game.ensureTurnState()));
         this.log(...(await this.game.resolvePendingDeaths()));
+        // 兜底：决策器零收益打转（木牛置入/取出、铁索反复重铸等局面重复）时强制收尾，
+        // 与动作数上限互补——动作数未超但局面已循环也能截停。
+        if (this.game.noteAiTurnProgress()) {
+          this.log(`${seatLabel} ${current.name} 出牌陷入重复局面，强制结束出牌`);
+          this.broadcastInterimState();
+          const ended = await this.forceEndAiTurn(aiId);
+          if (!ended || this.isStaleDrive(aiId, driveEpoch, gameGeneration)) {
+            return;
+          }
+          continue;
+        }
         this.trackBattlefield();
         this.broadcastState();
         await this.checkAndHandleGameOver();

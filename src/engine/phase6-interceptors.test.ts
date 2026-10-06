@@ -393,3 +393,29 @@ void test("端到端：加载 examples/generals 后，吕蒙的克己在真实�
   );
   assert.equal(me.hand.length, 5, "克己生效时不应弃牌");
 });
+
+void test("after_damage：钩子看到的是白银狮子压过之后的实际伤害", async () => {
+  const seen: Array<number | undefined> = [];
+  const id = registerTestSkill("记录伤害", {
+    after_damage: (_ctx, payload) => {
+      seen.push(payload.damage);
+    },
+  });
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  other.skills = [id];
+  me.hand = [makeCard("wine", CardType.Wine), makeCard("slash", CardType.Slash)];
+  other.hp = 4;
+  other.hand = [];
+  other.armor = CardType.SilverLion;
+
+  const wine = game.getPlayableActions(me.id).find((action) => action.type === "play" && action.cardIndex === 0);
+  assert.ok(wine, "应能使用酒");
+  await game.playAction(me.id, wine);
+  const slash = game.getPlayableActions(me.id).find((action) => action.type === "play" && action.cardIndex === 0);
+  assert.ok(slash, "喝酒后应能出杀");
+  const logs = await game.playAction(me.id, slash, other.id);
+
+  assert.equal(other.hp, 3, logs.join(" / "));
+  assert.deepEqual(seen, [1], `after_damage 应传封顶后的 1 点而非原始 2 点：${logs.join(" / ")}`);
+});

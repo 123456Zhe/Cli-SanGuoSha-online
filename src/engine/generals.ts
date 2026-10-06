@@ -128,8 +128,8 @@ export function getAiName(index: number): string {
 export function pickRandomUnusedGeneral(usedGeneralNames: Set<string>, rng: RngFn): GeneralDefinition {
   const candidates = GENERAL_LIBRARY.filter((general) => !usedGeneralNames.has(general.name));
   if (candidates.length <= 0) {
-    const fallback = GENERAL_LIBRARY[Math.floor(rng() * GENERAL_LIBRARY.length)];
-    return fallback ?? humanGeneral;
+    // 武将池耗尽：直接抛错，绝不静默发重名武将（一局内武将必须唯一）。
+    throw new Error(`武将池已耗尽（已用 ${usedGeneralNames.size} 名，池共 ${GENERAL_LIBRARY.length} 名），无法分配不重复武将`);
   }
   const picked = candidates[Math.floor(rng() * candidates.length)];
   return picked ?? humanGeneral;

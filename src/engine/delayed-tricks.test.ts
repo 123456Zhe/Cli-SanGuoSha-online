@@ -1,7 +1,9 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { CardType } from "./cards.js";
-import { SanGuoGame } from "./game.js";
+import { InteractionDecision, InteractionRequest, Player, SanGuoGame, TurnPhase } from "./game.js";
+import { resetGeneralPacks } from "./general-pack.js";
+import { registerPackSkill } from "./skill-module.js";
 
 const zeroRng = (): number => 0;
 
@@ -220,4 +222,151 @@ void test("已有闪电时不可再使用闪电", async () => {
   const actions = game.getPlayableActions("human");
   const lightningAction = actions.find((a) => a.type === "play" && a.label.includes(CardType.Lightning));
   assert.equal(lightningAction, undefined, "已有闪电时不应有闪电可用");
+});
+
+void test("闪电贴自己时其他角色可无懈抵消", async () => {
+  const game = new SanGuoGame(zeroRng);
+  await game.initNetworkGame(
+    [
+      { id: "p0", name: "甲" },
+      { id: "p1", name: "乙" },
+      { id: "p2", name: "丙" },
+    ],
+    0,
+    false,
+  );
+  const runtime = game as unknown as {
+    currentPlayerIndex: number;
+    phase: TurnPhase;
+    players: Player[];
+    slashUsedThisTurn: boolean;
+    slashPlayedThisTurn: boolean;
+  };
+  for (const player of runtime.players) {
+    player.skills = [];
+    player.hand = [];
+    player.hp = 4;
+    player.maxHp = 4;
+    player.alive = true;
+  }
+  runtime.currentPlayerIndex = 0;
+  runtime.phase = TurnPhase.Play;
+  runtime.slashUsedThisTurn = false;
+  runtime.slashPlayedThisTurn = false;
+  const [p0, p1] = runtime.players as [Player, Player, Player];
+  p0.hand = [{ id: "lt", type: CardType.Lightning, color: "black", suit: "spade", rank: 1 }];
+  p1.hand = [{ id: "wx", type: CardType.Negate, color: "red", suit: "heart", rank: 12 }];
+  game.setDecisionHandler(p1.id, (request: InteractionRequest): InteractionDecision => {
+    if (request.kind === "respond" && request.responseKind === "negate") {
+      const first = request.sources[0];
+      return first ? { choice: "card", sourceId: first.sourceId } : { choice: "pass" };
+    }
+    return { choice: "pass" };
+  });
+  const action = game.getPlayableActions(p0.id).find((item) => item.type === "play");
+  assert.ok(action, "应能使用闪电");
+  const logs = await game.playAction(p0.id, action);
+  assert.equal(p0.delayedTricks.length, 0, `被无懈后判定区不应有闪电：${logs.join(" / ")}`);
+  assert.ok(logs.some((line) => line.includes("打出无懈可击")), logs.join(" / "));
+});
+
+void test("无人无懈时闪电正常进入自己的判定区", async () => {
+  const game = new SanGuoGame(zeroRng);
+  await game.initNetworkGame(
+    [
+      { id: "p0", name: "甲" },
+      { id: "p1", name: "乙" },
+    ],
+    0,
+    false,
+  );
+  const runtime = game as unknown as {
+    currentPlayerIndex: number;
+    phase: TurnPhase;
+    players: Player[];
+    slashUsedThisTurn: boolean;
+    slashPlayedThisTurn: boolean;
+  };
+  for (const player of runtime.players) {
+    player.skills = [];
+    player.hand = [];
+    player.hp = 4;
+    player.maxHp = 4;
+    player.alive = true;
+  }
+  runtime.currentPlayerIndex = 0;
+  runtime.phase = TurnPhase.Play;
+  runtime.slashUsedThisTurn = false;
+  runtime.slashPlayedThisTurn = false;
+  const [p0] = runtime.players as [Player, Player];
+  p0.hand = [{ id: "lt", type: CardType.Lightning, color: "black", suit: "spade", rank: 1 }];
+  const action = game.getPlayableActions(p0.id).find((item) => item.type === "play");
+  assert.ok(action, "应能使用闪电");
+  const logs = await game.playAction(p0.id, action);
+  assert.equal(p0.delayedTricks.length, 1, logs.join(" / "));
+  assert.equal(p0.delayedTricks[0]?.cardType, CardType.Lightning);
+});
+
+afterEach(() => {
+  resetGeneralPacks();
+});
+
+void test("外部改判漏移除替换牌时引擎兜底清理，保证单区唯一", async () => {
+  // 草率的外部包：把手牌设为判定牌，但"忘记"从手牌移除（违反钩子契约）
+  registerPackSkill({
+    id: "测试/草率改判",
+    displayName: "草率改判",
+    kind: "triggered",
+    description: "测试用：故意不移除替换牌",
+    generalName: "测试",
+    onTrigger: {
+      judgment: (ctx, payload) => {
+        const actor = payload.actor;
+        const handCard = actor?.hand[0];
+        if (actor && handCard && ctx.hasSkill(actor, "测试/草率改判")) {
+          payload.judgmentCard = handCard;
+        }
+      },
+    },
+  });
+  const game = new SanGuoGame(zeroRng);
+  await game.initNetworkGame(
+    [
+      { id: "p0", name: "甲" },
+      { id: "p1", name: "乙" },
+    ],
+    0,
+    false,
+  );
+  const runtime = game as unknown as {
+    currentPlayerIndex: number;
+    phase: TurnPhase;
+    players: Player[];
+    deck: Array<{ id: string; type: CardType; suit: string; rank: number; color: string }>;
+    discardPile: Array<{ id: string; type: CardType; suit: string; rank: number; color: string }>;
+  };
+  for (const player of runtime.players) {
+    player.skills = [];
+    player.hand = [];
+    player.hp = 4;
+    player.maxHp = 4;
+    player.alive = true;
+    player.delayedTricks = [];
+  }
+  runtime.currentPlayerIndex = 0;
+  const [p0] = runtime.players as [Player, Player];
+  p0.skills = ["测试/草率改判"];
+  p0.hand = [{ id: "stor", type: CardType.Slash, color: "black", suit: "club", rank: 5 }];
+  p0.delayedTricks = [{ cardType: CardType.Lightning, sourcePlayerId: "p0" }];
+  // 判定牌红桃：闪电不命中，只走改判流程，不死人
+  runtime.deck.unshift({ id: "judge-h", type: CardType.Peach, color: "red", suit: "heart", rank: 7 });
+
+  const logs = await game.startTurn();
+  assert.ok(!p0.hand.some((card) => card.id === "stor"), `替换牌不应残留手牌：${logs.join(" / ")}`);
+  assert.equal(
+    runtime.discardPile.filter((card) => card.id === "stor").length,
+    1,
+    `替换牌在弃牌堆应恰有一份：${logs.join(" / ")}`,
+  );
+  assert.ok(logs.some((line) => line.includes("已清理")), logs.join(" / "));
 });

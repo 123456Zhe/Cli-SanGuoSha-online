@@ -1,6 +1,6 @@
 import { callJevSystemOne, isJevConfigured, JevAnswer, JevOptions, JevQuestion, resolveJevAcceptThreshold } from "./jev.js";
 import { LocalAiEngine, RoleGuess } from "./local-engine.js";
-import { RoundPromptContext } from "./prompt.js";
+import { buildRoomRulesText, RoundPromptContext } from "./prompt.js";
 import {
   FastAdvisor,
   JudgeVerdict,
@@ -523,6 +523,7 @@ const decisionsState = (
   ...(proposed ? { proposed_decision: proposed } : {}),
   ...(plan ? { strategic_plan: plan } : {}),
   role_guesses: describeRoleGuesses(guesses),
+  room_rules: buildRoomRulesText(snapshot.players.length),
 });
 
 /** 身份推断喂给 Jev：公开的直给，隐藏的只给行为结论（与规则助手同一账本）。 */
@@ -550,6 +551,7 @@ const interactionState = (
     available_sources: "sources" in request ? request.sources.map((source) => source.label).join(", ") : "none",
   },
   ...(plan ? { strategic_plan: plan } : {}),
+  room_rules: buildRoomRulesText(snapshot.players.length),
 });
 
 const describePlayerContext = (snapshot: GameSnapshot, playerId: string): string => {

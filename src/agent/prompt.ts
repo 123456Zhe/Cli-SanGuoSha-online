@@ -1,4 +1,6 @@
 import { GameAction, GameSnapshot, Player, PlayerRole } from "../engine/game.js";
+import { buildRoleList, getRoleDistribution } from "../engine/generals.js";
+import { describeCard } from "../engine/card-utils.js";
 import { CardType } from "../engine/cards.js";
 import { InteractionRequest } from "../engine/interaction.js";
 
@@ -27,6 +29,32 @@ export type PromptAgentIdentity = {
   name: string;
   role: string;
   general: string;
+};
+
+/**
+ * 本房间局内规则（跟随快照人数，2–6 人按引擎 `buildRoleList` 配身份）。
+ * 胜负口径与引擎结算一致（resolve.ts）：主公死→反贼胜（反贼死光且内奸存活则内奸胜）；
+ * 反贼+内奸死光→主公阵营胜；主公错杀忠臣弃全部手牌与装备。
+ * 所有 LLM prompt（出牌/规划/助手）与 Jev state 共用这一份，不再让模型猜房间配置。
+ */
+export const buildRoomRulesText = (playerCount: number): string => {
+  const roles = buildRoleList(playerCount);
+  const { rebel, loyalist, traitor } = getRoleDistribution(roles);
+  const parts = ["1主公"];
+  if (loyalist > 0) {
+    parts.push(`${loyalist}忠臣`);
+  }
+  if (rebel > 0) {
+    parts.push(`${rebel}反贼`);
+  }
+  if (traitor > 0) {
+    parts.push(`${traitor}内奸`);
+  }
+  return [
+    `【本局配置：${roles.length}人局，身份：${parts.join(" + ")}】`,
+    "胜利条件：反贼与内奸全部阵亡→主公阵营（主公+忠臣）胜；主公阵亡→反贼胜（若反贼已死光且内奸存活则内奸胜）。",
+    "注意：主公杀死忠臣要弃置全部手牌与装备，不要误杀队友。",
+  ].join("\n");
 };
 
 export type AgentPromptInput = {
@@ -193,7 +221,8 @@ export const buildAgentPrompt = (input: AgentPromptInput): AgentPromptPackage =>
       ]
     : [];
   const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
-  const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [
+  const rulesWithRoom = [input.rulesText, "", buildRoomRulesText(input.snapshot.players.length)].join("\n");
+  const systemPrompt = buildSystemPrompt(rulesWithRoom, input.agent, level, [
     '输出JSON格式：{"actionIndex":数字,"targetId":"可选"}，例如 {"actionIndex":1} 或 {"actionIndex":2,"targetId":"human"}。',
   ], input.matchGeneralsText);
   const userPrompt = [
@@ -226,7 +255,8 @@ export const buildPlanPrompt = (input: PlanPromptInput): AgentPromptPackage => {
   const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
   const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
   const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
-  const systemPrompt = buildSystemPrompt(input.rulesText, input.agent, level, [
+  const rulesWithRoom = [input.rulesText, "", buildRoomRulesText(input.snapshot.players.length)].join("\n");
+  const systemPrompt = buildSystemPrompt(rulesWithRoom, input.agent, level, [
     "你现在是战略规划师，只负责制定本回合的总体战略，不负责具体出牌。",
     "直接输出战略规划文本（200字以内），不要输出JSON，不要解释格式。",
   ], input.matchGeneralsText);
@@ -265,6 +295,11 @@ export const buildAdvisorPrompt = (input: AdvisorPromptInput): AgentPromptPackag
   const previousRoundsText = buildPreviousRoundsText(input.previousRoundContexts);
   const battlefieldText = input.snapshot.players.map((player) => toPlayerBattleLine(player, input.agent.playerId)).join("\n");
   const currentRoundStatus = buildCurrentRoundStatus(input.snapshot, input.agent);
+  const viewer = input.snapshot.players.find((player) => player.id === input.agent.playerId);
+  // 只给看自己的手牌明细（别人的仍只有张数）：助手是"你"的参谋，不是天眼。
+  const viewerHandLine = viewer
+    ? `你的手牌（${viewer.hand.length}张）：${viewer.hand.map((card) => describeCard(card)).join("、") || "无"}`
+    : "";
   const matchBlock = input.matchGeneralsText ? ["", "本局武将技能：", input.matchGeneralsText] : [];
   const systemPrompt = [
     "你是三国杀游戏高手，正在场边为一位人类玩家做实时复盘参谋。",
@@ -274,6 +309,8 @@ export const buildAdvisorPrompt = (input: AdvisorPromptInput): AgentPromptPackag
     "",
     "三国杀游戏rules：",
     input.rulesText,
+    "",
+    buildRoomRulesText(input.snapshot.players.length),
     ...matchBlock,
   ].join("\n");
   const userPrompt = [
@@ -285,6 +322,8 @@ export const buildAdvisorPrompt = (input: AdvisorPromptInput): AgentPromptPackag
     "",
     "游戏当前战场状态（「未知」表示该身份对你服务的玩家不可见）：",
     battlefieldText,
+    "",
+    viewerHandLine,
     ...(input.ruleReportLines && input.ruleReportLines.length > 0
       ? ["", "规则助手（行为记账）的结论，供你参考或纠偏：", ...input.ruleReportLines]
       : []),

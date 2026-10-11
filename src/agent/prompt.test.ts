@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CardType } from "../engine/cards.js";
 import { GameAction, PlayerRole, SanGuoGame } from "../engine/game.js";
-import { buildAgentPrompt, buildInteractionPrompt, buildStrategyPrompt, pickReasoningLevel, REASONING_EFFORT, REASONING_THINKING_MULTIPLIER } from "./prompt.js";
+import { buildAdvisorPrompt, buildAgentPrompt, buildInteractionPrompt, buildRoomRulesText, buildStrategyPrompt, pickReasoningLevel, REASONING_EFFORT, REASONING_THINKING_MULTIPLIER } from "./prompt.js";
 
 const createSnapshot = async (overrides?: Partial<ReturnType<SanGuoGame["getSnapshot"]>>) => {
   const game = new SanGuoGame(() => 0.5);
@@ -239,3 +239,57 @@ void test("buildStrategyPrompt：复盘契约要求结构化 JSON（execution/le
   assert.ok(firstReview.userPrompt.includes("首次复盘"), "无历史记忆时应提示首次复盘");
 });
 
+void test("buildRoomRulesText：人数决定身份配置，口径与引擎结算一致", () => {
+  const four = buildRoomRulesText(4);
+  assert.ok(four.includes("4人局"), "应点出人数");
+  assert.ok(four.includes("1主公 + 1忠臣 + 1反贼 + 1内奸"), `4人配置应为1+1+1+1，得：${four}`);
+  const five = buildRoomRulesText(5);
+  assert.ok(five.includes("2反贼"), "5人应有2反贼");
+  const six = buildRoomRulesText(6);
+  assert.ok(six.includes("3反贼"), "6人应有3反贼");
+  for (const text of [four, five, six]) {
+    assert.ok(text.includes("胜利条件"), "应含胜利条件");
+    assert.ok(text.includes("错杀忠臣") || text.includes("杀死忠臣"), "应含主公错杀惩罚");
+  }
+});
+
+void test("助手 prompt 只暴露自己的手牌明细，别人的仍只有张数", async () => {
+  const base = await createSnapshot();
+  const players = base.players.map((player, index) =>
+    index === 0
+      ? { ...player, hand: [{ id: "c1", type: "桃", color: "red", suit: "heart", rank: 5 }] }
+      : { ...player, hand: [{ id: "c2", type: "闪", color: "black", suit: "spade", rank: 7 }] },
+  );
+  const snapshot = { ...base, players };
+  const me = players[0]!;
+  const prompt = buildAdvisorPrompt({
+    rulesText: "基础规则内容",
+    snapshot: snapshot as never,
+    agent: { playerId: me.id, name: me.name, role: "忠臣", general: "郭嘉" },
+    previousRoundContexts: [],
+  });
+  assert.ok(prompt.userPrompt.includes("你的手牌（1张）：桃"), "应列出自己的手牌");
+  assert.ok(!prompt.userPrompt.includes("闪["), "不得泄露别人的手牌明细");
+});
+
+void test("出牌/助手 prompt 注入本局配置，不再让模型猜房间", async () => {
+  const snapshot = await createSnapshot();
+  const n = snapshot.players.length;
+  const agent = { playerId: "ai-1", name: "电脑", role: PlayerRole.Rebel, general: "孙策" };
+  const turnPrompt = buildAgentPrompt({
+    rulesText: "基础规则内容",
+    snapshot,
+    agent,
+    actions: [{ type: "end", label: "结束回合" }],
+    previousRoundContexts: [],
+    reasoningLevel: "normal",
+  });
+  assert.ok(turnPrompt.systemPrompt.includes(`本局配置：${n}人局`), "出牌 prompt 应含本局配置");
+  const advicePrompt = buildAdvisorPrompt({
+    rulesText: "基础规则内容",
+    snapshot,
+    agent,
+    previousRoundContexts: [],
+  });
+  assert.ok(advicePrompt.systemPrompt.includes(`本局配置：${n}人局`), "助手 prompt 应含本局配置");
+});

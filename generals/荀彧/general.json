@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "荀彧",
+  "kingdom": "魏",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["节命"],
+  "description": "魏国谋士，受创后为他人补足手牌。"
+}

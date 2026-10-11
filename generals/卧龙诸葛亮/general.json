@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "卧龙诸葛亮",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["看破"],
+  "description": "蜀国谋士，能将一张黑色手牌化作无懈可击，随时拆解他人的锦囊。"
+}

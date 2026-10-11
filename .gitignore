@@ -10,3 +10,5 @@ tools/light-client/clisanguo-lite*
 nohup.out
 .serena/
 .zcode/
+.commandcode/
+.tmp-*.ts

@@ -1,0 +1,10 @@
+{
+  "id": "看破",
+  "displayName": "看破",
+  "kind": "conversion",
+  "optional": true,
+  "description": "你可以将一张黑色手牌当无懈可击使用或打出。",
+  "conversions": [
+    { "from": { "color": ["black"] }, "to": "无懈可击", "asResponse": ["negate"] }
+  ]
+}

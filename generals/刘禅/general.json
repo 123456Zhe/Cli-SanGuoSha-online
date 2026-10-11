@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "刘禅",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["享乐"],
+  "description": "蜀国后主，凭借享乐令杀手自耗，杀意不坚者伤不到他。"
+}

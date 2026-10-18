@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界孙坚",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["英魂"],
+  "description": "吴国武将，回合开始时若已受伤，令一名其他角色摸牌。"
+}

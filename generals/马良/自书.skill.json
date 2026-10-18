@@ -1,0 +1,7 @@
+{
+  "id": "自书",
+  "displayName": "自书",
+  "kind": "passive",
+  "description": "锁定技，你的手牌上限+2。",
+  "rules": { "handLimitDelta": 2 }
+}

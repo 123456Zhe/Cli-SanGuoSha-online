@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "马良",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["自书", "应援"],
+  "description": "蜀汉文臣，自书令其手牌上限+2，应援于回合内用牌后令他人摸牌。"
+}

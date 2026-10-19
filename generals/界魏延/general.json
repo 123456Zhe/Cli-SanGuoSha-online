@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界魏延",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["狂骨"],
+  "description": "蜀汉名将，造成伤害后可回复体力或摸牌（界魏延版）。"
+}

@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界甘宁",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["奇袭"],
+  "description": "吴国名将，出牌阶段可将黑色手牌当【过河拆桥】使用。"
+}

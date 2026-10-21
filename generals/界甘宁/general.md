@@ -10,15 +10,16 @@
 
 ## 技能
 
-- **奇袭**（代码，主动）：出牌阶段，你可以将一张黑色手牌当使用，弃置一名其他角色区域里的一张牌。
+- **奇袭**（代码，主动）：出牌阶段限一次，你可以将一张黑色牌当【过河拆桥】使用，弃置一名其他角色区域里的一张牌。
 
 ## 用到的 API 与触发点
 
 | 项 | 用法 |
 |---|---|
 | 技能种 | `kind: "active"`，`requiresTarget: true`（引擎提供交互式选目标），`targetIntent: "enemy"`（只影响 AI 选目标） |
-| 可用判断 | `canUse`：手牌中有黑色牌（`card.color === "black"`，含黑桃/梅花） |
-| 选牌 | `ctx.decide({ kind: "choose-discard",...})`，来源限定黑色手牌（`buildUsableSources` 过滤 `origin === "hand"`） |
+| 可用判断 | `canUse`：手牌或木牛流马中有黑色牌（`card.color === "black"`，含黑桃/梅花），且本回合未发动过奇袭（`skillUsedThisTurn`） |
+| 选牌 | `ctx.decide({ kind: "choose-discard",...})`，来源限定黑色牌（`buildUsableSources` 过滤 `origin === "hand" \|\| origin === "treasure"`） |
+| 限一次 | 发动成功后 `ctx.markSkillUsed(player.id, "奇袭")`（同涉猎约定） |
 | 弃置自己所选的牌 | `ctx.removeUsableCardBySourceId(player, sourceId)`，返回的牌**不会**自动进弃牌堆，调用方手动 `ctx.discardPile.push` |
 | 弃置目标的牌 | `ctx.removeRandomCardFromPlayer(target, "弃置", undefined)`（无牌可弃时返回空数组，天然安全） |
 
@@ -29,6 +30,12 @@
 由引擎在目标的手牌/装备区里随机选择（`randomIndex`，`--seed` 可复现）。数值期望一致，
 策略精度略有损失，已在描述中如实说明。
 
+官方奇袭的来源是"一张黑色牌"，含装备区的黑色牌。本引擎的 `buildUsableSources`
+只覆盖手牌与木牛流马（与倾国、龙胆等全部转化技能口径一致），装备区牌没有来源、
+`removeUsableCardBySourceId` 也不处理装备区，因此装备区黑色牌不能用作奇袭来源。
+这是引擎级限制，外部武将包无法单独放开；引擎日后若给 `buildUsableSources` 增加
+装备区来源，本包只需放宽过滤条件即可对齐。
+
 ## 规则依据
 
-三国杀界限突破界甘宁「奇袭」。除上述"被弃牌随机选择"简化外完整复刻。
+三国杀界限突破界甘宁「奇袭」。除上述"被弃牌随机选择"与"装备区牌不能作来源"两处简化外完整复刻。

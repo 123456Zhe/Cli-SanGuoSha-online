@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界典韦",
+  "kingdom": "魏",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["强袭"],
+  "description": "魏国猛将，弃武器或舍体力，对一名其他角色造成1点伤害。"
+}

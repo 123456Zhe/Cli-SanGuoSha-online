@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界鲁肃",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["好施", "缔盟"],
+  "description": "吴国谋臣，摸牌阶段额外摸牌并资助他人，出牌阶段可令两人交换手牌。"
+}

@@ -1,6 +1,6 @@
 // 奔袭（吴懿，界限突破版）— 触发性代码技能，挂 `card_used` 事件钩子。
 //
-// 规则（吴懿，官方卡牌文本）：每当你使用或时，
+// 规则（吴懿，官方卡牌文本）：每当你使用或打出【杀】或【闪】时，
 // 你可以弃置一张牌，然后摸一张牌。
 //
 // 实现要点：
@@ -37,7 +37,7 @@ kind: "triggered",
 optional: true,
 triggers: ["card_used"],
 description:
-"每当你使用或打出/时，你可以弃置一张手牌，然后摸一张牌。",
+"每当你使用或打出【杀】或【闪】时，你可以弃置一张手牌，然后摸一张牌。",
 onTrigger: {
 card_used: async (ctx: SkillModuleCtx, payload: SkillEventPayload, logs: string[]) => {
 const actor = payload.actor;

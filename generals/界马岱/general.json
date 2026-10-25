@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界马岱",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["马术", "潜袭"],
+  "description": "蜀汉名将，骑术精湛，杀法阴狠，出其不意。"
+}

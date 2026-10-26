@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界刘谌",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["战绝"],
+  "description": "蜀汉北地王，以全部手牌为决斗，成败在此一举。"
+}

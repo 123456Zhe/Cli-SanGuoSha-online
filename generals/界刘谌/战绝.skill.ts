@@ -1,6 +1,6 @@
 // 战绝（界刘谌）— 主动代码技能。
 //
-// 规则（界限突破）：出牌阶段，你可以将所有手牌当使用，然后你和受伤的
+// 规则（界限突破）：出牌阶段，你可以将所有手牌当【决斗】使用，然后你和受伤的
 // 角色各摸一张牌。若你此法摸过两张或更多的牌，则本回合"战绝"失效。
 //
 // 实现要点：
@@ -39,7 +39,7 @@ requiresTarget: true,
 targetIntent: "enemy",
 label: "发动战绝（将全部手牌当决斗使用，结算后你和受伤的角色各摸一张牌）",
 description:
-"出牌阶段，你可以将所有手牌当使用，然后你和受伤的角色各摸一张牌。若你此法摸过两张或更多的牌，则本回合战绝失效。",
+"出牌阶段，你可以将所有手牌当【决斗】使用，然后你和受伤的角色各摸一张牌。若你此法摸过两张或更多的牌，则本回合战绝失效。",
 canUse: (ctx: SkillModuleCtx, player: Player) => {
 if (!player.alive || ctx.phase!== "出牌阶段") {
 return false;
@@ -67,7 +67,7 @@ if (drawnViaZhanJue(ctx, player.id) >= 2) {
 return [`${player.name} 发动战绝失败：本回合战绝已失效`];
 }
 
-// 步骤一：将全部手牌当使用（手牌全部置入弃牌堆）。
+// 步骤一：将全部手牌当【决斗】使用（手牌全部置入弃牌堆）。
 const handCopy = [...player.hand];
 for (const card of handCopy) {
 const removed = await ctx.removeUsableCardBySourceId(player, `hand:${card.id}`);
@@ -75,7 +75,7 @@ if (removed) {
 ctx.discardPile.push(removed);
 }
 }
-logs.push(`${player.name} 发动战绝，将 ${handCopy.length} 张手牌当对 ${target.name} 使用`);
+logs.push(`${player.name} 发动战绝，将 ${handCopy.length} 张手牌当【决斗】对 ${target.name} 使用`);
 
 // 步骤二：决斗结算 + 死亡/胜负结算。
 const playerHpBefore = player.hp;

@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界王平",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["飞军", "兵略"],
+  "description": "蜀汉名将，率飞军纵横，兵略过人。"
+}

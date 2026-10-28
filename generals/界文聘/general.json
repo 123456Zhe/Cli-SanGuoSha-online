@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界文聘",
+  "kingdom": "魏",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["镇卫"],
+  "description": "魏国坚城宿将，镇守一方，敌军来犯则稳坐钓鱼台。"
+}

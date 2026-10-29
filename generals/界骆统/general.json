@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界骆统",
+  "kingdom": "吴",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["勤政"],
+  "description": "吴国力政人臣，用牌越多，得牌越多。"
+}

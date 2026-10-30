@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界刘繇",
+  "kingdom": "群",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["戡难"],
+  "description": "扬州刺史刘繇，面对强敌亦能临危不乱。"
+}

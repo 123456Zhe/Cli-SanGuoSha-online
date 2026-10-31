@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界周仓",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["忠勇"],
+  "description": "蜀汉忠勇之将，扛刀追随关公，杀敌先夺其势。"
+}

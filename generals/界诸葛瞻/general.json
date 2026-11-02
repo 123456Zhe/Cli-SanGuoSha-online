@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界诸葛瞻",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 3,
+  "skills": ["父荫"],
+  "description": "诸葛亮之子，临难死义，父荫庇护。"
+}

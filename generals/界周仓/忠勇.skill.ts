@@ -1,8 +1,6 @@
 // 忠勇（界周仓）— 触发性代码技能，挂 `slash_targeted` 事件钩子。
 //
-// 规则（界限突破）：当你于出牌阶段内使用【杀】或【决斗】指定目标后，你可以令其弃置一张牌。
-//
-// 注意：【决斗】分支暂未实现（引擎无决斗指定目标钩子），本技能目前仅对【杀】生效。
+// 规则（界限突破）：当你于出牌阶段内使用指定目标后，你可以令其弃置一张牌。
 //
 // 实现要点：
 // - `slash_targeted` 在指定目标时触发，payload 里 `source` 为出杀者、
@@ -21,7 +19,7 @@ export default {
 id: "忠勇",
 displayName: "忠勇",
 kind: "triggered",
-description: "当你于出牌阶段内使用【杀】或【决斗】指定目标后，你可以令其弃置一张牌。",
+description: "当你于出牌阶段内使用指定目标后，你可以令其弃置一张牌。",
 triggers: ["slash_targeted"],
 onTrigger: {
 slash_targeted: async (ctx, payload, logs) => {

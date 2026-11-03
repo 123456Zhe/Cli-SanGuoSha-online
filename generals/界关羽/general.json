@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "name": "界关羽",
+  "kingdom": "蜀",
+  "gender": "男",
+  "maxHp": 4,
+  "skills": ["武圣"],
+  "description": "蜀汉武圣，青龙偃月，红牌皆可为杀。"
+}

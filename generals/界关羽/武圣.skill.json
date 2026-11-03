@@ -1,0 +1,10 @@
+{
+  "id": "武圣",
+  "displayName": "武圣",
+  "kind": "conversion",
+  "optional": true,
+  "description": "你可以将一张红色牌当【杀】使用或打出。",
+  "conversions": [
+    { "from": { "color": ["red"] }, "to": "杀", "asResponse": ["slash"] }
+  ]
+}

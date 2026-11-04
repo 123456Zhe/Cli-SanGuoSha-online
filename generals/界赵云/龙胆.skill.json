@@ -1,0 +1,1 @@
+{"conversions":[{"asResponse":["dodge"],"from":{"type":["杀","火杀","雷杀"]},"to":"闪"},{"asResponse":["slash"],"from":{"type":["闪"]},"to":"杀"},{"asResponse":["peach"],"from":{"type":["酒"]},"to":"桃"}],"description":"你可以将一张杀当闪、闪当杀、酒当桃使用或打出（桃当酒暂不支持，见 general.md）。","displayName":"龙胆","id":"龙胆","kind":"conversion","optional":true}

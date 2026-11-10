@@ -38,6 +38,15 @@ void test("§14 生成内容覆盖全部内置武将，且不出现「未知技�
   assert.equal(/：。/.test(detail), false, "不应出现没有技能的武将行");
 });
 
+void test("§14：潜在技能列出并标明对局中获得", () => {
+  const detail = renderGeneralsDetail([
+    { kingdom: "群", name: "测试将", gender: "男", maxHp: 4, skills: ["洛神"], latentSkills: ["英魂"] },
+  ]);
+  assert.ok(detail.includes("测试将：洛神"), "开局技能正常列出");
+  assert.ok(detail.includes("英魂"), "潜在技能也应列出");
+  assert.ok(detail.includes("对局中获得"), "潜在技能应标明对局中获得");
+});
+
 void test("§16.3 生成内容覆盖全部内置武将", () => {
   const short = renderGeneralsShort();
   for (const general of getBuiltinGenerals()) {

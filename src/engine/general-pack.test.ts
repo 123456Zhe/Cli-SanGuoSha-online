@@ -139,6 +139,57 @@ void test("代码技能：.skill.ts 可被加载", async () => {
   assert.equal(typeof getPackSkill("吕蒙/涉猎")?.play, "function");
 });
 
+void test("latentSkills：潜在技能被加载注册但不开局持有", async () => {
+  writePack(
+    "杜预",
+    validGeneral({ name: "杜预", kingdom: "群", skills: ["武库", "三陈"], latentSkills: ["滅吳"] }),
+    {
+      武库: { id: "武库", kind: "triggered", description: "测试" },
+      三陈: { id: "三陈", kind: "triggered", description: "测试" },
+      滅吳: {
+        id: "滅吳",
+        kind: "conversion",
+        description: "测试",
+        conversions: [{ from: { suit: ["heart", "diamond", "club", "spade"] }, to: "杀" }],
+      },
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.loaded, ["杜预"]);
+  const general = resolveGeneralByName("杜预");
+  assert.deepEqual(general.skills, ["杜预/武库", "杜预/三陈"]);
+  assert.deepEqual(general.latentSkills, ["杜预/滅吳"]);
+  // 潜在技能已注册（可解析），但不在开局技能表里。
+  assert.ok(getPackSkill("杜预/滅吳"));
+  assert.equal(general.skills.includes("杜预/滅吳"), false);
+});
+
+void test("latentSkills 与 skills 重叠：包被拒绝", async () => {
+  writePack(
+    "杜预",
+    validGeneral({ name: "杜预", skills: ["武库"], latentSkills: ["武库"] }),
+    { 武库: { id: "武库", kind: "triggered", description: "测试" } },
+  );
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.equal(report.loaded.length, 0);
+  assert.equal(report.errors.length, 1);
+  assert.match(report.errors[0]?.message ?? "", /重叠/);
+});
+
+void test("latentSkills 文件缺失：包被拒绝", async () => {
+  writePack(
+    "杜预",
+    validGeneral({ name: "杜预", skills: ["武库"], latentSkills: ["滅吳"] }),
+    { 武库: { id: "武库", kind: "triggered", description: "测试" } },
+  );
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.equal(report.loaded.length, 0);
+  assert.equal(report.errors.length, 1);
+  assert.match(report.errors[0]?.message ?? "", /技能文件缺失/);
+});
+
 void test("rules 校验：合法 rules 被接受并保留", async () => {
   writePack(
     "吕蒙",

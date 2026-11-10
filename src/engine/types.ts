@@ -167,18 +167,29 @@ export type GeneralDefinition = {
   gender: "男" | "女";
   maxHp: number;
   skills: SkillId[];
+  /**
+   * 潜在技能（Phase 8）：觉醒/获得类技能的"未解锁"形态。loader 会加载并注册它们，
+   * 但**不开局持有**——`skills` 才是玩家开局的技能表；潜在技能需由其他技能在对局中
+   * 把命名空间 id（如 `"群杜预/滅吳"`）push 进 `player.skills` 才能生效。
+   * 声明在 `general.json` 的 `latentSkills` 里，与 `skills` 不得重叠。
+   */
+  latentSkills?: SkillId[];
   /** 可选的一句话设定（外部包 `general.json` 的 `description`）；给 UI/未来 AI 用，引擎逻辑不读。 */
   description?: string;
 };
 
 /**
- * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 的 7 个拦截点 + Phase 7 的 `provide_response`）。
+ * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 的 7 个拦截点 + Phase 7 的 `provide_response`
+ * + Phase 8 的准备/结束阶段触发点，共 14 个）。
  *
- * 前 4 个是"事件通知"（钩子可改写 payload 里的数值，如 `drawCount`）；
- * 其余是拦截点（钩子可改写/否决引擎即将执行的行为，见各字段注释）。
+ * 事件类触发点只通知（钩子可改写 payload 里的数值，如 `drawCount`）；
+ * 拦截类触发点可改写/否决引擎即将执行的行为（`judgment` / `slash_targeted` / `peach_save` /
+ * `discard_phase_start` / `provide_response`，见各字段注释）。
  * 单一真相：`SkillTrigger` 由本数组派生，loader 校验与钩子分发都读它，避免多处清单漂移。
  */
 export const SKILL_TRIGGERS = [
+  // Phase 8：准备阶段（回合开始、判定阶段之前）与结束阶段（弃牌阶段之后、回合结束之前）。
+  "prepare_phase_start",
   "turn_start",
   "before_draw",
   "before_damage",
@@ -190,6 +201,7 @@ export const SKILL_TRIGGERS = [
   "card_used",
   "peach_save",
   "discard_phase_start",
+  "end_phase_start",
   "provide_response",
 ] as const;
 

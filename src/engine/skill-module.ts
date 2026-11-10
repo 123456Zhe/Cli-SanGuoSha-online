@@ -44,10 +44,28 @@ export type SkillModule = {
   handLimit?: (player: Player) => number;
   /** 当牌转换（Phase 7）：把满足 `from` 的牌当作 `to` 使用或打出；一个技能可声明多条（龙魂 4 条）。 */
   conversions?: SkillConversion[];
+  /**
+   * 当牌转换的门控（Phase 8）：只对带 `conversions` 的代码技能有意义。引擎在枚举可玩转换
+   * （出牌阶段）与响应来源时调用，返回 false 则该条转换不出现；结算时再复算一次，不信任客户端。
+   * 必须纯（只读），否则 UI 与引擎会算出不同结果。用于"每回合限次/消耗标记"类限制。
+   */
+  canUseConversion?(ctx: SkillModuleCtx, player: Player, conversion: SkillConversion): boolean;
+  /**
+   * 当牌转换结算后的钩子（Phase 8）：转换成功使用/打出后调用一次，用于扣费
+   * （如移去 1 枚标记、记一次"本回合已用过该牌名"）。
+   */
+  onConversionUsed?(ctx: SkillModuleCtx, player: Player, conversion: SkillConversion, logs: string[]): void | Promise<void>;
   canUse?(ctx: SkillModuleCtx, player: Player): boolean;
   getTargets?(ctx: SkillModuleCtx, player: Player): string[];
   play?(ctx: SkillModuleCtx, player: Player, targetId?: string): Promise<string[]>;
   onTrigger?: Partial<Record<SkillTrigger, PackSkillHook>>;
+  /**
+   * 全局钩子（Phase 8）：默认钩子只在事件相关玩家（actor/target/source）拥有该技能时触发；
+   * 置 `true` 后，每次事件都触发，钩子需自行在 `ctx.players` 里定位持有者（如武庫要监听
+   * \"其他角色失去装备\"——失去者不是持有者，默认过滤会把它拦掉）。只给确实需要监听他人
+   * 事件的技能开，钩子内仍须先判持有者再做事，否则会在无关事件上空转。
+   */
+  globalHook?: boolean;
 };
 
 export type PackSkillEntry = SkillModule & { generalName: string };

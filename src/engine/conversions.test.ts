@@ -455,3 +455,154 @@ void test("loader：conversions 的非法声明逐条报错", async () => {
     rmSync(join(packRoot, "测试将"), { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- ③ Phase 8：转换门控与任意基本/普通锦囊
+
+void test("conversions：canUseConversion 门控为假时转换不枚举、结算也被拒；为真时 onConversionUsed 只调一次", async () => {
+  let allowed = false;
+  let usedCount = 0;
+  const id = registerConversionSkill(
+    "有门控的当火杀",
+    [{ from: { suit: ["diamond"] }, to: CardType.FireSlash }],
+    {
+      canUseConversion: () => allowed,
+      onConversionUsed: () => {
+        usedCount += 1;
+      },
+    },
+  );
+  const { game, runtime, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  me.hand = [makeCard("d1", CardType.Dodge, "diamond")];
+  other.hand = [makeCard("dodge", CardType.Dodge, "club")];
+  for (const player of players) {
+    game.setDecisionHandler(player.id, autoAnswer);
+  }
+
+  assert.deepEqual(conversionActions(game, me.id), [], "门控为假时不应枚举转换动作");
+  // 伪造动作直接提交：结算时复算门控，同样被拒。
+  const forgedLogs = await game.playAction(
+    me.id,
+    {
+      type: "play",
+      cardIndex: -10000,
+      label: "伪造",
+      requiresTarget: true,
+      targets: [other.id],
+      convertVia: id,
+      convertTo: CardType.FireSlash,
+    },
+    other.id,
+  );
+  assert.ok(forgedLogs.some((line) => line.includes("无法发动")), `结算应复算门控并拒绝：${forgedLogs.join(" / ")}`);
+  assert.equal(me.hand.length, 1, "被拒时源牌不应离开手牌");
+  assert.equal(usedCount, 0);
+
+  allowed = true;
+  const actions = conversionActions(game, me.id);
+  assert.equal(actions.length, 1, "门控为真时应枚举转换动作");
+  const logs = await game.playAction(me.id, actions[0]!, other.id);
+  assert.ok(logs.some((line) => line.includes("发动有门控的当火杀")), logs.join(" / "));
+  assert.equal(usedCount, 1, "成功结算后 onConversionUsed 应恰好调用一次");
+  assert.equal(runtime.slashUsedThisTurn, true);
+});
+
+void test("conversions：onConversionUsed 在响应打出后也被调用", async () => {
+  let usedCount = 0;
+  const id = registerConversionSkill(
+    "有门控的当闪",
+    [{ from: { suit: ["club"] }, to: CardType.Dodge, asResponse: ["dodge"] }],
+    {
+      canUseConversion: () => true,
+      onConversionUsed: () => {
+        usedCount += 1;
+      },
+    },
+  );
+  const { game, runtime, players } = await setup();
+  const [attacker, me] = players as [Player, Player];
+  attacker.hand = [makeCard("slash", CardType.Slash, "spade")];
+  me.skills = [id];
+  me.hand = [makeCard("c1", CardType.Duel, "club")];
+  game.setDecisionHandler(attacker.id, autoAnswer);
+  game.setDecisionHandler(me.id, autoAnswer);
+  runtime.phase = TurnPhase.Play;
+  const slash = firstCardAction(game, attacker.id);
+  assert.ok(slash, "攻击者应能用杀");
+  const logs = await game.playAction(attacker.id, slash, me.id);
+  assert.ok(logs.some((line) => line.includes("抵消")), logs.join(" / "));
+  assert.equal(usedCount, 1, "转换闪响应成功后 onConversionUsed 应调用一次");
+});
+
+void test("conversions：当决斗的转换走通用结算（目标须出杀响应）", async () => {
+  const id = registerConversionSkill("当决斗", [{ from: { suit: ["heart"] }, to: CardType.Duel }]);
+  const { game, runtime, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  me.hand = [makeCard("h1", CardType.Dodge, "heart")];
+  other.hand = [makeCard("s1", CardType.Slash, "heart")];
+  for (const player of players) {
+    game.setDecisionHandler(player.id, autoAnswer);
+  }
+  const actions = conversionActions(game, me.id);
+  assert.deepEqual(actions.map((action) => action.convertTo), [CardType.Duel]);
+  assert.deepEqual(actions[0]?.targets, [other.id], "决斗需要目标");
+  const logs = await game.playAction(me.id, actions[0]!, other.id);
+  assert.ok(logs.some((line) => line.includes("发动当决斗") && line.includes("当决斗使用")), logs.join(" / "));
+  assert.ok(logs.some((line) => line.includes("发起决斗")), logs.join(" / "));
+  assert.ok(runtime.discardPile.some((card) => card.id === "h1"), "源牌应进弃牌堆（合成牌沿用源牌 id）");
+  assert.equal(other.hp, other.maxHp, "目标出杀响应后不应受伤");
+  assert.equal(me.hp, me.maxHp - 1, "发起者自己没有杀可出，应受 1 点伤害");
+});
+
+void test("conversions：当无中生有的转换摸 2 张牌", async () => {
+  const id = registerConversionSkill("当无中生有", [{ from: { suit: ["heart"] }, to: CardType.ExNihilo }]);
+  const { game, players } = await setup();
+  const [me] = players as [Player, Player];
+  me.skills = [id];
+  me.hand = [makeCard("h1", CardType.Dodge, "heart")];
+  for (const player of players) {
+    game.setDecisionHandler(player.id, autoAnswer);
+  }
+  const actions = conversionActions(game, me.id);
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0]?.requiresTarget, false, "无中生有没有目标");
+  const logs = await game.playAction(me.id, actions[0]!);
+  assert.ok(logs.some((line) => line.includes("使用无中生有，摸了 2 张牌")), logs.join(" / "));
+  assert.equal(me.hand.length, 2, "用掉 1 张换 2 张");
+});
+
+void test("loader：conversions 的 to 可指向普通锦囊（决斗/无中生有），仍拒绝延时锦囊与装备", async () => {
+  writePack(
+    "测试将",
+    { apiVersion: 1, name: "测试将", kingdom: "神", gender: "男", maxHp: 2, skills: ["技能"] },
+    {
+      技能: {
+        kind: "conversion",
+        description: "x",
+        conversions: [
+          { from: { suit: ["heart"] }, to: "决斗" },
+          { from: { suit: ["diamond"] }, to: "无中生有" },
+        ],
+      },
+    },
+  );
+  const report = await loadGeneralPacks({ dir: packRoot, pool: "all" });
+  assert.deepEqual(report.errors, []);
+  assert.deepEqual(report.loaded, ["测试将"]);
+
+  // 延时锦囊与装备仍被拒绝（与旧版一致）。
+  for (const bad of ["乐不思蜀", "诸葛连弩"]) {
+    writePack(
+      "测试将2",
+      { apiVersion: 1, name: "测试将2", kingdom: "神", gender: "男", maxHp: 2, skills: ["技能"] },
+      { 技能: { kind: "conversion", description: "x", conversions: [{ from: { suit: ["heart"] }, to: bad }] } },
+    );
+    const badReport = await loadGeneralPacks({ dir: packRoot, pool: "all" });
+    assert.equal(badReport.errors.length, 1, `${bad} 应被拒绝`);
+    assert.match(badReport.errors[0]?.message ?? "", /to 非法/, bad);
+    resetGeneralPacks();
+    rmSync(join(packRoot, "测试将2"), { recursive: true, force: true });
+  }
+});

@@ -63,7 +63,11 @@ export const renderGeneralsDetail = (generals: GeneralDefinition[] = getBuiltinG
     }
     const lines = members.map((general) => {
       const skills = general.skills.map((skillId) => describeSkillForRules(skillId, general.name)).join("、");
-      return `- ${general.name}：${skills}。`;
+      // Phase 8：潜在技能也列出，但标明"对局中获得"（开局不持有）。
+      const latent = (general.latentSkills ?? [])
+        .map((skillId) => `${describeSkillForRules(skillId, general.name)}（对局中获得）`)
+        .join("、");
+      return `- ${general.name}：${skills}${latent ? `、${latent}` : ""}。`;
     });
     blocks.push(`### 14.${index + 1} ${kingdom}\n\n${lines.join("\n")}`);
   });

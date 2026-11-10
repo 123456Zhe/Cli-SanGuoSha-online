@@ -32,6 +32,7 @@ generals/                      # 项目根目录（在 src 之外，不进 typec
 - `apiVersion` 必须为 `1`；`name`/`kingdom`/`gender`（`男`/`女`）/`maxHp`（正整数）/`skills`（字符串数组）必填。
 - `description` 可选：一句话设定，会保留进已加载池（`getGeneralLibrary()`），供 UI/未来 AI 使用；引擎结算逻辑不读它。
 - `skills` 是**原始技能名**数组；对应文件名为 `<技能名>.skill.json|.ts|.mjs`（二选一，不要 JSON+代码成对出现，避免双源真相）。
+- `latentSkills` 可选（Phase 8）：**潜在技能**名数组——觉醒/获得类技能的"未解锁"形态。loader 会加载并注册它们，但**不开局持有**（`skills` 才是玩家开局的技能表）；需由其他技能在对局中把命名空间 id（如 `"群杜预/滅吳"`）push 进 `player.skills` 才能生效。与 `skills` 不得重叠。包内多个技能共享标记等跨回合状态时，用包内共享模块（如群杜预的 `wuku-state.ts`，loader 与校验器只认技能文件，共享模块不被当作技能加载）。
 - **未知字段会被 loader 静默忽略**——拼错字段名不会报错。跑 `npm run generals:check` 会让它变成一条警告。
 
 完整的可运行示例见 `examples/generals/`：
@@ -82,6 +83,7 @@ type SkillModule = {
 
 | 触发点 | 类别 | 发出位置 | payload 里钩子可改写的字段 |
 |---|---|---|---|
+| `prepare_phase_start` | 事件 | 回合开始（判定阶段之前，官方回合流程的第一阶段） | — |
 | `turn_start` | 事件 | 回合开始 | — |
 | `before_draw` | 事件 | 摸牌阶段开始前 | `drawCount` |
 | `before_damage` | 事件 | 造成伤害前 | — |
@@ -93,6 +95,7 @@ type SkillModule = {
 | `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | — |
 | `peach_save` | 拦截 | 濒死时每消耗一张救援桃 | `peachSaveBonus`（累加额外回复点数） |
 | `discard_phase_start` | 拦截 | 弃牌阶段入口 | `skipDiscardPhase = true` 跳过整个弃牌阶段（钩子自行处理"是否发动"询问） |
+| `end_phase_start` | 事件 | 结束阶段入口（弃牌阶段之后、回合结束之前） | — |
 | `provide_response` | 拦截 | 需要响应（闪/杀/无懈可击/桃）、**在"没有任何来源 → 判定无法响应"之前** | `responseSources`（就地 push 额外可选来源；push 的来源必须带 `viaSkill`，否则不被接受） |
 
 `provide_response` 让"手上没有闪但技能能变出闪"也能询问玩家。钩子 push 的来源形如：
@@ -140,7 +143,7 @@ onTrigger: {
 | 字段 | 类型 | 语义 |
 |---|---|---|
 | `from` | `{ suit?: CardSuit[]; color?: ("red"\|"black")[]; type?: CardType[] }` | 源牌筛选。三个条件之间是 **AND**；至少要给一个（什么都不给会被 loader 拒绝，防"任意牌都能变"）。`suit` 取值 `heart/diamond/club/spade` |
-| `to` | `CardType` | 当成什么牌。**只放行** `杀 / 火杀 / 雷杀 / 桃 / 闪 / 无懈可击`——其余牌类（延时锦囊、装备、其他锦囊）需要目标/距离/判定区逻辑，loader 会明确报错 |
+| `to` | `CardType` | 当成什么牌。**只放行**任意基本牌与普通锦囊：`杀 / 火杀 / 雷杀 / 桃 / 酒 / 闪 / 无懈可击 / 过河拆桥 / 顺手牵羊 / 决斗 / 无中生有 / 南蛮入侵 / 万箭齐发 / 借刀杀人 / 火攻 / 铁索连环 / 桃园结义 / 五谷丰登`——延时锦囊（乐不思蜀/兵粮寸断/闪电）与装备 loader 会明确报错 |
 | `asResponse` | `ResponseKind[]`（可选） | 可作为哪些响应时机**打出**：`dodge`（闪）/`slash`（杀）/`negate`（无懈可击）/`peach`（桃）。必须与 `to` 对得上（杀↔`slash` 允许三种杀）。缺省 = 只能在出牌阶段主动使用 |
 
 生效路径（都是引擎自动的，作者不用写代码）：
@@ -148,10 +151,21 @@ onTrigger: {
 - **出牌阶段主动使用**：`getPlayableActions` 为持有者枚举 `{type:"play", convertVia, convertTo, targets}`，
   `cardIndex = -10000 - 手牌下标`（避免与内置转换技的 -100/-200/-400/-500/-1000 段冲突）。
   `playAction` **不信任客户端**：会复算技能归属、`from` 筛选、杀次数、目标合法性（射程/空城/自己）。
-  只有 `to` 是可玩牌类（`杀/火杀/雷杀/桃`）才会枚举；`to` 是 `闪/无懈可击` 时必须给 `asResponse`，否则那条转换永远不会生效（校验器会警告）。
+  只有 `to` 是可玩牌类（基本牌与普通锦囊）才会枚举；`to` 是 `闪/无懈可击` 时必须给 `asResponse`，否则那条转换永远不会生效（校验器会警告）。
+  酒每回合限一次（与手牌酒同口径）；普通锦囊当牌时，目标合法性与手牌使用同口径（决斗受空城保护、顺手牵羊看距离 1、铁索连环可指定自己），
+  拆/顺的目标牌选择走随机（转换动作不带选牌步骤）。
 - **响应打出**：`requestCardResponse` 在"没有任何来源"判定**之前**发出 `provide_response`，
   把 `asResponse` 命中的转换来源（带 `viaSkill`/`asType`）并入可选来源。所以"手里没有闪但梅花手牌能当闪"会正常询问玩家。
   `consumeResponseCard` 收到该来源后，会以技能的真实声明复算一次 `from`，伪造的 `sourceId` 不被接受。
+
+**转换门控与扣费（Phase 8，代码技能专有）**：声明式 `conversions` 本身没有消耗与限次——
+需要"每回合限次/消耗标记"的技能（如灭吴"每回合每种牌名限一次、移去 1 枚武庫标记"）用这两个钩子：
+
+- `canUseConversion(ctx, player, conversion): boolean`——**纯函数**，只读。引擎在枚举可玩转换与响应来源时调用，返回 `false` 则该条转换不出现；结算时再复算一次（不信任客户端）。
+- `onConversionUsed(ctx, player, conversion, logs)`——转换**成功**使用/打出后调用一次，用于扣费（移去标记、记一次"本回合已用过该牌名"）。
+
+限次计数用引擎的 `ctx.skillCountsThisTurn`（每回合自动清零，见强袭的复合键 `强袭:${targetId}` 前例；灭吴用 `滅吳:${conversion.to}`）。
+标记本身存在技能模块的 `WeakMap<Player, …>` 里（见界王平/兵略的前例），多技能共享同一份标记时用包内共享模块（如群杜预的 `wuku-state.ts`）。
 
 **内置转换技（武圣/龙胆/国色/倾国/急救）仍是各自硬编码的分支**，不要给它们再填 `conversions`（否则会重复枚举）。
 `to` 为延时锦囊/装备的转换（如国色的方块当乐不思蜀）暂不支持。
@@ -229,6 +243,7 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 - `peach_save` / `discard_phase_start` 是"拦截"型钩子：改的是 payload 字段（`peachSaveBonus` / `skipDiscardPhase`），不要自己直接改 `player.hp` 或跳过结算。
 - **触发性技能没有"交互式选目标"**：`InteractionRequest` 只有 `respond`/`collateral`/`choose-discard`/`choose-suit`/`optional-effect` 五种，没有"选一名玩家"。内置技能的做法是**自动挑选**（「英魂」按体力/手牌排序取第一个）或使用固定目标（「反馈」= 伤害来源、「奸雄」= 自己）。需要玩家真正点人的技能请做成 `kind: "active"`（`getTargets` + `play(targetId)`），或像内置那样自动挑并在 `description` 里说明。
 - **`judgment` 钩子只能改判"归属者自己"的判定**：`drawJudgmentCard` 的 payload 只有 `actor = owner`，包钩子又只在事件相关玩家（`actor`/`target`/`source`）拥有该技能时执行。所以外部「鬼道」这类技能影响不到别人的判定——内置「鬼才」不受限，因为它的实现在 `game.ts` 里做全局玩家搜索。这是内置与外部的一处真实能力不对称。
+- **需要监听他人事件的钩子请声明 `globalHook: true`**（Phase 8）：默认过滤下，事件相关玩家不持有本技能时钩子根本不会执行（如武庫要监听"其他角色失去装备"，失去者不是持有者）。置 `true` 后每次事件都触发，钩子必须先在 `ctx.players` 里定位持有者（`ctx.hasSkill(player, "群杜预/武库")`）再做事，否则会在无关事件上空转。
 - **别在钩子里做会再次触发同一钩子的事**：`card_used` 钩子里再"使用一张牌"、`hand_card_lost` 钩子里再移除手牌都会无限递归（引擎不设保护）。需要递归语义时用 `skillFlagsThisTurn` 之类的状态自己打断。
 
 ## 作者类型补全与结构校验（§17 ②③）

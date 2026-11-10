@@ -38,6 +38,7 @@
       "minItems": 1,
       "items": {
         "enum": [
+          "prepare_phase_start",
           "turn_start",
           "before_draw",
           "before_damage",
@@ -49,6 +50,7 @@
           "card_used",
           "peach_save",
           "discard_phase_start",
+          "end_phase_start",
           "provide_response"
         ]
       },
@@ -270,10 +272,22 @@
               "火杀",
               "雷杀",
               "桃",
+              "酒",
               "闪",
-              "无懈可击"
+              "无懈可击",
+              "过河拆桥",
+              "顺手牵羊",
+              "决斗",
+              "无中生有",
+              "南蛮入侵",
+              "万箭齐发",
+              "借刀杀人",
+              "火攻",
+              "铁索连环",
+              "桃园结义",
+              "五谷丰登"
             ],
-            "description": "当成什么牌。只有这些牌类引擎结算得了；当延时锦囊/装备会被 loader 明确拒绝。"
+            "description": "当成什么牌。Phase 8 起可指向任意基本牌与普通锦囊（引擎有对应结算路径）；当延时锦囊/装备会被 loader 明确拒绝。闪/无懈可击只能响应（须配 asResponse），不能主动使用。"
           },
           "asResponse": {
             "type": "array",

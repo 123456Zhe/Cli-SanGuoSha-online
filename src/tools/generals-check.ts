@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { CardType } from "../engine/cards.js";
 import { loadGeneralPacks } from "../engine/general-pack.js";
 import { getPackSkill, SkillModule } from "../engine/skill-module.js";
-import { SKILL_RULE_KEY_KINDS } from "../engine/skill-registry.js";
+import { CONVERTIBLE_CARD_TYPES, SKILL_RULE_KEY_KINDS } from "../engine/skill-registry.js";
 import { SKILL_TRIGGERS, SkillTrigger } from "../engine/types.js";
 import { runSelfPlay, SelfPlayViolation } from "./selfplay.js";
 
@@ -31,7 +31,7 @@ import { runSelfPlay, SelfPlayViolation } from "./selfplay.js";
  */
 
 /** `general.json` 已知字段；`schema/general.schema.json` 与它保持同步（`src/tools/pack-schema.test.ts` 卡住漂移）。 */
-export const KNOWN_GENERAL_KEYS = ["apiVersion", "name", "kingdom", "gender", "maxHp", "skills", "description"];
+export const KNOWN_GENERAL_KEYS = ["apiVersion", "name", "kingdom", "gender", "maxHp", "skills", "latentSkills", "description"];
 /**
  * `.skill.json` 已知字段。前 12 个是声明式可用字段，与 `schema/skill.schema.json` 一一对应；
  * 后 5 个是代码技能（`.skill.ts`/`.mjs`）专有的函数字段，写进 JSON 会被 loader 忽略。
@@ -54,12 +54,17 @@ export const KNOWN_SKILL_KEYS = [
   "play",
   "handLimit",
   "onTrigger",
+  "canUseConversion",
+  "onConversionUsed",
 ];
 /** 只对代码技能有意义的字段（`.skill.json` 里出现 = 无效声明）。 */
-export const CODE_ONLY_SKILL_KEYS = ["canUse", "getTargets", "play", "handLimit", "onTrigger"];
+export const CODE_ONLY_SKILL_KEYS = ["canUse", "getTargets", "play", "handLimit", "onTrigger", "canUseConversion", "onConversionUsed", "globalHook"];
 
 /** 出牌阶段真正能被引擎枚举为可玩动作的转换目标牌类（其余只能靠 `asResponse` 当响应打出）。 */
-const PLAY_PHASE_CONVERSION_TARGETS: string[] = [CardType.Slash, CardType.FireSlash, CardType.ThunderSlash, CardType.Peach];
+// 出牌阶段能主动使用的转换目标 = 白名单去掉只能响应的闪/无懈可击（与引擎 CONVERTIBLE_CARD_TYPES 同源，避免漂移）。
+const PLAY_PHASE_CONVERSION_TARGETS: string[] = CONVERTIBLE_CARD_TYPES.filter(
+  (type) => type !== CardType.Dodge && type !== CardType.Negate,
+);
 
 export type CheckIssueLevel = "error" | "warning";
 
@@ -147,7 +152,21 @@ const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, me
     push("error", `general.json 的 skills 里 "${item}" 重复声明`);
   }
 
-  for (const skill of new Set(declared)) {
+  // Phase 8：潜在技能（与 skills 同口径的静态检查；文件存在由 loader 兜底）。
+  const latent = Array.isArray(general.latentSkills)
+    ? general.latentSkills.filter((item): item is string => typeof item === "string")
+    : [];
+  for (const item of new Set(latent)) {
+    if (declared.includes(item)) {
+      push("error", `general.json 的 latentSkills 里 "${item}" 与 skills 重叠：一个技能不能既开局持有又潜在`);
+    }
+  }
+  const latentDuplicates = latent.filter((item, index) => latent.indexOf(item) !== index);
+  for (const item of new Set(latentDuplicates)) {
+    push("error", `general.json 的 latentSkills 里 "${item}" 重复声明`);
+  }
+
+  for (const skill of new Set([...declared, ...latent])) {
     skills.push(skill);
     // 与 loader 的 loadOnePack 同口径：技能名只允许安全字符，防 `../../evil` 路径穿越。
     if (!/^[\w\u4e00-\u9fa5-]+$/u.test(skill)) {

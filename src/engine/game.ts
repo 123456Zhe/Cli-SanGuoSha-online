@@ -58,7 +58,7 @@ import {
   tryNegateGlobal as tryNegateGlobalImpl,
 } from "./resolve.js";
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
-import { getPackSkills } from "./skill-module.js";
+import { getPackSkill, getPackSkills } from "./skill-module.js";
 import type { SkillModuleCtx } from "./skill-module.js";
 import { resolveSkillDescriptor } from "./skill-registry.js";
 import type { SkillConversion } from "./skill-registry.js";
@@ -748,11 +748,38 @@ export class SanGuoGame {
    *
    * 约定 `cardIndex = -10000 - 手牌下标`（避开内置已占用的 -100/-200/-400/-500/-1000 与 -1/-11/-12/-13），
    * 并用 `convertVia`/`convertTo` 标明"通过哪个技能、当成哪张牌"，`playAction` 据此复算，不信任客户端。
-   * 只枚举引擎结算得了的牌类：杀/火杀/雷杀（需要目标）与桃（自己体力未满）。
+   * 枚举引擎结算得了的牌类：杀/火杀/雷杀（需要目标）、桃（自己体力未满）、酒与普通锦囊
+   * （Phase 8；需要目标的按牌类枚举，无目标的不设目标）。
    * 闪/无懈可击是响应牌，不进可玩动作列表（走 `provide_response`）。
    */
+  /**
+   * Phase 8：一条当牌转换当前是否可用。酒每回合限一次（与可玩动作列表同口径）；
+   * 代码技能的 `canUseConversion` 门控（"每回合限次/消耗标记"类限制）在枚举与结算时各复算一次。
+   * 必须纯（只读），枚举与结算都调它。
+   */
+  private canUseConversionNow(player: Player, skillId: SkillId, conversion: SkillConversion): boolean {
+    if (conversion.to === CardType.Wine && this.wineUsedPlayerIds.has(player.id)) {
+      return false;
+    }
+    const module = getPackSkill(skillId);
+    if (module?.canUseConversion && !module.canUseConversion(this as unknown as SkillModuleCtx, player, conversion)) {
+      return false;
+    }
+    return true;
+  }
+
+  /** Phase 8：转换成功结算后通知技能扣费（只在成功时调用一次）。 */
+  private async notifyConversionUsed(player: Player, skillId: SkillId, conversion: SkillConversion, logs: string[]): Promise<void> {
+    const module = getPackSkill(skillId);
+    await module?.onConversionUsed?.(this as unknown as SkillModuleCtx, player, conversion, logs);
+  }
+
   private appendConversionActions(player: Player, actions: GameAction[], canPlaySlash: boolean): void {
     for (const { skillId, conversion } of this.playerConversions(player)) {
+      // Phase 8：门控（限次/标记）不过的转换不枚举。
+      if (!this.canUseConversionNow(player, skillId, conversion)) {
+        continue;
+      }
       const isSlashLike = this.isSlashCard(conversion.to);
       if (isSlashLike && !canPlaySlash) {
         continue;
@@ -760,12 +787,16 @@ export class SanGuoGame {
       if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
         continue;
       }
-      if (!isSlashLike && conversion.to !== CardType.Peach) {
+      // Phase 8：闪/无懈可击只能响应（走 provide_response），不能主动使用。
+      if (conversion.to === CardType.Dodge || conversion.to === CardType.Negate) {
         continue;
       }
       const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-      const targets = isSlashLike ? this.findTargetsByCard(player.id, conversion.to) : [];
-      if (isSlashLike && targets.length === 0) {
+      // Phase 8：酒与普通锦囊也可当——需要目标的按牌类枚举目标（决斗/拆/顺/借刀/火攻/铁索），
+      // 不需要目标的（无中生有/五谷丰登/桃园结义/万箭齐发/南蛮入侵/酒）不设目标。
+      const needsTarget = isSlashLike || this.cardNeedsTarget(conversion.to);
+      const targets = needsTarget ? this.findTargetsByCard(player.id, conversion.to) : [];
+      if (needsTarget && targets.length === 0) {
         continue;
       }
       player.hand.forEach((card, cardIndex) => {
@@ -775,8 +806,8 @@ export class SanGuoGame {
         actions.push({
           type: "play",
           cardIndex: -10000 - cardIndex,
-          label: `发动${displayName}：将${describeCard(card)}当${conversion.to}${isSlashLike ? "使用" : "对自己使用"}`,
-          requiresTarget: isSlashLike,
+          label: `发动${displayName}：将${describeCard(card)}当${conversion.to}${conversion.to === CardType.Peach ? "对自己使用" : "使用"}`,
+          requiresTarget: needsTarget,
           targets,
           convertVia: skillId,
           convertTo: conversion.to,
@@ -799,8 +830,37 @@ export class SanGuoGame {
   /** 该玩家能否用某种转换作为 `kind` 响应打出（`asResponse` 命中且源牌匹配）。 */
   private responseConversions(player: Player, kind: ResponseKind): { skillId: SkillId; conversion: SkillConversion }[] {
     return this.playerConversions(player).filter(
-      (entry) => (entry.conversion.asResponse ?? []).includes(kind) && responseKindToCardType(kind) === entry.conversion.to,
+      (entry) =>
+        (entry.conversion.asResponse ?? []).includes(kind) &&
+        responseKindToCardType(kind) === entry.conversion.to &&
+        // Phase 8：门控（限次/标记）不过的转换既不提供来源、也不被验证接受。
+        this.canUseConversionNow(player, entry.skillId, entry.conversion),
     );
+  }
+
+  /**
+   * Phase 8：当牌转换（酒/普通锦囊）的目标合法性复算，与 `playAction` 的手牌使用前检查同口径：
+   * 需要目标的牌必须给目标、铁索连环以外不能指定自己、决斗受空城保护、
+   * 距离 1 锦囊（顺手牵羊）看距离。杀走原有分支，这里不管。
+   */
+  private validateConversionTarget(player: Player, convertTo: CardType, targetId: string | undefined): string | null {
+    if (!this.cardNeedsTarget(convertTo)) {
+      return null;
+    }
+    if (!targetId) {
+      return "需要选择目标";
+    }
+    const target = this.mustGetPlayer(targetId);
+    if (!target.alive || (target.id === player.id && convertTo !== CardType.IronChain)) {
+      return "目标无效";
+    }
+    if (convertTo === CardType.Duel && this.isKongChengProtected(target, convertTo)) {
+      return `${target.name} 的${SkillName.KongCheng}生效，无法成为目标`;
+    }
+    if (isDistanceOneTrickCard(convertTo) && !this.canReachForDistanceOneTrick(player, target)) {
+      return `目标超出距离，${convertTo}只能对距离 1 以内的角色使用`;
+    }
+    return null;
   }
 
   /**
@@ -830,9 +890,28 @@ export class SanGuoGame {
       return ["使用卡牌失败"];
     }
     const displayName = resolveSkillDescriptor(viaSkillId).displayName ?? viaSkillId;
+    // Phase 8：门控复算（不信任客户端；枚举时已算过一次，这里防过期快照/伪造）。
+    if (!this.canUseConversionNow(player, viaSkillId, conversion)) {
+      return [`${player.name} 当前无法发动${displayName}的当牌转换`];
+    }
     const isSlashLike = this.isSlashCard(conversion.to);
     if (!isSlashLike && conversion.to !== CardType.Peach) {
-      return [`${conversion.to}不能这样使用`];
+      // Phase 8：酒与普通锦囊——造一张"源牌花色/点数 + 目标牌类"的合成牌，走通用结算
+      // `resolveUsedCard`（决斗/拆/顺/无中生有/借刀/火攻/铁索/桃园/五谷/万箭/南蛮/酒都在其中）。
+      // 杀/桃仍走原有分支，避免既有转换的行为变化。合成牌沿用源牌 id 进弃牌堆（源牌本身不再另行入堆）。
+      const targetError = this.validateConversionTarget(player, conversion.to, targetId);
+      if (targetError) {
+        return [targetError];
+      }
+      const used = await this.removeHandCardAt(player, handIndex);
+      if (!used) {
+        return ["使用卡牌失败"];
+      }
+      const synthetic: Card = { id: used.id, type: conversion.to, color: used.color, suit: used.suit, rank: used.rank };
+      const logs = [`${player.name} 发动${displayName}，将${describeCard(used)}当${conversion.to}使用`];
+      logs.push(...(await this.resolveUsedCard(player, synthetic, targetId, false)));
+      await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
+      return logs;
     }
     if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
       return [`${player.name} 当前体力已满`];
@@ -867,6 +946,7 @@ export class SanGuoGame {
         this.slashUsedThisTurn = true;
       }
       logs.push(...(await this.useSlash(player, target, { kind: slashKindOf(player, conversion.to), card: used })));
+      await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
       return logs;
     }
     player.hp = Math.min(player.maxHp, player.hp + 1);
@@ -874,6 +954,7 @@ export class SanGuoGame {
     logs.push(...(await this.resolveDeaths()));
     logs.push(...this.resolveWinner());
     await this.advanceIfCurrentPlayerDead(logs);
+    await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
     return logs;
   }
 
@@ -1788,6 +1869,8 @@ export class SanGuoGame {
           : kind === "negate"
             ? card.type === CardType.Negate
             : card.type === CardType.Peach || wineAsPeach;
+    // Phase 8：本次响应若走了当牌转换，成功后要通知技能扣费（限次/标记）。
+    let viaConversion: { skillId: SkillId; conversion: SkillConversion } | undefined;
     if (!direct) {
       // 声明式 conversions（`viaSkill` 凭据）与内置转换技各自的"当 X"判定。
       // 凭据只在来源列表里（`peekUsableCard` 只回 {card}），所以这里按 sourceId 回查一次候选来源；
@@ -1795,7 +1878,7 @@ export class SanGuoGame {
       const candidate = this.buildResponseSources(player, kind, kind === "peach" && player.hp <= 0).find(
         (entry) => entry.sourceId === sourceId && entry.viaSkill,
       );
-      const viaConversion = candidate
+      viaConversion = candidate
         ? this.responseConversions(player, kind).find(
             (entry) => entry.skillId === candidate.viaSkill && matchesConversionFilter(card, entry.conversion.from),
           )
@@ -1829,6 +1912,9 @@ export class SanGuoGame {
     }
     // 拦截点 card_used：打出一张响应牌（reason="打出"）。
     await this.emitSkillTrigger("card_used", { actor: player, card: removed, reason: "打出" }, logs);
+    if (viaConversion) {
+      await this.notifyConversionUsed(player, viaConversion.skillId, viaConversion.conversion, logs);
+    }
     if (wineAsPeach) {
       logs.push(`${player.name} 使用酒自救（当${CardType.Peach}）`);
     }
@@ -2112,7 +2198,10 @@ export class SanGuoGame {
     this.wineBuffPlayerIds = new Set();
     this.wineUsedPlayerIds = new Set();
     const player = this.currentPlayer;
-    const logs = [`第 ${this.turn} 回合：${player.name} 的回合`, `进入${TurnPhase.Judgment}`];
+    const logs = [`第 ${this.turn} 回合：${player.name} 的回合`];
+    // Phase 8：准备阶段触发点（官方回合流程的第一阶段，在判定阶段之前）。
+    await this.emitSkillTrigger("prepare_phase_start", { actor: player }, logs);
+    logs.push(`进入${TurnPhase.Judgment}`);
     if (player.delayedTricks.length > 0) {
       logs.push(...(await this.resolveDelayedJudgments(player)));
     } else {
@@ -2228,6 +2317,8 @@ export class SanGuoGame {
     const logs: string[] = [];
     this.phase = TurnPhase.End;
     logs.push(`进入${TurnPhase.End}`);
+    // Phase 8：结束阶段触发点（弃牌阶段之后、回合结束之前；闭月/据守等内置结束阶段效果之前发出）。
+    await this.emitSkillTrigger("end_phase_start", { actor: player }, logs);
     if (this.hasSkill(player, SkillName.BiYue) && await this.shouldActivateOptionalEffect(player, SkillName.BiYue)) {
       const drawn = this.drawCards(player.id, 1);
       logs.push(`${player.name} 的${SkillName.BiYue}生效，摸了 ${drawn} 张牌`);

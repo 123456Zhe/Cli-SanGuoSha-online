@@ -94,14 +94,26 @@ export type SkillConversion = {
   asResponse?: ResponseKind[];
 };
 
-/** `conversion.to` 允许的牌类（引擎有对应结算路径）。 */
+/** `conversion.to` 允许的牌类（引擎有对应结算路径）。Phase 8：任意基本牌与普通锦囊（延时锦囊与装备仍不支持）。 */
 export const CONVERTIBLE_CARD_TYPES: CardType[] = [
   CardType.Slash,
   CardType.FireSlash,
   CardType.ThunderSlash,
   CardType.Peach,
+  CardType.Wine,
   CardType.Dodge,
   CardType.Negate,
+  CardType.Dismantle,
+  CardType.Snatch,
+  CardType.Duel,
+  CardType.ExNihilo,
+  CardType.Barbarian,
+  CardType.ArrowRain,
+  CardType.Collateral,
+  CardType.FireAttack,
+  CardType.IronChain,
+  CardType.PeachGarden,
+  CardType.Harvest,
 ];
 
 /** 可作为响应打出的牌类 → 响应时机。 */

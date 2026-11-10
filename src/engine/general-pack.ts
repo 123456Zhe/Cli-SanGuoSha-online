@@ -236,6 +236,16 @@ const validateGeneralJson = (raw: unknown, packName: string): Omit<GeneralDefini
   if (!Array.isArray(obj.skills) || obj.skills.some((skill) => !isString(skill))) {
     throw new Error(`${packName}: general.json skills 必须为字符串数组`);
   }
+  if ("latentSkills" in obj) {
+    // Phase 8：潜在技能（觉醒获得类）。与 skills 不得重叠，loader 会加载并注册它们但不开局持有。
+    if (!Array.isArray(obj.latentSkills) || obj.latentSkills.some((skill) => !isString(skill))) {
+      throw new Error(`${packName}: general.json latentSkills 必须为字符串数组`);
+    }
+    const overlap = (obj.latentSkills as string[]).filter((skill) => (obj.skills as string[]).includes(skill));
+    if (overlap.length > 0) {
+      throw new Error(`${packName}: general.json latentSkills 与 skills 重叠（${overlap.join("、")}）：一个技能不能既开局持有又潜在`);
+    }
+  }
   if ("description" in obj && typeof obj.description !== "string") {
     throw new Error(`${packName}: general.json description 必须为字符串`);
   }
@@ -245,6 +255,7 @@ const validateGeneralJson = (raw: unknown, packName: string): Omit<GeneralDefini
     gender: obj.gender,
     maxHp: obj.maxHp,
     skills: obj.skills as string[],
+    ...(Array.isArray(obj.latentSkills) ? { latentSkills: obj.latentSkills as string[] } : {}),
     ...(typeof obj.description === "string" ? { description: obj.description } : {}),
   };
 };
@@ -329,7 +340,8 @@ const loadOnePack = async (
   const meta = validateGeneralJson(JSON.parse(readFileSync(generalPath, "utf-8")), folderName);
   const skills: PackSkillEntry[] = [];
   const namespacedSkills: SkillId[] = [];
-  for (const declared of meta.skills) {
+  // 开局技能与潜在技能走同一条加载路径；区别只在是否进 `general.skills`（开局持有表）。
+  const loadSkill = async (declared: string): Promise<SkillModule> => {
     // 安全：技能名只允许字母、数字、下划线、连字符与中文，杜绝 `../../evil` 类路径穿越。
     if (!/^[\w\u4e00-\u9fa5-]+$/u.test(declared)) {
       throw new Error(`技能名非法（只允许字母、数字、下划线、连字符与中文）：${folderName}/${declared}`);
@@ -344,19 +356,26 @@ const loadOnePack = async (
       throw new Error(`技能文件缺失：${folderName}/${declared}.skill.{json,ts,mjs}`);
     }
     const namespacedId = `${folderName}/${declared}`;
-    let module: SkillModule;
     if (hasJson) {
-      module = parseDeclarativeSkill(JSON.parse(readFileSync(jsonPath, "utf-8")), declared, namespacedId);
-    } else {
-      if (options.jsonOnly) {
-        throw new Error(`${folderName}/${declared} 是代码技能，但启用了 --generals-json-only`);
-      }
-      const codePath = existsSync(tsPath) ? tsPath : mjsPath;
-      const imported: unknown = await import(pathToFileURL(resolve(codePath)).href);
-      module = parseCodeSkill(imported, declared, namespacedId);
+      return parseDeclarativeSkill(JSON.parse(readFileSync(jsonPath, "utf-8")), declared, namespacedId);
     }
+    if (options.jsonOnly) {
+      throw new Error(`${folderName}/${declared} 是代码技能，但启用了 --generals-json-only`);
+    }
+    const codePath = existsSync(tsPath) ? tsPath : mjsPath;
+    const imported: unknown = await import(pathToFileURL(resolve(codePath)).href);
+    return parseCodeSkill(imported, declared, namespacedId);
+  };
+  for (const declared of meta.skills) {
+    const module = await loadSkill(declared);
     skills.push({ ...module, generalName: meta.name });
-    namespacedSkills.push(namespacedId);
+    namespacedSkills.push(module.id);
+  }
+  const namespacedLatentSkills: SkillId[] = [];
+  for (const declared of meta.latentSkills ?? []) {
+    const module = await loadSkill(declared);
+    skills.push({ ...module, generalName: meta.name });
+    namespacedLatentSkills.push(module.id);
   }
   return {
     general: {
@@ -365,6 +384,7 @@ const loadOnePack = async (
       gender: meta.gender,
       maxHp: meta.maxHp,
       skills: namespacedSkills,
+      ...(namespacedLatentSkills.length > 0 ? { latentSkills: namespacedLatentSkills } : {}),
       ...(meta.description !== undefined ? { description: meta.description } : {}),
     },
     skills,

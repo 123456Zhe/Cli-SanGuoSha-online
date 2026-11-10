@@ -55,6 +55,8 @@ const tryAwakenHunZi = (ctx: SkillHooksContext, actor: Player | undefined, logs:
 
 export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, SkillHook[]> {
   const hooks: Record<SkillTrigger, SkillHook[]> = {
+    // Phase 8：准备阶段（目前没有内置技能占用，全部留给外部武将包）。
+    prepare_phase_start: [],
     turn_start: [
       async (payload, logs) => {
         const actor = payload.actor;
@@ -283,6 +285,8 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
     card_used: [],
     peach_save: [],
     discard_phase_start: [],
+    // Phase 8：结束阶段（目前没有内置技能占用，全部留给外部武将包）。
+    end_phase_start: [],
     // Phase 7：响应前由引擎放好基础来源，钩子可就地 push 额外来源（`payload.responseSources`）。
     provide_response: [],
   };
@@ -292,14 +296,19 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
   // 这是有意为之，不是 bug。
   // 两条硬规则：①只对"与本次事件相关的玩家拥有该技能"时生效（包技能 id 已命名空间化，
   // 如 "神赵云/绝境"，`player.skills` 里存的就是命名空间 id；事件相关玩家 = actor/target/source，
-  // 覆盖摸牌（actor）与伤害（target/source 为反馈/奸雄类技能）两类口径）；②单个包钩子抛错
-  // 只记日志，不打断整局（内置 `play()` 同理：坏技能不炸对局）。
+  // 覆盖摸牌（actor）与伤害（target/source 为反馈/奸雄类技能）两类口径）；
+  // 例外：技能声明了 `globalHook: true`（如武庫要监听"其他角色失去装备"，失去者不是持有者），
+  // 则每次事件都触发，钩子需自行在 `ctx.players` 里定位持有者；
+  // ②单个包钩子抛错只记日志，不打断整局（内置 `play()` 同理：坏技能不炸对局）。
   const packCtx = ctx as unknown as SkillModuleCtx;
   for (const trigger of SKILL_TRIGGERS) {
     for (const entry of getPackHooksFor(trigger)) {
       hooks[trigger].push(async (payload, logs) => {
         const involved = [payload.actor, payload.target, payload.source];
-        if (!involved.some((player) => player !== undefined && player !== null && player.skills.includes(entry.id))) {
+        if (
+          !entry.globalHook &&
+          !involved.some((player) => player !== undefined && player !== null && player.skills.includes(entry.id))
+        ) {
           return;
         }
         try {

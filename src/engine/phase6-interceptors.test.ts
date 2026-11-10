@@ -37,6 +37,7 @@ const registerTestSkill = (
   name: string,
   onTrigger?: SkillModule["onTrigger"],
   rules?: SkillModule["rules"],
+  extra?: Partial<SkillModule>,
 ): string => {
   const id = `测试/${name}`;
   registerPackSkill({
@@ -47,6 +48,7 @@ const registerTestSkill = (
     generalName: "测试",
     ...(onTrigger ? { onTrigger } : {}),
     ...(rules ? { rules } : {}),
+    ...(extra ?? {}),
   });
   return id;
 };
@@ -256,6 +258,50 @@ void test("equip_lost：失去装备时触发（携带装备牌类）", async ()
   assert.ok(logs.includes("TEST_EQUIP_LOST"), logs.join(" / "));
 });
 
+void test("globalHook：声明后钩子在非持有者事件上也会触发（武庫监听他人失装）", async () => {
+  let globalCount = 0;
+  const globalId = registerTestSkill(
+    "全局失装",
+    {
+      equip_lost: (ctx, payload, logs) => {
+        // 钩子自行定位持有者：场上持有本技能的玩家。
+        const holder = ctx.players.find((player) => ctx.hasSkill(player, globalId));
+        if (!holder || !holder.alive || !payload.equip) {
+          return;
+        }
+        // 只计其他角色失装（自己失装不算，防与 card_used 双计）。
+        if (payload.actor && payload.actor.id !== holder.id) {
+          globalCount += 1;
+          logs.push("TEST_GLOBAL_EQUIP_LOST");
+        }
+      },
+    },
+    undefined,
+    { globalHook: true },
+  );
+  let localCount = 0;
+  const localId = registerTestSkill("本家失装", {
+    equip_lost: (ctx, payload, logs) => {
+      if (payload.actor && ctx.hasSkill(payload.actor, localId) && payload.equip) {
+        localCount += 1;
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [globalId, localId];
+  other.weapon = CardType.QinggangSword;
+
+  const resolveEquip = (game as unknown as {
+    resolveEquip(player: Player, equipType: CardType): Promise<string[]>;
+  }).resolveEquip.bind(game);
+  const logs = await resolveEquip(other, CardType.Crossbow);
+
+  assert.equal(globalCount, 1, "全局钩子应在他人失装时触发");
+  assert.ok(logs.includes("TEST_GLOBAL_EQUIP_LOST"), logs.join(" / "));
+  assert.equal(localCount, 0, "非全局钩子不应在他人失装时触发（默认过滤）");
+});
+
 void test("card_used：使用牌时触发（reason=使用）", async () => {
   const captured: string[] = [];
   const id = registerTestSkill("用牌", {
@@ -357,7 +403,7 @@ void test("peach_save：钩子可追加濒死回复量", async () => {
   assert.equal(other.alive, true);
 });
 
-void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response", async () => {
+void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response + Phase 8 的准备/结束阶段", async () => {
   const { SKILL_TRIGGERS } = await import("./types.js");
   for (const trigger of ["turn_start", "before_draw", "before_damage", "after_damage"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含基础触发点 ${trigger}`);
@@ -368,7 +414,42 @@ void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 
   for (const trigger of ["provide_response"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 7 拦截点 ${trigger}`);
   }
-  assert.equal(SKILL_TRIGGERS.length, 12);
+  for (const trigger of ["prepare_phase_start", "end_phase_start"]) {
+    assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 8 触发点 ${trigger}`);
+  }
+  assert.equal(SKILL_TRIGGERS.length, 14);
+});
+
+void test("Phase 8：prepare_phase_start 在判定阶段之前、end_phase_start 在结束阶段入口发出", async () => {
+  const seen: string[] = [];
+  const prepareId = registerTestSkill("准备", {
+    prepare_phase_start: (ctx, payload, logs) => {
+      if (payload.actor && ctx.hasSkill(payload.actor, "测试/准备")) {
+        seen.push(`prepare:${payload.actor.id}`);
+        logs.push("测试准备触发");
+      }
+    },
+    end_phase_start: (ctx, payload, logs) => {
+      if (payload.actor && ctx.hasSkill(payload.actor, "测试/准备")) {
+        seen.push(`end:${payload.actor.id}`);
+        logs.push("测试结束触发");
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me] = players as [Player, Player];
+  me.skills = [prepareId];
+  const logs = await game.startTurn();
+  const prepareIndex = logs.findIndex((line) => line.includes("测试准备触发"));
+  const judgmentIndex = logs.findIndex((line) => line.includes("进入判定阶段"));
+  assert.ok(prepareIndex >= 0, `准备触发点应在回合开始时发出：${logs.join(" / ")}`);
+  assert.ok(judgmentIndex >= 0, "应有判定阶段日志");
+  assert.ok(prepareIndex < judgmentIndex, "准备触发点应在判定阶段之前");
+  assert.deepEqual(seen, ["prepare:p0"]);
+
+  const endLogs = await game.finishTurn(me);
+  assert.ok(endLogs.some((line) => line.includes("测试结束触发")), `结束触发点应在结束阶段入口发出：${endLogs.join(" / ")}`);
+  assert.deepEqual(seen, ["prepare:p0", "end:p0"]);
 });
 
 void test("端到端：加载 examples/generals 后，吕蒙的克己在真实对局里跳过弃牌阶段", async () => {

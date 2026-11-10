@@ -39,6 +39,15 @@
       },
       "description": "原始技能名列表（不是命名空间 id）。每个技能名对应同目录下 <技能名>.skill.json 或 .skill.ts/.skill.mjs，二选一。名称只允许字母/数字/下划线/连字符/中文（防路径穿越）。这里要求至少 1 个：loader 也能接受空数组，但没有技能的武将没有意义，schema 提前拦住。"
     },
+    "latentSkills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_\\u4e00-\\u9fa5-]+$"
+      },
+      "description": "潜在技能名列表（不是命名空间 id）。loader 会加载并注册它们，但不开局持有——需由其他技能在对局中把命名空间 id（如 \"群杜预/滅吳\"）push 进 player.skills 才能生效。与 skills 不得重叠（觉醒获得类技能用，如三陈觉醒获得的灭吴）。"
+    },
     "description": {
       "type": "string",
       "description": "可选：一句话设定，保留进已加载武将池供 UI/未来 AI 使用；引擎结算不读它。"

@@ -120,14 +120,15 @@ export type ResponseKind = "dodge" | "slash" | "negate" | "peach";
 export type CardOrigin = "hand" | "treasure" | "equip";
 
 /**
- * 触发点与拦截点（共 12 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
+ * 触发点与拦截点（共 14 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
  * loader 只接受这里的字符串，写错会被静默丢弃（`npm run generals:check` 会报出来）。
  *
- * - 事件类：`turn_start` / `before_draw` / `before_damage` / `after_damage`
+ * - 事件类：`prepare_phase_start` / `turn_start` / `before_draw` / `before_damage` / `after_damage`
  * - 拦截类：`judgment` / `slash_targeted` / `hand_card_lost` / `equip_lost` /
- *   `card_used` / `peach_save` / `discard_phase_start` / `provide_response`
+ *   `card_used` / `peach_save` / `discard_phase_start` / `end_phase_start` / `provide_response`
  */
 export type SkillTrigger =
+  | "prepare_phase_start"
   | "turn_start"
   | "before_draw"
   | "before_damage"
@@ -139,6 +140,7 @@ export type SkillTrigger =
   | "card_used"
   | "peach_save"
   | "discard_phase_start"
+  | "end_phase_start"
   | "provide_response";
 
 export type SkillKind = "active" | "triggered" | "conversion" | "passive" | "lord";
@@ -203,6 +205,8 @@ export type GeneralDefinition = {
   gender: "男" | "女";
   maxHp: number;
   skills: string[];
+  /** 潜在技能（觉醒获得类）：loader 会加载并注册，但不开局持有。 */
+  latentSkills?: string[];
   description?: string;
 };
 
@@ -426,7 +430,8 @@ export type PackSkillHook = (ctx: SkillModuleCtx, payload: SkillEventPayload, lo
 /**
  * 一个技能的完整声明（`.skill.json` 与 `.skill.ts` 归一到此结构）。
  *
- * 代码技能专有：`canUse` / `getTargets` / `play` / `handLimit` / `onTrigger`；
+ * 代码技能专有：`canUse` / `getTargets` / `play` / `handLimit` / `onTrigger` /
+ * `canUseConversion` / `onConversionUsed` / `globalHook`；
  * 声明式技能（`.skill.json`）只能用其余的字段，见 `schema/skill.schema.json`。
  */
 export type SkillModule = {
@@ -453,4 +458,10 @@ export type SkillModule = {
   getTargets?(ctx: SkillModuleCtx, player: Player): string[];
   play?(ctx: SkillModuleCtx, player: Player, targetId?: string): Promise<string[]>;
   onTrigger?: Partial<Record<SkillTrigger, PackSkillHook>>;
+  /** 全局钩子：置 true 后每次事件都触发（默认只在事件相关玩家拥有该技能时触发）；钩子需自行定位持有者。 */
+  globalHook?: boolean;
+  /** 当牌转换的门控（只对带 `conversions` 的代码技能有意义；必须纯，只读）。 */
+  canUseConversion?(ctx: SkillModuleCtx, player: Player, conversion: SkillConversion): boolean;
+  /** 当牌转换成功结算后调用一次（扣费：移去标记、记限次）。 */
+  onConversionUsed?(ctx: SkillModuleCtx, player: Player, conversion: SkillConversion, logs: string[]): void | Promise<void>;
 };

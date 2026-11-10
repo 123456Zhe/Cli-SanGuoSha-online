@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { Card, CardType } from "./cards.js";
@@ -473,6 +475,33 @@ void test("端到端：加载 examples/generals 后，吕蒙的克己在真实�
     `示例包的克己应真正生效：${logs.join(" / ")}`,
   );
   assert.equal(me.hand.length, 5, "克己生效时不应弃牌");
+});
+
+void test("端到端：加载 generals/诸葛瑾 后，弘援在摸牌阶段真正生效（回归：payload.player 笔误）", async () => {
+  // 真包只读复制到临时目录再加载（与 generals:check 的 .check-tmp 同口径，不动原包）。
+  const tmp = mkdtempSync(join(tmpdir(), "zhugejin-"));
+  try {
+    cpSync(join(process.cwd(), "generals", "诸葛瑾"), join(tmp, "诸葛瑾"), { recursive: true });
+    const report = await loadGeneralPacks({ dir: tmp, pool: "all" });
+    assert.deepEqual(report.errors, []);
+    assert.ok(report.loaded.includes("诸葛瑾"), `诸葛瑾应被加载：${report.loaded.join("、")}`);
+    const { game, players } = await setup();
+    const [me, other] = players as [Player, Player];
+    me.general = "诸葛瑾";
+    me.skills = [...resolveGeneralByName("诸葛瑾").skills];
+    assert.deepEqual(me.skills, ["诸葛瑾/弘援"]);
+    approveEffects(game, [me.id, other.id]);
+
+    const logs = await game.startTurn();
+    assert.ok(
+      logs.some((line) => line.includes("发动弘援")),
+      `弘援应在摸牌阶段生效：${logs.join(" / ")}`,
+    );
+    assert.equal(me.hand.length, 1, "少摸一张：本应摸 2 张，实摸 1 张");
+    assert.equal(other.hand.length, 1, "另一名角色应摸 1 张");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 void test("after_damage：钩子看到的是白银狮子压过之后的实际伤害", async () => {

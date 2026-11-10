@@ -1,5 +1,5 @@
 import type {
-Player,
+SkillEventPayload,
 SkillModule,
 SkillModuleCtx,
 } from "../../../types/generals-pack.js";
@@ -22,25 +22,23 @@ description:
 "摸牌阶段，你可以少摸一张牌，然后令至多两名其他角色各摸一张牌。",
 triggers: ["before_draw"],
 onTrigger: {
-before_draw: async (ctx: SkillModuleCtx, payload: { player?: Player; drawCount?: number}) => {
-const logs: string[] = [];
-const player = payload.player;
-if (!player ||!player.alive) return logs;
-if (!ctx.hasSkill(player, "诸葛瑾/弘援")) return logs;
-const count = payload.drawCount?? 0;
-if (count < 1) return logs;
-if (!(await ctx.shouldActivateOptionalEffect(player, "诸葛瑾/弘援"))) return logs;
+before_draw: async (ctx: SkillModuleCtx, payload: SkillEventPayload, logs: string[]) => {
+const player = payload.actor;
+if (!player || !player.alive) return;
+if (!ctx.hasSkill(player, "诸葛瑾/弘援")) return;
+const count = payload.drawCount ?? 0;
+if (count < 1) return;
+if (!(await ctx.shouldActivateOptionalEffect(player, "诸葛瑾/弘援"))) return;
 payload.drawCount = count - 1;
 const others = ctx.players
-.filter((p) => p.alive && p.id!== player.id)
+.filter((p) => p.alive && p.id !== player.id)
 .slice(0, 2);
 for (const target of others) {
 ctx.drawCards(target.id, 1);
 }
 logs.push(
-`${player.name} 发动，少摸一张牌，${others.map((p) => p.name).join("、") || "无其他角色"}各摸一张牌`,
+`${player.name} 发动弘援，少摸一张牌，${others.map((p) => p.name).join("、") || "无其他角色"}各摸一张牌`,
 );
-return logs;
 },
 },
 } satisfies SkillModule;

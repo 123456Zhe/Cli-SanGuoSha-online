@@ -179,6 +179,20 @@ const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, me
     if (hasJson && (hasTs || hasMjs)) {
       push("error", `${skill}：同时存在 .skill.json 与 .skill.{ts,mjs}，双源真相（loader 只用 JSON），请删掉一个`);
     }
+    // 代码技能源码扫描：SkillEventPayload 没有 `player` 字段（2026-11-10 诸葛瑾/弘援笔误，
+    // 读 payload.player 恒为 undefined 导致技能静默不生效；generals/ 不进 typecheck，拦不住）。
+    for (const ext of [".skill.ts", ".skill.mjs"]) {
+      const codePath = `${base}${ext}`;
+      if (!existsSync(codePath)) {
+        continue;
+      }
+      if (/payload\s*\.\s*player\b/.test(readFileSync(codePath, "utf-8"))) {
+        push(
+          "error",
+          `${skill}${ext} 用了 payload.player：SkillEventPayload 没有 player 字段（应为 payload.actor），技能会静默不生效`,
+        );
+      }
+    }
     if (!hasJson) {
       continue;
     }

@@ -213,3 +213,25 @@ void test("校验器：--selfplay 用自对弈跑通整局且零违规", async (
   assert.equal(report.selfplay[0]?.violations.length, 0, "自对弈不应有任何不变量违规");
   assert.equal(report.errors, 0, `不应有错误：${report.issues.map((issue) => issue.message).join(" | ")}`);
 });
+
+void test("校验器：代码技能用 payload.player 应报错（回归：诸葛瑾/弘援笔误）", async () => {
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["错字段", "对字段"] }),
+    {
+      错字段:
+        'export default { id: "错字段", displayName: "错字段", kind: "triggered", description: "x", triggers: ["before_draw"], onTrigger: { before_draw: (ctx, payload, logs) => { const p = payload.player; } } } satisfies SkillModule;',
+      对字段:
+        'export default { id: "对字段", displayName: "对字段", kind: "triggered", description: "x", triggers: ["before_draw"], onTrigger: { before_draw: (ctx, payload, logs) => { const p = payload.actor; } } } satisfies SkillModule;',
+    },
+  );
+
+  const report = await checkGeneralPacks({ dir: root });
+  const messages = report.issues.map((issue) => issue.message);
+  assert.ok(
+    messages.some((message) => message.includes("payload.player") && message.includes("payload.actor")),
+    `应用 payload.player 报错并提示 payload.actor，实际：${messages.join(" | ")}`,
+  );
+  assert.ok(!messages.some((message) => message.includes("对字段") && message.includes("payload.player")), "用 payload.actor 的技能不应被误报");
+  assert.ok(report.errors > 0);
+});

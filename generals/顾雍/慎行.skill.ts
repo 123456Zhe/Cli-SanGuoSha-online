@@ -10,7 +10,7 @@ SkillModuleCtx,
 //
 // 实现要点：
 // - 无次数限制：文本无“限一次”，出牌阶段可重复发动（每次净 -1 手牌，自然收敛），故不记 skillUsedThisTurn。
-// - 代价：弃置两张手牌（origin=hand，与雪恨的弃牌代价同一约定），用 `buildUsableSources` + `requestDiscardSelection(2)`，返回的牌已移出手牌，手动进弃牌堆。
+// - 代价：弃置两张手牌（origin=hand，与雪恨的弃牌代价同一约定），用 `buildUsableSources` + `requestDiscardSelection(player, 2, reason, sources)`，返回的牌已移出手牌，手动进弃牌堆。
 // - 收益：`drawCards(player.id, 1)` 摸一张牌。
 
 export default {
@@ -25,11 +25,11 @@ return player.hand.length >= 2;
 play: async (ctx: SkillModuleCtx, player: Player) => {
 const logs: string[] = [];
 const sources = ctx
-.buildUsableSources(player, "all")
+.buildUsableSources(player)
 .filter((s) => s.origin === "hand");
-const discarded = await ctx.requestDiscardSelection(player, sources, 2, logs);
+const discarded = await ctx.requestDiscardSelection(player, 2, "慎行：弃置两张牌", sources);
 if (discarded.length < 2) {
-logs.push(`${player.name} 发动失败：未弃足两张牌`);
+logs.push(`${player.name} 发动【慎行】失败：未弃足两张牌`);
 return logs;
 }
 for (const card of discarded) {
@@ -37,7 +37,7 @@ ctx.discardPile.push(card);
 }
 ctx.drawCards(player.id, 1);
 logs.push(
-`${player.name} 发动，弃置 ${discarded.map((c) => `${c.type}${c.rank}`).join("、")}，摸一张牌`,
+`${player.name} 发动【慎行】，弃置 ${discarded.map((c) => `${c.type}${c.rank}`).join("、")}，摸一张牌`,
 );
 return logs;
 },

@@ -15,7 +15,7 @@
 | 项 | 用法 |
 |---|---|
 | 技能类型 | `kind: "active"` + `canUse` / `play`（无目标，不设 `requiresTarget` / `getTargets`） |
-| 代价 | `buildUsableSources(player, "all")` 过滤 origin=hand 后 `requestDiscardSelection(player, sources, 2)`，返回的牌手动进弃牌堆 |
+| 代价 | `buildUsableSources(player)` 过滤 origin=hand 后 `requestDiscardSelection(player, 2, reason, sources)`，返回的牌手动进弃牌堆 |
 | 收益 | `drawCards(player.id, 1)` |
 
 ## 已知限制

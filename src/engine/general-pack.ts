@@ -288,6 +288,7 @@ const parseDeclarativeSkill = (raw: unknown, fallbackId: string, namespacedId: s
     ...(isString(obj.label) ? { label: obj.label } : {}),
     ...("rules" in obj ? { rules: validateRules(obj.rules, `${fallbackId}.skill.json`) } : {}),
     ...("conversions" in obj ? { conversions: parseConversions(obj.conversions, `${fallbackId}.skill.json`) } : {}),
+    ...(typeof obj.globalHook === "boolean" ? { globalHook: obj.globalHook } : {}),
   };
 };
 
@@ -327,6 +328,16 @@ const parseCodeSkill = (mod: unknown, fallbackId: string, namespacedId: string):
     ...(typeof obj.play === "function" ? { play: obj.play as NonNullable<SkillModule["play"]> } : {}),
     ...(typeof obj.handLimit === "function" ? { handLimit: obj.handLimit as NonNullable<SkillModule["handLimit"]> } : {}),
     ...(typeof obj.onTrigger === "object" && obj.onTrigger !== null ? { onTrigger: obj.onTrigger } : {}),
+    // 注意：parse 重建对象时必须逐字段复制——2026-11-12 漏抄这三项，致 Phase 8 三个接口
+    // （矢志门控/灭吴扣费/武库与挽危的 globalHook）在真实加载路径上全部静默失效，
+    // 而 conversions.test.ts 因绕开 loader 直接注册模块，始终没测出来。见 general-pack.test.ts 回归测试。
+    ...(typeof obj.canUseConversion === "function"
+      ? { canUseConversion: obj.canUseConversion as NonNullable<SkillModule["canUseConversion"]> }
+      : {}),
+    ...(typeof obj.onConversionUsed === "function"
+      ? { onConversionUsed: obj.onConversionUsed as NonNullable<SkillModule["onConversionUsed"]> }
+      : {}),
+    ...(typeof obj.globalHook === "boolean" ? { globalHook: obj.globalHook } : {}),
   };
   return entry;
 };

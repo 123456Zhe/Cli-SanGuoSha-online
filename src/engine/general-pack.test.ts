@@ -373,3 +373,46 @@ void test("武将包的 general.json description 会被保留进已加载池（�
   assert.deepEqual(report.loaded, ["吕蒙"]);
   assert.equal(resolveGeneralByName("吕蒙").description, "吴国武将，善于据守与突袭。");
 });
+
+void test("loader 保留 Phase 8 字段：代码技能的 canUseConversion/onConversionUsed/globalHook 不被 parse 丢掉", async () => {
+  // 2026-11-12 实测：parseCodeSkill 重建对象时漏抄这三项，矢志门控/灭吴扣费/
+  // 武库与挽危的 globalHook 在真实加载路径上全部静默失效，而 conversions.test.ts
+  // 因绕开 loader 直接注册模块，始终没测出来。
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["测试技"] }),
+    {
+      测试技: `export default {
+        id: "测试技",
+        kind: "triggered",
+        description: "测试技能",
+        triggers: ["provide_response"],
+        conversions: [{ from: { type: ["闪"] }, to: "杀", asResponse: ["slash"] }],
+        canUseConversion: () => false,
+        onConversionUsed: () => {},
+        globalHook: true,
+        onTrigger: {},
+      };`,
+    },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.errors, []);
+  const entry = getPackSkill("测试将/测试技");
+  assert.ok(entry, "技能应注册");
+  assert.equal(typeof entry.canUseConversion, "function", "canUseConversion 不应被 loader 丢掉（矢志门控依赖它）");
+  assert.equal(typeof entry.onConversionUsed, "function", "onConversionUsed 不应被 loader 丢掉（灭吴扣费依赖它）");
+  assert.equal(entry.globalHook, true, "globalHook 不应被 loader 丢掉（武库/挽危监听他人事件依赖它）");
+});
+
+void test("loader 保留声明式技能的 globalHook", async () => {
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["测试技"] }),
+    { 测试技: { id: "测试技", kind: "triggered", description: "测试技能", globalHook: true } },
+  );
+
+  const report = await loadGeneralPacks({ dir: root, pool: "all" });
+  assert.deepEqual(report.errors, []);
+  assert.equal(getPackSkill("测试将/测试技")?.globalHook, true, "JSON 技能的 globalHook 也应保留");
+});

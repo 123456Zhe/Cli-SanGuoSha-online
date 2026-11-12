@@ -405,7 +405,7 @@ void test("peach_save：钩子可追加濒死回复量", async () => {
   assert.equal(other.alive, true);
 });
 
-void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response + Phase 8 的准备/结束阶段", async () => {
+void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response + Phase 8 的准备/结束阶段 + Phase 9 的 dying", async () => {
   const { SKILL_TRIGGERS } = await import("./types.js");
   for (const trigger of ["turn_start", "before_draw", "before_damage", "after_damage"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含基础触发点 ${trigger}`);
@@ -419,7 +419,106 @@ void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 
   for (const trigger of ["prepare_phase_start", "end_phase_start"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 8 触发点 ${trigger}`);
   }
-  assert.equal(SKILL_TRIGGERS.length, 14);
+  for (const trigger of ["dying"]) {
+    assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 9 触发点 ${trigger}`);
+  }
+  assert.equal(SKILL_TRIGGERS.length, 15);
+});
+
+void test("Phase 9 dying：钩子在桃救援之前发出，可直接回血救人（无桃也存活）", async () => {
+  const id = registerTestSkill("救命", {
+    dying: (ctx, payload, logs) => {
+      if (payload.actor && ctx.hasSkill(payload.actor, id)) {
+        payload.actor.hp = 1;
+        logs.push("TEST_DYING_HEALED");
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  other.skills = [id];
+  other.hp = 0;
+  // 双方手里都没有桃：能活下来只能是 dying 钩子救的。
+  me.hand = [];
+  other.hand = [];
+
+  const resolveDeaths = (game as unknown as { resolveDeaths(): Promise<string[]> }).resolveDeaths.bind(game);
+  const logs = await resolveDeaths();
+
+  assert.ok(logs.includes("TEST_DYING_HEALED"), logs.join(" / "));
+  assert.equal(other.hp, 1);
+  assert.equal(other.alive, true);
+});
+
+void test("Phase 9 dying：globalHook 可监听其他角色濒死（挽危模式）", async () => {
+  const id = registerTestSkill(
+    "舍身救人",
+    {
+      dying: (ctx, payload, logs) => {
+        const holder = ctx.players.find((p) => ctx.hasSkill(p, id));
+        const dying = payload.actor;
+        if (!holder || !dying || dying.id === holder.id || !holder.alive) {
+          return;
+        }
+        dying.hp = 1;
+        holder.hp = 0;
+        logs.push(`TEST_DYING_RESCUE:${dying.id}`);
+      },
+    },
+    undefined,
+    { globalHook: true },
+  );
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  me.hp = 2;
+  other.hp = 0;
+  me.hand = [];
+  other.hand = [];
+
+  const resolveDeaths = (game as unknown as { resolveDeaths(): Promise<string[]> }).resolveDeaths.bind(game);
+  const logs = await resolveDeaths();
+
+  assert.ok(logs.some((line) => line === "TEST_DYING_RESCUE:p1"), logs.join(" / "));
+  assert.equal(other.hp, 1, "被救者应回到 1 点体力");
+  assert.equal(other.alive, true);
+  // 救人者自损到 0 体力：他在同次结算里已被扫过（座位在前），靠重扫才不被漏掉；
+  // 无桃可救，最终阵亡——关键是他得到了濒死结算，而不是带着 0 体力活着。
+  assert.equal(me.hp, 0);
+  assert.equal(me.alive, false, "救人者自损到 0 体力后应被重扫结算为阵亡（无桃）");
+});
+
+void test("Phase 9 轮次：回到起始座位时 round+1 且本轮已用标记清空", async () => {
+  const { game, players } = await setup(2);
+  const runtime = game as unknown as {
+    round: number;
+    roundStartIndex: number;
+    currentPlayerIndex: number;
+    staged: boolean;
+    markSkillUsedThisRound(playerId: string, skill: string): void;
+    isSkillUsedThisRound(playerId: string, skill: string): boolean;
+  };
+  // setup() 把 currentPlayerIndex 钉到 0，这里同步把轮次锚点也钉到 0；
+  // staged 关掉，让 finishTurn 直接链到下个 startTurn。
+  runtime.roundStartIndex = 0;
+  runtime.staged = false;
+  assert.equal(runtime.round, 1);
+  assert.equal(runtime.currentPlayerIndex, 0);
+
+  runtime.markSkillUsedThisRound("p0", "测试技能");
+  assert.equal(runtime.isSkillUsedThisRound("p0", "测试技能"), true);
+
+  const [me, other] = players as [Player, Player];
+  await game.startTurn();
+  await game.finishTurn(me);
+  assert.equal(runtime.currentPlayerIndex, 1, "甲回合结束应轮到乙");
+  assert.equal(runtime.round, 1, "未回到起始座位，轮次不变");
+  assert.equal(runtime.isSkillUsedThisRound("p0", "测试技能"), true, "同轮内标记不应清空");
+
+  await game.finishTurn(other);
+  assert.equal(runtime.currentPlayerIndex, 0, "乙回合结束应回到甲");
+  assert.equal(runtime.round, 2, "回到起始座位，轮次 +1");
+  assert.equal(runtime.isSkillUsedThisRound("p0", "测试技能"), false, "新一轮开始，本轮标记应清空");
 });
 
 void test("Phase 8：prepare_phase_start 在判定阶段之前、end_phase_start 在结束阶段入口发出", async () => {

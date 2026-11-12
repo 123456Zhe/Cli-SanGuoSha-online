@@ -21,6 +21,12 @@ export type SkillHooksContext = {
   decide(request: InteractionRequest): Promise<InteractionDecision>;
   nextInteractionId(): number;
   markSkillUsed(playerId: string, skill: SkillName): void;
+  /**
+   * Phase 9：本轮已用标记（"每轮限一次"类技能用；轮次回到起始座位时引擎自动清空，
+   * 与 `markSkillUsed` / `skillUsedThisTurn` 的每回合口径对应）。
+   */
+  markSkillUsedThisRound(playerId: string, skill: SkillName): void;
+  isSkillUsedThisRound(playerId: string, skill: SkillName): boolean;
   hasRemovableCard(player: Player): boolean;
   removeRandomCardFromPlayer(player: Player, mode: "弃置" | "获得", receiver?: Player): Promise<string[]>;
   drawJudgmentCard(reason: string, logs: string[], owner: Player): Promise<Card | null>;
@@ -284,6 +290,8 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
     equip_lost: [],
     card_used: [],
     peach_save: [],
+    // Phase 9：濒死（目前没有内置技能占用，全部留给外部武将包）。
+    dying: [],
     discard_phase_start: [],
     // Phase 8：结束阶段（目前没有内置技能占用，全部留给外部武将包）。
     end_phase_start: [],

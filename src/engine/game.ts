@@ -78,7 +78,9 @@ import {
   getLordWithZhiBa as getLordWithZhiBaImpl,
   hasSkill as playerHasSkill,
   isSkillUsed as playerIsSkillUsed,
+  isSkillUsedThisRound as playerIsSkillUsedThisRound,
   markSkillUsed as playerMarkSkillUsed,
+  markSkillUsedThisRound as playerMarkSkillUsedThisRound,
   resetTurnSkillState as playerResetTurnSkillState,
   shouldActivateOptionalEffect as playerShouldActivateOptionalEffect,
   SkillUseContext,
@@ -146,6 +148,12 @@ export class SanGuoGame {
 
   private turn: number;
 
+  /** Phase 9：当前轮次（从 1 开始；一轮 = 从起始座位到回到该座位之前的所有回合）。 */
+  private round: number;
+
+  /** Phase 9：本轮起始座位的下标（轮次回到该座位时 round +1；起始玩家阵亡则锚点顺延到下一位存活者）。 */
+  private roundStartIndex: number;
+
   private phase: TurnPhase;
 
   private slashUsedThisTurn: boolean;
@@ -163,6 +171,9 @@ export class SanGuoGame {
   private readonly rng: () => number;
 
   private skillUsedThisTurn: Map<string, Set<SkillName>>;
+
+  /** Phase 9：本轮已用过的技能（轮次推进时清空）。 */
+  private skillUsedThisRound: Map<string, Set<SkillName>>;
 
   private skillCountsThisTurn: Map<string, Map<SkillName, number>>;
 
@@ -213,6 +224,8 @@ export class SanGuoGame {
     this.discardPile = [];
     this.currentPlayerIndex = 0;
     this.turn = 1;
+    this.round = 1;
+    this.roundStartIndex = 0;
     this.phase = TurnPhase.Draw;
     this.slashUsedThisTurn = false;
     this.slashPlayedThisTurn = false;
@@ -220,6 +233,7 @@ export class SanGuoGame {
     this.wineUsedPlayerIds = new Set();
     this.winner = null;
     this.skillUsedThisTurn = new Map();
+    this.skillUsedThisRound = new Map();
     this.skillCountsThisTurn = new Map();
     this.skillFlagsThisTurn = new Map();
     this.skillHooks = createSkillHooks(this as unknown as SkillHooksContext);
@@ -265,6 +279,8 @@ export class SanGuoGame {
       this.currentPlayerIndex = 0;
     }
     this.turn = 1;
+    this.round = 1;
+    this.roundStartIndex = this.currentPlayerIndex;
     this.phase = TurnPhase.Draw;
     this.winner = null;
     this.slashUsedThisTurn = false;
@@ -272,6 +288,7 @@ export class SanGuoGame {
     this.wineBuffPlayerIds = new Set();
     this.wineUsedPlayerIds = new Set();
     this.skillUsedThisTurn = new Map();
+    this.skillUsedThisRound = new Map();
     this.skillCountsThisTurn = new Map();
     this.skillFlagsThisTurn = new Map();
     this.responsePolicyByPlayer.clear();
@@ -328,6 +345,8 @@ export class SanGuoGame {
     this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord);
     this.currentPlayerIndex = Math.max(0, this.currentPlayerIndex);
     this.turn = 1;
+    this.round = 1;
+    this.roundStartIndex = this.currentPlayerIndex;
     this.phase = TurnPhase.Draw;
     this.winner = null;
     this.slashUsedThisTurn = false;
@@ -335,6 +354,7 @@ export class SanGuoGame {
     this.wineBuffPlayerIds = new Set();
     this.wineUsedPlayerIds = new Set();
     this.skillUsedThisTurn = new Map();
+    this.skillUsedThisRound = new Map();
     this.skillCountsThisTurn = new Map();
     this.skillFlagsThisTurn = new Map();
     this.responsePolicyByPlayer.clear();
@@ -2504,8 +2524,14 @@ export class SanGuoGame {
       return;
     }
     let moved = false;
+    // Phase 9：轮次推进——遍历经过本轮起始座位即一轮结束（起始玩家已阵亡时，
+    // 遍历会直接越过其座位，轮次照常推进，锚点顺延到落点座位）。
+    let wrapped = false;
     for (let i = 0; i < this.players.length; i += 1) {
       this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+      if (this.currentPlayerIndex === this.roundStartIndex) {
+        wrapped = true;
+      }
       if (this.players[this.currentPlayerIndex]?.alive) {
         moved = true;
         break;
@@ -2513,6 +2539,11 @@ export class SanGuoGame {
     }
     if (moved) {
       this.turn += 1;
+      if (wrapped) {
+        this.round += 1;
+        this.roundStartIndex = this.currentPlayerIndex;
+        this.skillUsedThisRound = new Map();
+      }
     }
   }
 
@@ -2813,6 +2844,16 @@ export class SanGuoGame {
 
   private isSkillUsed(playerId: string, skill: SkillName): boolean {
     return playerIsSkillUsed(this as unknown as SkillUseContext, playerId, skill);
+  }
+
+  /** Phase 9：记一次"本轮已用过该技能"（供外部技能 ctx 调用）。 */
+  private markSkillUsedThisRound(playerId: string, skill: SkillName): void {
+    playerMarkSkillUsedThisRound(this as unknown as SkillUseContext, playerId, skill);
+  }
+
+  /** Phase 9：查"本轮是否已用过该技能"（供外部技能 ctx 调用）。 */
+  private isSkillUsedThisRound(playerId: string, skill: SkillName): boolean {
+    return playerIsSkillUsedThisRound(this as unknown as SkillUseContext, playerId, skill);
   }
 
   private canPlaySlashInTurn(player: Player): boolean {

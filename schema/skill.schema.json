@@ -49,6 +49,7 @@
           "equip_lost",
           "card_used",
           "peach_save",
+          "dying",
           "discard_phase_start",
           "end_phase_start",
           "provide_response"

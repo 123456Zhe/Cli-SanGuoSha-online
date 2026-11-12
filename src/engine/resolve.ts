@@ -793,52 +793,63 @@ export function resolveDeaths(ctx: ResolveContext): Promise<string[]> {
   return (async () => {
     if (ctx.deferDyingResolution) return [];
     const logs: string[] = [];
-    for (const player of ctx.players) {
-      if (!player.alive) {
-        continue;
-      }
-      if (player.hp > 0) {
-        continue;
-      }
-      // 濒死：每张桃只回复 1 点体力，必须回到 1 点以上才算脱离濒死，
-      // 因此欠 N 点就要 N+1 张桃（hp=-2 需要 3 张）。
-      // 先由濒死者本人自救（酒可当桃自救），可连续使用多张；
-      // 再由其他存活角色按座次顺序逐一救援，每人也可连续使用多张，
-      // 直到体力 > 0 或无人再出桃，未脱离则阵亡。
-      while (player.hp <= 0 && (await ctx.consumePeachResponse(player, player.id, logs))) {
-        player.hp = Math.min(player.maxHp, player.hp + 1);
-        logs.push(`${player.name} 自救，体力恢复到 ${player.hp}`);
-      }
-      if (player.hp <= 0) {
-        for (const rescuer of getRescuersInOrder(ctx, player)) {
-          while (player.hp <= 0 && (await ctx.consumePeachResponse(rescuer, player.id, logs))) {
-            let recovered = 1;
-            const peachSaveBonus = player.role === PlayerRole.Lord ? getSkillRules(player).peachSaveBonus : 0;
-            if (peachSaveBonus > 0 && getPlayerKingdom(ctx, rescuer) === KINGDOM.Wu) {
-              recovered += peachSaveBonus;
-              logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 ${peachSaveBonus} 点体力`);
+    // Phase 9：外层重扫——濒死钩子可能让已扫过的玩家掉到 0 体力（如挽危救人后自损），
+    // 单遍遍历会漏掉他们。每遍都把遇到的濒死者结算干净（救活或阵亡），因此只有钩子
+    // 新造出的濒死者会进入下一遍；上限 10 遍防失控。
+    for (let pass = 0; pass < 10; pass += 1) {
+      for (const player of ctx.players) {
+        if (!player.alive) {
+          continue;
+        }
+        if (player.hp > 0) {
+          continue;
+        }
+        // Phase 9：濒死触发点（桃救援之前发出；钩子可直接回血救人，体力回到 1 点以上后
+        // 下面的救援循环自动跳过）。
+        await ctx.emitSkillTrigger("dying", { actor: player, reason: "濒死" }, logs);
+        // 濒死：每张桃只回复 1 点体力，必须回到 1 点以上才算脱离濒死，
+        // 因此欠 N 点就要 N+1 张桃（hp=-2 需要 3 张）。
+        // 先由濒死者本人自救（酒可当桃自救），可连续使用多张；
+        // 再由其他存活角色按座次顺序逐一救援，每人也可连续使用多张，
+        // 直到体力 > 0 或无人再出桃，未脱离则阵亡。
+        while (player.hp <= 0 && (await ctx.consumePeachResponse(player, player.id, logs))) {
+          player.hp = Math.min(player.maxHp, player.hp + 1);
+          logs.push(`${player.name} 自救，体力恢复到 ${player.hp}`);
+        }
+        if (player.hp <= 0) {
+          for (const rescuer of getRescuersInOrder(ctx, player)) {
+            while (player.hp <= 0 && (await ctx.consumePeachResponse(rescuer, player.id, logs))) {
+              let recovered = 1;
+              const peachSaveBonus = player.role === PlayerRole.Lord ? getSkillRules(player).peachSaveBonus : 0;
+              if (peachSaveBonus > 0 && getPlayerKingdom(ctx, rescuer) === KINGDOM.Wu) {
+                recovered += peachSaveBonus;
+                logs.push(`${player.name} 的${SkillName.JiuYuan}生效，额外回复 ${peachSaveBonus} 点体力`);
+              }
+              // 拦截点 peach_save：每消耗一张救援桃发出；钩子可累加 peachSaveBonus 追加回复。
+              const rescuePayload: SkillEventPayload = { actor: player, source: rescuer, reason: "濒死救援" };
+              await ctx.emitSkillTrigger("peach_save", rescuePayload, logs);
+              const extra = Math.max(0, rescuePayload.peachSaveBonus ?? 0);
+              if (extra > 0) {
+                recovered += extra;
+                logs.push(`${player.name} 的救援技能生效，额外回复 ${extra} 点体力`);
+              }
+              player.hp = Math.min(player.maxHp, player.hp + recovered);
+              logs.push(`${rescuer.name} 对${player.name}使用${CardType.Peach}，其体力恢复到 ${player.hp}`);
             }
-            // 拦截点 peach_save：每消耗一张救援桃发出；钩子可累加 peachSaveBonus 追加回复。
-            const rescuePayload: SkillEventPayload = { actor: player, source: rescuer, reason: "濒死救援" };
-            await ctx.emitSkillTrigger("peach_save", rescuePayload, logs);
-            const extra = Math.max(0, rescuePayload.peachSaveBonus ?? 0);
-            if (extra > 0) {
-              recovered += extra;
-              logs.push(`${player.name} 的救援技能生效，额外回复 ${extra} 点体力`);
+            if (player.hp > 0) {
+              break;
             }
-            player.hp = Math.min(player.maxHp, player.hp + recovered);
-            logs.push(`${rescuer.name} 对${player.name}使用${CardType.Peach}，其体力恢复到 ${player.hp}`);
-          }
-          if (player.hp > 0) {
-            break;
           }
         }
+        if (player.hp <= 0) {
+          player.alive = false;
+          player.delayedTricks = [];
+          logs.push(`${player.name} 阵亡，身份：${player.role}`);
+          logs.push(...resolveKillReward(ctx, player));
+        }
       }
-      if (player.hp <= 0) {
-        player.alive = false;
-        player.delayedTricks = [];
-        logs.push(`${player.name} 阵亡，身份：${player.role}`);
-        logs.push(...resolveKillReward(ctx, player));
+      if (!ctx.players.some((p) => p.alive && p.hp <= 0)) {
+        break;
       }
     }
     return logs;

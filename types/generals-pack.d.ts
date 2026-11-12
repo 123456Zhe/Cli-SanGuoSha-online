@@ -120,10 +120,11 @@ export type ResponseKind = "dodge" | "slash" | "negate" | "peach";
 export type CardOrigin = "hand" | "treasure" | "equip";
 
 /**
- * 触发点与拦截点（共 14 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
+ * 触发点与拦截点（共 15 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
  * loader 只接受这里的字符串，写错会被静默丢弃（`npm run generals:check` 会报出来）。
  *
- * - 事件类：`prepare_phase_start` / `turn_start` / `before_draw` / `before_damage` / `after_damage`
+ * - 事件类：`prepare_phase_start` / `turn_start` / `before_draw` / `before_damage` / `after_damage` /
+ *   `dying`（进入濒死状态时，桃救援之前；钩子可直接回血救人）
  * - 拦截类：`judgment` / `slash_targeted` / `hand_card_lost` / `equip_lost` /
  *   `card_used` / `peach_save` / `discard_phase_start` / `end_phase_start` / `provide_response`
  */
@@ -139,6 +140,7 @@ export type SkillTrigger =
   | "equip_lost"
   | "card_used"
   | "peach_save"
+  | "dying"
   | "discard_phase_start"
   | "end_phase_start"
   | "provide_response";
@@ -366,6 +368,8 @@ export type SkillModuleCtx = {
   slashUsedThisTurn: boolean;
   rng: () => number;
   skillUsedThisTurn: Map<string, Set<string>>;
+  /** Phase 9：本轮已用过的技能（轮次回到起始座位时引擎自动清空）。 */
+  skillUsedThisRound: Map<string, Set<string>>;
   skillCountsThisTurn: Map<string, Map<string, number>>;
   skillFlagsThisTurn: Map<string, Set<string>>;
   optionalEffectDecisions: Map<string, boolean>;
@@ -378,6 +382,9 @@ export type SkillModuleCtx = {
   nextInteractionId(): number;
   hasSkill(player: Player, skill: string): boolean;
   markSkillUsed(playerId: string, skill: string): void;
+  /** Phase 9：记一次"本轮已用过该技能" / 查"本轮是否已用过该技能"（"每轮限一次"类技能用）。 */
+  markSkillUsedThisRound(playerId: string, skill: string): void;
+  isSkillUsedThisRound(playerId: string, skill: string): boolean;
   shouldActivateOptionalEffect(player: Player, effect: string): Promise<boolean>;
   /** 玩家可用的全部来源（手牌 + 木牛内牌），统一编号。 */
   buildUsableSources(player: Player): CardSource[];

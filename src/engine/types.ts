@@ -180,11 +180,14 @@ export type GeneralDefinition = {
 
 /**
  * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 的 7 个拦截点 + Phase 7 的 `provide_response`
- * + Phase 8 的准备/结束阶段触发点，共 14 个）。
+ * + Phase 8 的准备/结束阶段触发点 + Phase 9 的 `dying`，共 15 个）。
  *
  * 事件类触发点只通知（钩子可改写 payload 里的数值，如 `drawCount`）；
  * 拦截类触发点可改写/否决引擎即将执行的行为（`judgment` / `slash_targeted` / `peach_save` /
  * `discard_phase_start` / `provide_response`，见各字段注释）。
+ * `dying` 是事件类（`actor` 为濒死者，`reason` 为"濒死"），在桃救援之前发出：
+ * 钩子可直接回复濒死者体力救人（如挽危/约俭），体力回到 1 点以上后救援循环自动跳过；
+ * 监听"其他角色濒死"时技能须声明 `globalHook: true`。
  * 单一真相：`SkillTrigger` 由本数组派生，loader 校验与钩子分发都读它，避免多处清单漂移。
  */
 export const SKILL_TRIGGERS = [
@@ -200,6 +203,8 @@ export const SKILL_TRIGGERS = [
   "equip_lost",
   "card_used",
   "peach_save",
+  // Phase 9：进入濒死状态时（桃救援之前发出；钩子可直接回复濒死者体力救人）。
+  "dying",
   "discard_phase_start",
   "end_phase_start",
   "provide_response",

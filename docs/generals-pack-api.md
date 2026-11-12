@@ -94,6 +94,7 @@ type SkillModule = {
 | `equip_lost` | 事件 | 装备离开装备区（被弃置/获得/替换） | — |
 | `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | — |
 | `peach_save` | 拦截 | 濒死时每消耗一张救援桃 | `peachSaveBonus`（累加额外回复点数） |
+| `dying` | 事件 | 进入濒死状态时（桃救援之前） | —（钩子可直接回复濒死者体力救人，体力回到 1 点以上后救援循环自动跳过；监听他人濒死须声明 `globalHook: true`） |
 | `discard_phase_start` | 拦截 | 弃牌阶段入口 | `skipDiscardPhase = true` 跳过整个弃牌阶段（钩子自行处理"是否发动"询问） |
 | `end_phase_start` | 事件 | 结束阶段入口（弃牌阶段之后、回合结束之前） | — |
 | `provide_response` | 拦截 | 需要响应（闪/杀/无懈可击/桃）、**在"没有任何来源 → 判定无法响应"之前** | `responseSources`（就地 push 额外可选来源；push 的来源必须带 `viaSkill`，否则不被接受） |
@@ -231,6 +232,7 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 - 弃牌/失去牌：`requestDiscardSelection` / `requestFlexibleDiscard` / `removeHandCardAt` / `removeUsableCardBySourceId` / `discardFromPlayerHand` / `discardSelfCards`。
 - 伤害/死亡：`applyDamage`（随后必须自己结算死亡/胜负，见下）、`useSlash(attacker, target, {kind, card})`（完整结算一张杀：含闪响应/铁骑/藤甲/濒死/胜负/回合推进）。
 - 回合状态：`skillUsedThisTurn` / `markSkillUsed`（外部技能无 `oncePerTurn` 自动限制，需要限次请在 `canUse` 里查 `skillUsedThisTurn` 并在 `play` 里 `markSkillUsed`）。
+- 轮次状态（Phase 9）：`skillUsedThisRound` / `markSkillUsedThisRound` / `isSkillUsedThisRound`（"每轮限一次"类技能用；轮次回到起始座位时引擎自动清空，与每回合口径对应）。
 
 调用方必须自己做的事（漏做会静默坏掉）：
 
@@ -240,7 +242,7 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 - 随机数禁止 `Math.random`，用 `ctx.randomIndex`，否则 `--seed` 复现与联机一致性失效。
 - `judgment` 钩子改判时，必须自己把替换牌从原区域移除（`removeHandCardAt` / `removeUsableCardBySourceId`）；引擎只负责把它置入弃牌堆。
 - `hand_card_lost` 属于"通知"型钩子：调用方没传 `logs` 时（如 `takeRandomHandCard`）钩子日志会被丢弃，别把关键状态只写进日志。
-- `peach_save` / `discard_phase_start` 是"拦截"型钩子：改的是 payload 字段（`peachSaveBonus` / `skipDiscardPhase`），不要自己直接改 `player.hp` 或跳过结算。
+- `peach_save` / `discard_phase_start` 是"拦截"型钩子：改的是 payload 字段（`peachSaveBonus` / `skipDiscardPhase`），不要自己直接改 `player.hp` 或跳过结算。`dying` 是"事件"型钩子，救人就是靠直接回复濒死者体力（与 `peach_save` 不同）；钩子内让其他玩家掉到 0 体力时，引擎会在同一次死亡结算里重扫处理，不会漏结算。
 - **触发性技能没有"交互式选目标"**：`InteractionRequest` 只有 `respond`/`collateral`/`choose-discard`/`choose-suit`/`optional-effect` 五种，没有"选一名玩家"。内置技能的做法是**自动挑选**（「英魂」按体力/手牌排序取第一个）或使用固定目标（「反馈」= 伤害来源、「奸雄」= 自己）。需要玩家真正点人的技能请做成 `kind: "active"`（`getTargets` + `play(targetId)`），或像内置那样自动挑并在 `description` 里说明。
 - **`judgment` 钩子只能改判"归属者自己"的判定**：`drawJudgmentCard` 的 payload 只有 `actor = owner`，包钩子又只在事件相关玩家（`actor`/`target`/`source`）拥有该技能时执行。所以外部「鬼道」这类技能影响不到别人的判定——内置「鬼才」不受限，因为它的实现在 `game.ts` 里做全局玩家搜索。这是内置与外部的一处真实能力不对称。
 - **需要监听他人事件的钩子请声明 `globalHook: true`**（Phase 8）：默认过滤下，事件相关玩家不持有本技能时钩子根本不会执行（如武庫要监听"其他角色失去装备"，失去者不是持有者）。置 `true` 后每次事件都触发，钩子必须先在 `ctx.players` 里定位持有者（`ctx.hasSkill(player, "群杜预/武库")`）再做事，否则会在无关事件上空转。

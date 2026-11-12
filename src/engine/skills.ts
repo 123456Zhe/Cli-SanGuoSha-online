@@ -23,6 +23,8 @@ export type SkillUseContext = {
   phase: TurnPhase;
   slashUsedThisTurn: boolean;
   skillUsedThisTurn: Map<string, Set<SkillName>>;
+  /** Phase 9：本轮已用过的技能（轮次回到起始座位时引擎自动清空）。 */
+  skillUsedThisRound: Map<string, Set<SkillName>>;
   skillCountsThisTurn: Map<string, Map<SkillName, number>>;
   skillFlagsThisTurn: Map<string, Set<SkillName>>;
   optionalEffectDecisions: Map<string, boolean>;
@@ -85,6 +87,18 @@ export function isSkillUsed(ctx: SkillUseContext, playerId: string, skill: Skill
     return false;
   }
   return state.has(skill);
+}
+
+/** Phase 9：记一次"本轮已用过该技能"（与 `markSkillUsed` 的每回合口径对应）。 */
+export function markSkillUsedThisRound(ctx: SkillUseContext, playerId: string, skill: SkillName): void {
+  const state = ctx.skillUsedThisRound.get(playerId) ?? new Set<SkillName>();
+  state.add(skill);
+  ctx.skillUsedThisRound.set(playerId, state);
+}
+
+/** Phase 9：查"本轮是否已用过该技能"。 */
+export function isSkillUsedThisRound(ctx: SkillUseContext, playerId: string, skill: SkillName): boolean {
+  return ctx.skillUsedThisRound.get(playerId)?.has(skill) ?? false;
 }
 
 export function getTurnSkillCount(ctx: SkillUseContext, playerId: string, skill: SkillName): number {

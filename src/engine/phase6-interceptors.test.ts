@@ -327,6 +327,52 @@ void test("card_used：使用牌时触发（reason=使用）", async () => {
   assert.ok(logs.includes("TEST_CARD_USED"), logs.join(" / "));
 });
 
+void test("card_used：payload.targets 按指定目标填入（杀/南蛮有目标、无中生有没有）", async () => {
+  const captured: Array<{ card: CardType; targets: string[] }> = [];
+  const id = registerTestSkill("记目标", {
+    card_used: (ctx, payload, logs) => {
+      if (payload.actor && ctx.hasSkill(payload.actor, id) && payload.card) {
+        captured.push({
+          card: payload.card.type,
+          targets: (payload.targets ?? []).map((p) => p.id),
+        });
+        logs.push("TEST_CARD_TARGETS");
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  me.hand = [
+    makeCard("slash", CardType.Slash),
+    makeCard("nihilo", CardType.ExNihilo),
+    makeCard("barbarian", CardType.Barbarian),
+  ];
+
+  const slash = game.getPlayableActions(me.id).find((action) => action.type === "play" && action.cardIndex === 0);
+  assert.ok(slash, "应能出杀");
+  const logs = await game.playAction(me.id, slash, other.id);
+  assert.ok(logs.includes("TEST_CARD_TARGETS"), logs.join(" / "));
+
+  const nihilo = game
+    .getPlayableActions(me.id)
+    .find((action) => action.type === "play" && me.hand[action.cardIndex]?.type === CardType.ExNihilo);
+  assert.ok(nihilo, "应能用无中生有");
+  await game.playAction(me.id, nihilo);
+
+  const barbarian = game
+    .getPlayableActions(me.id)
+    .find((action) => action.type === "play" && me.hand[action.cardIndex]?.type === CardType.Barbarian);
+  assert.ok(barbarian, "应能用南蛮入侵");
+  await game.playAction(me.id, barbarian);
+
+  assert.deepEqual(captured, [
+    { card: CardType.Slash, targets: [other.id] },
+    { card: CardType.ExNihilo, targets: [] },
+    { card: CardType.Barbarian, targets: [other.id] },
+  ]);
+});
+
 void test("card_used：打出响应牌时触发（reason=打出）且记录本回合打出过杀", async () => {
   const captured: string[] = [];
   const id = registerTestSkill("响应", {

@@ -1379,7 +1379,22 @@ export class SanGuoGame {
     this.discardPile.push(usedCard);
     const logs: string[] = [];
     // 拦截点 card_used：使用一张牌时（结算前）通知，reason="使用"。
-    await this.emitSkillTrigger("card_used", { actor: player, card: usedCard, reason: "使用" }, logs);
+    // targets 按"指定目标"口径填入：有 targetId 的牌取该角色（杀的丈八蛇矛追加目标在结算时展开，不在此列）；
+    // 全体锦囊按实际影响范围展开；无目标的牌（无中生有/桃/酒/装备）为空数组。
+    const usedTargets: Player[] = targetId
+      ? [this.mustGetPlayer(targetId)]
+      : usedCard.type === CardType.Barbarian || usedCard.type === CardType.ArrowRain
+        ? this.players.filter((p) => p.alive && p.id !== player.id)
+        : usedCard.type === CardType.PeachGarden || usedCard.type === CardType.Harvest
+          ? this.players.filter((p) => p.alive)
+          : usedCard.type === CardType.Lightning
+            ? [player]
+            : [];
+    await this.emitSkillTrigger(
+      "card_used",
+      { actor: player, card: usedCard, reason: "使用", targets: usedTargets },
+      logs,
+    );
     if (fromTreasure) {
       logs.push(`${player.name} 从${CardType.WoodenOx}下使用了 ${usedCard.type}`);
     }

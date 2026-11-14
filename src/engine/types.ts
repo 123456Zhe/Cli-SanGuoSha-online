@@ -216,6 +216,13 @@ export type SkillEventPayload = {
   actor?: Player;
   source?: Player | null;
   target?: Player;
+  /**
+   * `card_used`：本次使用牌的目标（结算前发出；无目标的牌为空数组）。
+   * 全体锦囊按实际影响范围填入：南蛮入侵/万箭齐发 = 除使用者外的所有存活角色；
+   * 五谷丰登/桃园结义 = 所有存活角色；闪电 = 使用者本人。
+   * 打出响应牌（reason="打出"）时不填。
+   */
+  targets?: Player[];
   drawCount?: number;
   damage?: number;
   reason?: string;

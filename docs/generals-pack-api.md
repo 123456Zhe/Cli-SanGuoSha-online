@@ -92,7 +92,7 @@ type SkillModule = {
 | `slash_targeted` | 拦截 | 杀已确定目标、目标尚未响应时 | `canceled = true` 取消本次杀 |
 | `hand_card_lost` | 事件 | 任何"失去手牌"路径（`removeHandCardAt`） | — |
 | `equip_lost` | 事件 | 装备离开装备区（被弃置/获得/替换） | — |
-| `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | — |
+| `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | —（只读字段 `targets`：本次使用牌的目标，结算前填入；无目标的牌为空数组；全体锦囊按实际影响范围展开；`reason="打出"` 时不填） |
 | `peach_save` | 拦截 | 濒死时每消耗一张救援桃 | `peachSaveBonus`（累加额外回复点数） |
 | `dying` | 事件 | 进入濒死状态时（桃救援之前） | —（钩子可直接回复濒死者体力救人，体力回到 1 点以上后救援循环自动跳过；监听他人濒死须声明 `globalHook: true`） |
 | `discard_phase_start` | 拦截 | 弃牌阶段入口 | `skipDiscardPhase = true` 跳过整个弃牌阶段（钩子自行处理"是否发动"询问） |

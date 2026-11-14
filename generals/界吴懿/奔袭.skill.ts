@@ -79,7 +79,7 @@ return;
 }
 const removed = await ctx.removeUsableCardBySourceId(actor, pick.sourceId);
 if (removed) {
-ctx.discardPile.push(removed);
+await ctx.discardCards([removed], actor, "弃置", logs);
 }
 // 步骤二：摸一张牌。
 const drawn = ctx.drawCards(actor.id, 1);

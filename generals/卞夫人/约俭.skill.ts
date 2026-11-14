@@ -44,7 +44,7 @@ logs.push(`${actor.name} 发动【约俭】失败：未弃置两张牌`);
 return;
 }
 for (const card of discarded) {
-ctx.discardPile.push(card);
+await ctx.discardCards([card], actor, "弃置", logs);
 }
 const before = actor.hp;
 actor.hp = Math.min(actor.maxHp, actor.hp + 1);

@@ -59,15 +59,15 @@ allowPass: false,
 if (decision.choice!== "card") {
 return [`${player.name} 发动奇袭失败：未选择黑色牌`];
 }
-// requestDiscardSelection / choose-discard 返回的牌不会自动进弃牌堆，调用方手动置入。
+// requestDiscardSelection / choose-discard 返回的牌不会自动进弃牌堆，调用方用 ctx.discardCards 置入（发 card_discarded 触发点）。
 const removed = await ctx.removeUsableCardBySourceId(player, decision.sourceId);
 const logs: string[] = [];
 if (!removed) {
 logs.push(`${player.name} 发动奇袭失败：所选牌已不在可用区域中`);
 return logs;
 }
-ctx.discardPile.push(removed);
 logs.push(`${player.name} 将一张黑色牌当【过河拆桥】使用，指定 ${target.name}`);
+await ctx.discardCards([removed], player, "弃置", logs);
 logs.push(...(await ctx.removeRandomCardFromPlayer(target, "弃置", undefined)));
 ctx.markSkillUsed(player.id, "奇袭");
 return logs;

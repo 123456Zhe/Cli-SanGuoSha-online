@@ -180,7 +180,7 @@ export type GeneralDefinition = {
 
 /**
  * 技能触发点 / 拦截点（Phase 0 的 4 个基础触发点 + Phase 6 的 7 个拦截点 + Phase 7 的 `provide_response`
- * + Phase 8 的准备/结束阶段触发点 + Phase 9 的 `dying`，共 15 个）。
+ * + Phase 8 的准备/结束阶段触发点 + Phase 9 的 `dying` + Phase 10 的 `card_discarded`，共 16 个）。
  *
  * 事件类触发点只通知（钩子可改写 payload 里的数值，如 `drawCount`）；
  * 拦截类触发点可改写/否决引擎即将执行的行为（`judgment` / `slash_targeted` / `peach_save` /
@@ -188,6 +188,10 @@ export type GeneralDefinition = {
  * `dying` 是事件类（`actor` 为濒死者，`reason` 为"濒死"），在桃救援之前发出：
  * 钩子可直接回复濒死者体力救人（如挽危/约俭），体力回到 1 点以上后救援循环自动跳过；
  * 监听"其他角色濒死"时技能须声明 `globalHook: true`。
+ * `card_discarded` 是事件类（`actor` 为牌的原主，`card` 为进入弃牌堆的牌，`reason` 为"弃置"/"判定"），
+ * 在牌置入弃牌堆后逐张发出：钩子可把该牌从弃牌堆移走获得之（如落英）；监听"其他角色弃牌"时
+ * 技能须声明 `globalHook: true`。只有"弃置/判定"原因的入堆才发此触发点，"使用/打出"的牌入堆不发
+ * （如使用过的杀、打出的闪）；装备重建牌、拼点牌、洛神红牌也不发。
  * 单一真相：`SkillTrigger` 由本数组派生，loader 校验与钩子分发都读它，避免多处清单漂移。
  */
 export const SKILL_TRIGGERS = [
@@ -205,6 +209,8 @@ export const SKILL_TRIGGERS = [
   "peach_save",
   // Phase 9：进入濒死状态时（桃救援之前发出；钩子可直接回复濒死者体力救人）。
   "dying",
+  // Phase 10：牌因弃置/判定进入弃牌堆时（逐张发出，见 `card`/`reason` 字段注释）。
+  "card_discarded",
   "discard_phase_start",
   "end_phase_start",
   "provide_response",
@@ -226,7 +232,10 @@ export type SkillEventPayload = {
   drawCount?: number;
   damage?: number;
   reason?: string;
-  /** 造成本次伤害的牌（如杀/决斗/锦囊），供奸雄等技能获取；`card_used`/`hand_card_lost` 里也复用此字段 */
+  /**
+   * 造成本次伤害的牌（如杀/决斗/锦囊），供奸雄等技能获取；`card_used`/`hand_card_lost` 里也复用此字段。
+   * `card_discarded`：进入弃牌堆的牌（钩子可按 id 从 `ctx.discardPile` 取走）。
+   */
   card?: Card;
   /**
    * `judgment`：本次判定牌。钩子可把它换成别的牌实现"改判"（引擎负责把替换牌置入弃牌堆并记录日志）。

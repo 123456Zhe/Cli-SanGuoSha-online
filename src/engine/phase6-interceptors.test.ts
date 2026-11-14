@@ -401,6 +401,101 @@ void test("card_used：打出响应牌时触发（reason=打出）且记录本�
   assert.ok(logs.includes("TEST_CARD_PLAYED"), logs.join(" / "));
 });
 
+void test("card_discarded：弃牌阶段弃牌时逐张触发（reason=弃置，actor 为弃牌者）", async () => {
+  const captured: Array<{ actor: string; card: string; reason: string }> = [];
+  const id = registerTestSkill("记弃牌", {
+    card_discarded: (ctx, payload, logs) => {
+      if (payload.actor && payload.card) {
+        captured.push({ actor: payload.actor.id, card: payload.card.id, reason: payload.reason ?? "?" });
+        logs.push("TEST_CARD_DISCARDED");
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me] = players as [Player, Player];
+  me.skills = [id];
+  me.isAI = true;
+  me.hp = 3;
+  me.hand = fullHand();
+
+  const logs = await endPlayPhase(game, me.id);
+  assert.ok(logs.includes("TEST_CARD_DISCARDED"), logs.join(" / "));
+  assert.equal(captured.length, 2, "5 手牌、上限 3，应弃 2 张并触发 2 次");
+  assert.ok(captured.every((entry) => entry.actor === me.id && entry.reason === "弃置"));
+  assert.equal(me.hand.length, 3);
+});
+
+void test("card_discarded：判定牌入弃牌堆时触发（reason=判定），使用/打出的牌入堆不触发", async () => {
+  const captured: Array<{ card: string; reason: string }> = [];
+  const id = registerTestSkill("记判定弃牌", {
+    card_discarded: (ctx, payload, logs) => {
+      if (payload.actor && payload.card) {
+        captured.push({ card: payload.card.id, reason: payload.reason ?? "?" });
+        logs.push("TEST_CARD_DISCARDED");
+      }
+    },
+  });
+  const { game, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  me.hand = [makeCard("slash", CardType.Slash, "club")];
+
+  // 判定：直接调 drawJudgmentCard（白盒，绕过判定阶段编排）。
+  const logs: string[] = [];
+  const drawJudgmentCard = (
+    game as unknown as {
+      drawJudgmentCard(reason: string, logs: string[], owner?: Player): Promise<Card | null>;
+    }
+  ).drawJudgmentCard.bind(game);
+  const judgment = await drawJudgmentCard("测试判定", logs, me);
+  assert.ok(judgment, "应能翻出判定牌");
+  assert.deepEqual(captured, [{ card: judgment.id, reason: "判定" }]);
+
+  // 使用：梅花杀使用后入弃牌堆，不应触发 card_discarded。
+  const slash = game.getPlayableActions(me.id).find((action) => action.type === "play" && action.cardIndex === 0);
+  assert.ok(slash, "应能出杀");
+  await game.playAction(me.id, slash, other.id);
+  assert.equal(captured.length, 1, "使用过的杀入堆不应触发 card_discarded");
+  assert.ok(logs.includes("TEST_CARD_DISCARDED"), logs.join(" / "));
+});
+
+void test("card_discarded：globalHook 可监听他人弃牌，钩子可从弃牌堆取走梅花牌（落英模式）", async () => {
+  const id = registerTestSkill(
+    "落英样例",
+    {
+      card_discarded: (ctx, payload, logs) => {
+        const holder = ctx.players.find((p) => ctx.hasSkill(p, id));
+        if (!holder || !payload.actor || !payload.card) return;
+        if (payload.actor.id === holder.id) return;
+        if (payload.card.suit !== "club") return;
+        const index = ctx.discardPile.findIndex((item) => item.id === payload.card?.id);
+        if (index < 0) return;
+        const [taken] = ctx.discardPile.splice(index, 1);
+        if (taken) {
+          holder.hand.push(taken);
+          logs.push("TEST_LUO_YING_TOOK_CARD");
+        }
+      },
+    },
+    undefined,
+    { globalHook: true },
+  );
+  const { game, runtime, players } = await setup();
+  const [me, other] = players as [Player, Player];
+  me.skills = [id];
+  // 乙的回合：AI 自动弃牌；rng 恒 0，randomIndex(2)=0，弃手牌首张（梅花杀）。
+  runtime.currentPlayerIndex = 1;
+  other.isAI = true;
+  other.hp = 1;
+  other.hand = [makeCard("club-slash", CardType.Slash, "club"), makeCard("heart-dodge", CardType.Dodge, "heart")];
+
+  const logs = await endPlayPhase(game, other.id);
+  assert.ok(logs.includes("TEST_LUO_YING_TOOK_CARD"), logs.join(" / "));
+  assert.ok(me.hand.some((card) => card.id === "club-slash"), "甲应获得乙弃置的梅花杀");
+  assert.ok(!(game as unknown as { discardPile: Card[] }).discardPile.some((card) => card.id === "club-slash"), "梅花杀已被取走，不应在弃牌堆");
+  assert.equal(other.hand.length, 1, "乙弃 1 张后剩 1 张");
+});
+
 void test("slash_targeted：钩子可取消本次杀", async () => {
   const id = registerTestSkill("护体", {
     slash_targeted: (ctx, payload, logs) => {
@@ -451,7 +546,7 @@ void test("peach_save：钩子可追加濒死回复量", async () => {
   assert.equal(other.alive, true);
 });
 
-void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response + Phase 8 的准备/结束阶段 + Phase 9 的 dying", async () => {
+void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 + Phase 7 的 provide_response + Phase 8 的准备/结束阶段 + Phase 9 的 dying + Phase 10 的 card_discarded", async () => {
   const { SKILL_TRIGGERS } = await import("./types.js");
   for (const trigger of ["turn_start", "before_draw", "before_damage", "after_damage"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含基础触发点 ${trigger}`);
@@ -468,7 +563,10 @@ void test("SKILL_TRIGGERS 覆盖 4 个基础触发点 + 7 个 Phase 6 拦截点 
   for (const trigger of ["dying"]) {
     assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 9 触发点 ${trigger}`);
   }
-  assert.equal(SKILL_TRIGGERS.length, 15);
+  for (const trigger of ["card_discarded"]) {
+    assert.ok((SKILL_TRIGGERS as readonly string[]).includes(trigger), `SKILL_TRIGGERS 应包含 Phase 10 触发点 ${trigger}`);
+  }
+  assert.equal(SKILL_TRIGGERS.length, 16);
 });
 
 void test("Phase 9 dying：钩子在桃救援之前发出，可直接回血救人（无桃也存活）", async () => {

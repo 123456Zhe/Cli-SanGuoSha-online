@@ -59,7 +59,7 @@ type SkillModule = {
   displayName: string;
   kind: SkillKind;
   description: string;            // 必填：AI 与 UI 的唯一来源
-  triggers?: SkillTrigger[];      // 4 个基础触发点 + 8 个拦截点（共 12 个，见下表）
+  triggers?: SkillTrigger[];      // 触发点/拦截点（共 16 个，见下表）
   optional?: boolean;
   priority?: number;
   requiresTarget?: boolean;
@@ -95,6 +95,7 @@ type SkillModule = {
 | `card_used` | 事件 | 使用一张牌（`reason="使用"`）或打出一张响应牌（`reason="打出"`） | —（只读字段 `targets`：本次使用牌的目标，结算前填入；无目标的牌为空数组；全体锦囊按实际影响范围展开；`reason="打出"` 时不填） |
 | `peach_save` | 拦截 | 濒死时每消耗一张救援桃 | `peachSaveBonus`（累加额外回复点数） |
 | `dying` | 事件 | 进入濒死状态时（桃救援之前） | —（钩子可直接回复濒死者体力救人，体力回到 1 点以上后救援循环自动跳过；监听他人濒死须声明 `globalHook: true`） |
+| `card_discarded` | 事件 | 牌因弃置（`reason="弃置"`）或判定（`reason="判定"`）进入弃牌堆后，逐张发出 | —（`actor` 为牌的原主，`card` 为入堆的牌；钩子可按 id 从 `ctx.discardPile` 取走该牌，如落英；监听他人弃牌须声明 `globalHook: true`。只有弃置/判定原因才发，"使用/打出"的牌入堆、装备重建牌、拼点牌、洛神红牌均不发。判定牌在判定结算前即入堆，故落英先于天妒获得是既定顺序） |
 | `discard_phase_start` | 拦截 | 弃牌阶段入口 | `skipDiscardPhase = true` 跳过整个弃牌阶段（钩子自行处理"是否发动"询问） |
 | `end_phase_start` | 事件 | 结束阶段入口（弃牌阶段之后、回合结束之前） | — |
 | `provide_response` | 拦截 | 需要响应（闪/杀/无懈可击/桃）、**在"没有任何来源 → 判定无法响应"之前** | `responseSources`（就地 push 额外可选来源；push 的来源必须带 `viaSkill`，否则不被接受） |
@@ -229,14 +230,14 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 
 - 摸牌/看牌：`drawCard` / `drawCards` / `drawTopCards` / `placeCardsOnTop` / `placeCardsOnBottom`。
 - 交互：`decide(request)` + `nextInteractionId()` + `shouldActivateOptionalEffect`。
-- 弃牌/失去牌：`requestDiscardSelection` / `requestFlexibleDiscard` / `removeHandCardAt` / `removeUsableCardBySourceId` / `discardFromPlayerHand` / `discardSelfCards`。
+- 弃牌/失去牌：`requestDiscardSelection` / `requestFlexibleDiscard` / `removeHandCardAt` / `removeUsableCardBySourceId` / `discardFromPlayerHand` / `discardSelfCards` / `discardCards`（牌因弃置/判定入堆的中央入口，见下）。
 - 伤害/死亡：`applyDamage`（随后必须自己结算死亡/胜负，见下）、`useSlash(attacker, target, {kind, card})`（完整结算一张杀：含闪响应/铁骑/藤甲/濒死/胜负/回合推进）。
 - 回合状态：`skillUsedThisTurn` / `markSkillUsed`（外部技能无 `oncePerTurn` 自动限制，需要限次请在 `canUse` 里查 `skillUsedThisTurn` 并在 `play` 里 `markSkillUsed`）。
 - 轮次状态（Phase 9）：`skillUsedThisRound` / `markSkillUsedThisRound` / `isSkillUsedThisRound`（"每轮限一次"类技能用；轮次回到起始座位时引擎自动清空，与每回合口径对应）。
 
 调用方必须自己做的事（漏做会静默坏掉）：
 
-- `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己 `discardPile.push`（见 `skills.ts` 现有写法）。
+- `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己用 `ctx.discardCards([card], actor, "弃置", logs)` 置入（逐张发 `card_discarded` 触发点，供落英等技能监听）；不要直接 `ctx.discardPile.push`，否则监听弃牌的技能收不到触发点。**例外**："使用/打出"的牌入堆、展示后置入弃牌堆（如涯角/称象未获得的牌）、装备重建牌仍直接 `discardPile.push`——这些不是"弃置"，落英不应触发。
 - 造成伤害后必须走 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead`，否则濒死/胜负不结算。
 - 失去手牌必须走 `removeHandCardAt`，否则连营不触发。
 - 随机数禁止 `Math.random`，用 `ctx.randomIndex`，否则 `--seed` 复现与联机一致性失效。

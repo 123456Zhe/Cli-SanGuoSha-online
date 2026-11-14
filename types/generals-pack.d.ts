@@ -120,11 +120,12 @@ export type ResponseKind = "dodge" | "slash" | "negate" | "peach";
 export type CardOrigin = "hand" | "treasure" | "equip";
 
 /**
- * 触发点与拦截点（共 15 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
+ * 触发点与拦截点（共 16 个）。**单一真相**是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`，
  * loader 只接受这里的字符串，写错会被静默丢弃（`npm run generals:check` 会报出来）。
  *
  * - 事件类：`prepare_phase_start` / `turn_start` / `before_draw` / `before_damage` / `after_damage` /
- *   `dying`（进入濒死状态时，桃救援之前；钩子可直接回血救人）
+ *   `dying`（进入濒死状态时，桃救援之前；钩子可直接回血救人）/
+ *   `card_discarded`（牌因弃置/判定进入弃牌堆时，逐张发出；钩子可把牌从弃牌堆取走）
  * - 拦截类：`judgment` / `slash_targeted` / `hand_card_lost` / `equip_lost` /
  *   `card_used` / `peach_save` / `discard_phase_start` / `end_phase_start` / `provide_response`
  */
@@ -141,6 +142,7 @@ export type SkillTrigger =
   | "card_used"
   | "peach_save"
   | "dying"
+  | "card_discarded"
   | "discard_phase_start"
   | "end_phase_start"
   | "provide_response";
@@ -266,8 +268,15 @@ export type SkillEventPayload = {
   /** `before_draw`：可改写摸牌数。 */
   drawCount?: number;
   damage?: number;
-  /** `card_used`：`"使用"` 或 `"打出"`；其他触发点含义另见文档。 */
+  /**
+   * `card_used`：`"使用"` 或 `"打出"`；`card_discarded`：`"弃置"` 或 `"判定"`；
+   * 其他触发点含义另见文档。
+   */
   reason?: string;
+  /**
+   * `card_discarded`：进入弃牌堆的牌（钩子可按 id 从 `ctx.discardPile` 取走，如落英）。
+   * 其他触发点见 `src/engine/types.ts` 的字段注释。
+   */
   card?: Card;
   /** `judgment`：判定牌；改成别的牌 = 改判（替换牌须由钩子自己从原区域移除）。 */
   judgmentCard?: Card;
@@ -406,6 +415,13 @@ export type SkillModuleCtx = {
   placeCardsOnBottom(cards: Card[]): void;
   discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number>;
   discardSelfCards(player: Player, count: number): Promise<string[]>;
+  /**
+   * Phase 10：牌因"弃置/判定"进入弃牌堆的中央入口——逐张置入并发出 `card_discarded`
+   * 触发点（`actor` 为牌的原主）。**包技能弃牌时一律走这里，不要直接 `ctx.discardPile.push`**，
+   * 否则落英等监听弃牌的技能收不到触发点；"使用/打出"的牌入堆仍直接 push。
+   * 调用方负责先把牌从原区域移出（`requestDiscardSelection` 返回的牌已移出）。
+   */
+  discardCards(cards: Card[], actor: Player, reason: "弃置" | "判定", logs: string[]): Promise<void>;
   takeRandomHandCard(player: Player, receiver: Player): Promise<Card | undefined>;
   hasRemovableCard(player: Player): boolean;
   removeRandomCardFromPlayer(player: Player, mode: "弃置" | "获得", receiver?: Player): Promise<string[]>;

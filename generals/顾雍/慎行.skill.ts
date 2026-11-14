@@ -33,7 +33,7 @@ logs.push(`${player.name} 发动【慎行】失败：未弃足两张牌`);
 return logs;
 }
 for (const card of discarded) {
-ctx.discardPile.push(card);
+await ctx.discardCards([card], player, "弃置", logs);
 }
 ctx.drawCards(player.id, 1);
 logs.push(

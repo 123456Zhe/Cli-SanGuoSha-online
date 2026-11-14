@@ -11,7 +11,7 @@
 // - `slash_targeted` 的 payload 里 `source` = 杀的使用者、`target` = 成为目标的玩家；
 //   置 `payload.canceled = true` 即取消本次杀（引擎在 emit 后读的是同一个 payload 对象）。
 // - `ctx.requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，必须自己
-//   `ctx.discardPile.push(card)`；返回空数组 = 没弃成牌。
+//   `ctx.discardCards([card], user, "弃置", logs)`；返回空数组 = 没弃成牌。
 // - 锁定技：不询问"是否发动"，也不声明 `optional`（`kind: "triggered"` 即可）。
 // - 别在钩子里再发起杀：那会再次触发 `slash_targeted`（引擎不设保护）。
 //
@@ -73,9 +73,10 @@ export default {
         logs.push(`${me.name} 的享乐生效：${user.name} 未弃置基本牌，本次杀无效`);
         return;
       }
-      // 隐式约定：requestDiscardSelection 只把牌移出原区域，不会自动进弃牌堆。
-      ctx.discardPile.push(card);
+      // 隐式约定：requestDiscardSelection 只把牌移出原区域，不会自动进弃牌堆；
+      // 弃牌须走 ctx.discardCards（发 card_discarded 触发点，供落英等技能监听）。
       logs.push(`${me.name} 的享乐结算：${user.name} 弃置 ${card.type}，本次杀继续结算`);
+      await ctx.discardCards([card], user, "弃置", logs);
     },
   },
 } satisfies SkillModule;

@@ -1073,8 +1073,8 @@ export class SanGuoGame {
     if (!removed) {
       return ["弃牌选择无效"];
     }
-    this.discardPile.push(removed);
     const logs = [`${player.name} 弃置了 ${removed.type}`];
+    await this.discardCards([removed], player, "弃置", logs);
     if (player.hand.length > getHandLimit(player)) {
       return logs;
     }
@@ -1180,9 +1180,10 @@ export class SanGuoGame {
       if (!removed) {
         return ["使用卡牌失败"];
       }
-      this.discardPile.push(removed);
+      const discardLogs: string[] = [];
+      await this.discardCards([removed], player, "弃置", discardLogs);
       const drawn = this.drawCards(player.id, 1);
-      const logs = [`${player.name} 重铸${CardType.IronChain}，摸了 ${drawn} 张牌`];
+      const logs = [`${player.name} 重铸${CardType.IronChain}，摸了 ${drawn} 张牌`, ...discardLogs];
       logs.push(...(await this.resolveDeaths()));
       logs.push(...this.resolveWinner());
       await this.advanceIfCurrentPlayerDead(logs);
@@ -1303,13 +1304,14 @@ export class SanGuoGame {
       if (!first || !second) {
         return [`${player.name} 手牌不足，无法发动丈八蛇矛`];
       }
-      this.discardPile.push(first);
-      this.discardPile.push(second);
+      const discardLogs: string[] = [];
+      await this.discardCards([first, second], player, "弃置", discardLogs);
       if (!getSkillRules(player).slashLimitExempt) {
         this.slashUsedThisTurn = true;
       }
       const logs = [
         `${player.name} 发动丈八蛇矛，弃置 ${first.type}、${second.type} 视为使用杀`,
+        ...discardLogs,
         ...(await this.resolveSlash(player, target, true, slashKindOf(player, undefined))),
       ];
       return logs;
@@ -1692,7 +1694,7 @@ export class SanGuoGame {
         }
         this.discardPile.push(createCardImpl(this as unknown as ResolveContext, removed, `discard-${this.turn}`));
         if (removed === CardType.WoodenOx) {
-          discardWoodenOxStoredCardsImpl(this as unknown as ResolveContext, player, logs);
+          await discardWoodenOxStoredCardsImpl(this as unknown as ResolveContext, player, logs);
         }
         logs.push(`${player.name} 弃置装备 ${removed}`);
         // 弃置装备同样属于"失去装备"，枭姬/白银狮子等技能应正常触发。
@@ -1704,8 +1706,8 @@ export class SanGuoGame {
       if (!card) {
         break;
       }
-      this.discardPile.push(card);
       logs.push(`${player.name} 弃置 ${card.type}`);
+      await this.discardCards([card], player, "弃置", logs);
       discarded += 1;
     }
     return discarded;
@@ -2309,8 +2311,8 @@ export class SanGuoGame {
         const index = this.randomIndex(player.hand.length);
         const removed = await this.removeHandCardAt(player, index);
         if (removed) {
-          this.discardPile.push(removed);
           logs.push(`${player.name} 弃置了 ${removed.type}`);
+          await this.discardCards([removed], player, "弃置", logs);
         }
       }
     }
@@ -2459,6 +2461,25 @@ export class SanGuoGame {
     return drawn;
   }
 
+  /**
+   * Phase 10：牌因"弃置/判定"进入弃牌堆的中央入口——逐张置入并发出 `card_discarded`
+   * 触发点（`actor` 为牌的原主，`reason` 为"弃置"/"判定"），钩子可在此时把牌从弃牌堆取走
+   * （如落英）。调用方负责先把牌从原区域移出（`removeHandCardAt` 等）；本方法只负责入堆+发触发点。
+   * "使用/打出"的牌入堆不要走这里（直接 `discardPile.push`），否则落英会误触发；
+   * 装备重建牌、拼点牌、洛神红牌同样不走这里。
+   */
+  private async discardCards(
+    cards: Card[],
+    actor: Player,
+    reason: "弃置" | "判定",
+    logs: string[],
+  ): Promise<void> {
+    for (const card of cards) {
+      this.discardPile.push(card);
+      await this.emitSkillTrigger("card_discarded", { actor, card, reason }, logs);
+    }
+  }
+
   private drawCard(): Card | null {
     if (this.deck.length === 0) {
       if (this.discardPile.length === 0) {
@@ -2477,9 +2498,11 @@ export class SanGuoGame {
       logs.push(`${reason}无法判定：牌堆为空`);
       return null;
     }
-    this.discardPile.push(card);
     const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无花色" } as const;
     logs.push(`${reason}判定牌：${suitNames[card.suit]}${card.rank} ${card.type}`);
+    // Phase 10：判定牌入弃牌堆即发 card_discarded（actor 为判定归属者；落英等技能可此时获得之）。
+    // 注意：此时判定尚未结算（改判/天妒在后），落英先于天妒获得是既定顺序。
+    await this.discardCards([card], owner ?? this.currentPlayer, "判定", logs);
     // 拦截点 judgment：外部包可替换判定牌实现"改判"。钩子自己负责把替换牌从原区域移除，
     // 引擎负责把替换牌置入弃牌堆并接管后续（与内置鬼才的处理方式一致）。
     const judgmentPayload: SkillEventPayload = { ...(owner ? { actor: owner } : {}), reason, card, judgmentCard: card };
@@ -2488,8 +2511,9 @@ export class SanGuoGame {
       const replacement = judgmentPayload.judgmentCard;
       // 兜底：替换牌若还留在其他区域（外部钩子漏移除），先清掉再入弃牌堆，保证单区唯一
       const cleaned = this.removeCardFromAllZones(replacement.id);
-      this.discardPile.push(replacement);
       logs.push(`${reason}判定牌被替换：${describeCard(card)} → ${describeCard(replacement)}`);
+      // 替换牌成为新的判定牌（原主未知，按判定归属者计 actor）。
+      await this.discardCards([replacement], owner ?? this.currentPlayer, "判定", logs);
       if (cleaned > 0) {
         logs.push(`${reason}改判替换牌残留在其他区域，已清理 ${cleaned} 处`);
       }
@@ -2512,8 +2536,9 @@ export class SanGuoGame {
         if (decision.choice === "card") {
           const replacement = await this.removeUsableCardBySourceId(guiCaiPlayer, decision.sourceId);
           if (replacement) {
-            this.discardPile.push(replacement);
             logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${describeCard(replacement)} 替换判定牌 ${describeCard(card)}`);
+            // 替换牌出自鬼才持有者的手牌，actor 计其原主。
+            await this.discardCards([replacement], guiCaiPlayer, "判定", logs);
             card = replacement;
           }
         }
@@ -2644,16 +2669,18 @@ export class SanGuoGame {
 
   private async discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number> {
     let discarded = 0;
+    const discardLogs: string[] = [];
     for (let i = 0; i < count && player.hand.length > 0; i += 1) {
       const index = this.randomIndex(player.hand.length);
       const removed = await this.removeHandCardAt(player, index);
       if (removed) {
-        this.discardPile.push(removed);
+        await this.discardCards([removed], player, "弃置", discardLogs);
         discarded += 1;
       }
     }
     if (discarded > 0) {
       logs.push(`${player.name} 弃置了 ${discarded} 张手牌`);
+      logs.push(...discardLogs);
     }
     return discarded;
   }

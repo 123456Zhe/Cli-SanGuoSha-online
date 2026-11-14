@@ -57,7 +57,7 @@ export default {
         if (beneficiary.hand.length > 0) {
           const discarded = await ctx.requestDiscardSelection(beneficiary, 1, "英魂：弃置一张牌");
           for (const card of discarded) {
-            ctx.discardPile.push(card);
+            await ctx.discardCards([card], beneficiary, "弃置", logs);
           }
           logs.push(`${beneficiary.name} 弃置 ${discarded.length} 张牌`);
         }

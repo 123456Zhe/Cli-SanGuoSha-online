@@ -10,7 +10,7 @@ SkillModuleCtx,
 //
 // 实现要点：
 // - 限一次：`canUse` 查 `ctx.skillUsedThisTurn`（plain "雪恨"，与飞军同一约定），`play` 里 `ctx.markSkillUsed`。
-// - 代价：弃置一张红色手牌（`buildUsableSources` 过滤 origin=hand 且 color=red；无红手牌时 `canUse` 为 false；弃掉的牌调用方手动 `discardPile.push`，与飞军同一约定）。
+// - 代价：弃置一张红色手牌（`buildUsableSources` 过滤 origin=hand 且 color=red；无红手牌时 `canUse` 为 false；弃掉的牌调用方用 `ctx.discardCards` 置入弃牌堆，与飞军同一约定）。
 // - X = max(1, 已损失体力值)，满血时 X=1（FAQ 确认满血可发动）。
 // - 玩家选一名角色为伤害目标（`getTargets` + `play(targetId)` 单目标）；其余至多 X-1 名横置角色由技能自动挑选（见已知限制）。
 // - 横置：`chained` 字段直接赋值；已横置者按 FAQ 视为少指定一名，故自动挑选只选未横置者。
@@ -56,7 +56,7 @@ if (!discarded) {
 logs.push(`${player.name} 发动雪恨失败：未弃置红色牌`);
 return logs;
 }
-ctx.discardPile.push(discarded);
+await ctx.discardCards([discarded], player, "弃置", logs);
 const x = Math.max(1, lostHp(player));
 const chained: Player[] = [target];
 (target as unknown as Record<string, unknown>).chained = true;

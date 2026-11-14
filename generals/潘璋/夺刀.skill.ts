@@ -66,7 +66,7 @@ if (!discarded) {
 logs.push(`${target.name} 发动【夺刀】失败：未弃置牌`);
 return;
 }
-ctx.discardPile.push(discarded);
+await ctx.discardCards([discarded], target, "弃置", logs);
 source.weapon = null;
 const count = (lootCounts.get(target)?? 0) + 1;
 lootCounts.set(target, count);

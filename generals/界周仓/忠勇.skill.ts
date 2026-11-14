@@ -9,7 +9,7 @@
 // 精确判断（引擎暴露当前回合玩家与阶段），其他阶段出杀不触发。
 // - 可选发动：`ctx.shouldActivateOptionalEffect(source, "界周仓/忠勇")` 询问出杀者。
 // - 弃牌：目标自己选一张手牌弃置（`requestDiscardSelection(target, …)`，
-// 返回的牌调用方手动 `discardPile.push`，与飞军代价同一约定）。
+// 返回的牌调用方用 `ctx.discardCards` 置入弃牌堆（发 card_discarded 触发点），与飞军代价同一约定）。
 // - 不改写 `payload.canceled`，忠勇只令目标弃牌、不取消本次杀。
 //
 // 注意：只 `import type`，类型信息运行时被完全擦除，故这个相对路径不影响实际加载。
@@ -55,8 +55,8 @@ handSources,
 if (!discarded) {
 return;
 }
-ctx.discardPile.push(discarded);
 logs.push(`${source.name} 发动忠勇，令 ${target.name} 弃置 ${discarded.type}`);
+await ctx.discardCards([discarded], target, "弃置", logs);
 },
 },
 } satisfies SkillModule;

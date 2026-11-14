@@ -111,7 +111,7 @@ export default {
         }
         const removed = await ctx.removeUsableCardBySourceId(player, pick.sourceId);
         if (removed) {
-          ctx.discardPile.push(removed);
+          await ctx.discardCards([removed], player, "弃置", logs);
         }
         logs.push(`${player.name} 发动强袭，弃置一张武器手牌`);
       } else if (player.weapon !== null) {

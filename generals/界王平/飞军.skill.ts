@@ -95,8 +95,8 @@ export default {
       flags.delete(`飞军发动:${target.id}`);
       return [`${player.name} 发动飞军失败：未弃置手牌`];
     }
-    ctx.discardPile.push(discarded);
     logs.push(`${player.name} 发动飞军，弃置 ${discarded.type}`);
+    await ctx.discardCards([discarded], player, "弃置", logs);
     ctx.markSkillUsed(player.id, "飞军");
 
     // 步骤二：按条件执行效果（两项都满足时玩家二选一）。

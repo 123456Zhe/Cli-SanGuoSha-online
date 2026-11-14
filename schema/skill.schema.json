@@ -50,6 +50,7 @@
           "card_used",
           "peach_save",
           "dying",
+          "card_discarded",
           "discard_phase_start",
           "end_phase_start",
           "provide_response"

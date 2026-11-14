@@ -292,6 +292,8 @@ export function createSkillHooks(ctx: SkillHooksContext): Record<SkillTrigger, S
     peach_save: [],
     // Phase 9：濒死（目前没有内置技能占用，全部留给外部武将包）。
     dying: [],
+    // Phase 10：牌因弃置/判定进入弃牌堆（目前没有内置技能占用，全部留给外部武将包，如落英）。
+    card_discarded: [],
     discard_phase_start: [],
     // Phase 8：结束阶段（目前没有内置技能占用，全部留给外部武将包）。
     end_phase_start: [],

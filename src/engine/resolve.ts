@@ -50,6 +50,11 @@ export type ResolveContext = {
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   drawCards(playerId: string, count: number): number;
   drawJudgmentCard(reason: string, logs: string[], owner: Player): Promise<Card | null>;
+  /**
+   * Phase 10：牌因"弃置/判定"进入弃牌堆的中央入口——逐张置入并发出 `card_discarded`
+   * 触发点（`actor` 为牌的原主）。"使用/打出"的牌入堆不要走这里（直接 `discardPile.push`）。
+   */
+  discardCards(cards: Card[], actor: Player, reason: "弃置" | "判定", logs: string[]): Promise<void>;
   applyDamage(
     source: Player | null,
     target: Player,
@@ -130,7 +135,7 @@ export function resolveSlash(
         if (discardDecision.choice === "card") {
           const discarded = await ctx.removeUsableCardBySourceId(target, discardDecision.sourceId);
           if (discarded) {
-            ctx.discardPile.push(discarded);
+            await ctx.discardCards([discarded], target, "弃置", logs);
             const redirectDecision = await ctx.decide({
               kind: "collateral",
               requestId: ctx.nextInteractionId(),
@@ -178,8 +183,8 @@ export function resolveSlash(
         if (decision.choice === "card") {
           const removed = await ctx.removeUsableCardBySourceId(target, decision.sourceId);
           if (removed) {
-            ctx.discardPile.push(removed);
             logs.push(`${attacker.name} 的雌雄双股剑生效，${target.name} 弃置了 ${removed.type}`);
+            await ctx.discardCards([removed], target, "弃置", logs);
           }
         } else {
           const drawn = ctx.drawCards(attacker.id, 1);
@@ -581,8 +586,8 @@ export function resolveFireAttack(ctx: ResolveContext, user: Player, target: Pla
     if (!discarded) {
       return logs;
     }
-    ctx.discardPile.push(discarded);
     logs.push(`${user.name} 弃置 ${discarded.type}，${CardType.FireAttack}生效`);
+    await ctx.discardCards([discarded], user, "弃置", logs);
     await ctx.applyDamage(user, target, 1, CardType.FireAttack, logs, usedCard);
     return logs;
   })();
@@ -781,7 +786,7 @@ export function resolveEquip(ctx: ResolveContext, user: Player, equipType: Equip
     if (previous !== null) {
       ctx.discardPile.push(createCard(ctx, previous, `replace-${ctx.turn}`));
       logs.push(`${user.name} 的旧宝物 ${previous} 被替换并弃置`);
-      discardWoodenOxStoredCards(ctx, user, logs);
+      await discardWoodenOxStoredCards(ctx, user, logs);
       logs.push(...(await onLoseEquip(ctx, user, previous)));
     }
     logs.push(`${user.name} 装备了${equipType}`);
@@ -845,7 +850,7 @@ export function resolveDeaths(ctx: ResolveContext): Promise<string[]> {
           player.alive = false;
           player.delayedTricks = [];
           logs.push(`${player.name} 阵亡，身份：${player.role}`);
-          logs.push(...resolveKillReward(ctx, player));
+          logs.push(...(await resolveKillReward(ctx, player)));
         }
       }
       if (!ctx.players.some((p) => p.alive && p.hp <= 0)) {
@@ -864,7 +869,7 @@ export function resolveDeaths(ctx: ResolveContext): Promise<string[]> {
  *
  * 已知简化：主公受罚弃置装备时不触发枭姬/白银狮子等"失去装备"技能，只做弃置。
  */
-export function resolveKillReward(ctx: ResolveContext, victim: Player): string[] {
+export async function resolveKillReward(ctx: ResolveContext, victim: Player): Promise<string[]> {
   const killerId = ctx.takeDamageSource(victim.id);
   if (killerId === null) {
     return [];
@@ -882,7 +887,8 @@ export function resolveKillReward(ctx: ResolveContext, victim: Player): string[]
   }
   const logs: string[] = [];
   const handCount = killer.hand.length;
-  ctx.discardPile.push(...killer.hand);
+  const discardLogs: string[] = [];
+  await ctx.discardCards([...killer.hand], killer, "弃置", discardLogs);
   killer.hand = [];
   const equips: EquipCardType[] = [];
   if (killer.weapon !== null) equips.push(killer.weapon);
@@ -898,9 +904,10 @@ export function resolveKillReward(ctx: ResolveContext, victim: Player): string[]
   killer.defenseHorse = null;
   killer.attackHorse = null;
   killer.treasure = null;
-  discardWoodenOxStoredCards(ctx, killer, logs);
+  await discardWoodenOxStoredCards(ctx, killer, logs);
   logs.push(
     `${killer.name} 作为${PlayerRole.Lord}杀死${PlayerRole.Loyalist}${victim.name}，弃置全部 ${handCount} 张手牌与 ${equips.length} 件装备`,
+    ...discardLogs,
   );
   return logs;
 }
@@ -1232,14 +1239,15 @@ export function onLoseEquip(ctx: ResolveContext, player: Player, equip: EquipCar
  * 木牛流马离开装备区（被弃置/被获得/被替换）时，其内存的牌必须一并置入弃牌堆，
  * 否则这些牌会从对局中凭空消失。
  */
-export function discardWoodenOxStoredCards(ctx: ResolveContext, player: Player, logs: string[]): void {
+export async function discardWoodenOxStoredCards(ctx: ResolveContext, player: Player, logs: string[]): Promise<void> {
   if (player.treasureCards.length === 0) {
     return;
   }
   const stored = player.treasureCards.length;
-  ctx.discardPile.push(...player.treasureCards);
+  const discardLogs: string[] = [];
+  await ctx.discardCards([...player.treasureCards], player, "弃置", discardLogs);
   player.treasureCards = [];
-  logs.push(`${player.name} 的${CardType.WoodenOx}内存的 ${stored} 张牌置入弃牌堆`);
+  logs.push(`${player.name} 的${CardType.WoodenOx}内存的 ${stored} 张牌置入弃牌堆`, ...discardLogs);
 }
 
 export function createCard(ctx: ResolveContext, type: CardType, seed: string): Card {
@@ -1344,8 +1352,9 @@ export function removeSelectedCardFromPlayer(
         receiver.hand.push(removed);
         return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的 1 张手牌`];
       }
-      ctx.discardPile.push(removed);
-      return [...extraLogs, `${player.name} 的 1 张手牌被弃置`];
+      const discardLogs: string[] = [];
+      await ctx.discardCards([removed], player, "弃置", discardLogs);
+      return [...extraLogs, `${player.name} 的 1 张手牌被弃置`, ...discardLogs];
     }
     if (selectedCardId.startsWith("hand:")) {
       const handCardId = selectedCardId.slice(5);
@@ -1363,8 +1372,9 @@ export function removeSelectedCardFromPlayer(
         // 从手牌获得时不公开牌型（与其他玩家视角的盲选一致），获得者自己能在手牌中看到
         return [...extraLogs, `${receiver.name} 获得了 ${player.name} 的 1 张手牌`];
       }
-      ctx.discardPile.push(removed);
-      return [...extraLogs, `${player.name} 的手牌 ${removed.type} 被弃置`];
+      const discardLogs: string[] = [];
+      await ctx.discardCards([removed], player, "弃置", discardLogs);
+      return [...extraLogs, `${player.name} 的手牌 ${removed.type} 被弃置`, ...discardLogs];
     }
     if (selectedCardId === "weapon") {
       const removedWeapon = player.weapon;
@@ -1446,7 +1456,7 @@ export function removeSelectedCardFromPlayer(
       ctx.discardPile.push(createCard(ctx, removedTreasure, `discard-${ctx.turn}`));
       treasureLogs.push(`${player.name} 的装备 ${removedTreasure} 被弃置`);
     }
-    discardWoodenOxStoredCards(ctx, player, treasureLogs);
+    await discardWoodenOxStoredCards(ctx, player, treasureLogs);
     return [...treasureLogs, ...(await onLoseEquip(ctx, player, removedTreasure))];
   })();
 }

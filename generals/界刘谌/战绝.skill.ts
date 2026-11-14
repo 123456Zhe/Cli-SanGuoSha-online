@@ -72,7 +72,7 @@ const handCopy = [...player.hand];
 for (const card of handCopy) {
 const removed = await ctx.removeUsableCardBySourceId(player, `hand:${card.id}`);
 if (removed) {
-ctx.discardPile.push(removed);
+await ctx.discardCards([removed], player, "弃置", logs);
 }
 }
 logs.push(`${player.name} 发动战绝，将 ${handCopy.length} 张手牌当【决斗】对 ${target.name} 使用`);

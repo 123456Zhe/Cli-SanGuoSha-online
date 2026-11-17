@@ -290,11 +290,11 @@ npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-ge
 - `dev`（`npm run dev`）默认加载 `generals/`；`host`（`npm run host`）默认 `builtin`，必须显式 `--generals-pool=all`。
 - `.ts` 技能依赖 bun/tsx 运行时；跨环境分发用 `.mjs`，或用 `--generals-json-only` 只放行声明式 JSON。
 - 声明式技能的 `rules`（`SkillRules` 词汇表：距离/杀次数/伤害/目标免疫/跳过弃牌阶段等）经谓词层参与结算，内置与外部包统一。详见 `docs/generals-pack-api.md`「规则词汇表」。
-- 代码技能除 4 个基础触发点外，还可挂 8 个拦截点：`judgment`（改判）、`slash_targeted`（取消杀）、`hand_card_lost`、`equip_lost`、`card_used`、`peach_save`（追加回复）、`discard_phase_start`（跳过弃牌阶段）、`provide_response`（提供响应牌来源）。
+- 代码技能共可挂 16 个触发点/拦截点（单一真相是 `src/engine/types.ts` 的 `SKILL_TRIGGERS`）：11 个事件——`prepare_phase_start`（准备阶段）、`turn_start`、`before_draw`、`before_damage`、`after_damage`、`hand_card_lost`、`equip_lost`、`card_used`、`dying`（濒死）、`card_discarded`（弃置/判定入堆）、`end_phase_start`（结束阶段）；5 个拦截——`judgment`（改判）、`slash_targeted`（取消杀）、`peach_save`（追加回复）、`discard_phase_start`（跳过弃牌阶段）、`provide_response`（提供响应牌来源）。
 - 主动技能可声明 `targetIntent`（`enemy`/`ally`/`any`），让 AI 知道该打敌人还是支援队友。
 - **当牌转换**（Phase 7）用声明式 `conversions`：一个技能可写多条 `{ from: {suit/color/type}, to, asResponse }` 映射
   （龙魂就是 4 条：红桃当桃、方块当火杀、梅花当闪、黑桃当无懈可击）。出牌阶段主动使用与"打出"响应都自动生效，
-  不用写代码；`to` 只放行 `杀/火杀/雷杀/桃/闪/无懈可击`，其余牌类 loader 会明确拒绝。响应时机的接入点是 `provide_response`（第 12 个拦截点）。
+  不用写代码；`to` 只放行任意基本牌与普通锦囊共 18 类（`杀/火杀/雷杀/桃/酒/闪/无懈可击/过河拆桥/顺手牵羊/决斗/无中生有/南蛮入侵/万箭齐发/借刀杀人/火攻/铁索连环/桃园结义/五谷丰登`），延时锦囊与装备 loader 会明确拒绝。响应时机的接入点是 `provide_response`（5 个拦截点之一）。
 - **手牌上限**可以改：静态用 `rules.handLimitDelta`，运行时变量用代码技能的纯函数 `handLimit(player)`（绝境：上限 + 已损失体力值）。
 - AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）；LLM、Jev、本地策略三个消费点同源。
 - **作者资源（不读 `src/` 也能写对）**：`schema/general.schema.json` + `schema/skill.schema.json`（机器可读结构约束，编辑器/agent 可直接消费）、`types/generals-pack.d.ts`（`SkillModule` / `SkillModuleCtx` 的完整作者签名）、`examples/generals/` 参考武将 gallery（默认不加载，`examples/generals/README.md` 有机制覆盖矩阵）。

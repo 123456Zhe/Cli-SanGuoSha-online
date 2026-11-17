@@ -1,6 +1,6 @@
 // 镇卫（界文聘）— 触发性代码技能，挂 `slash_targeted` 事件钩子。
 //
-// 规则（界限突破）：当你成为其他角色使用或的目标后，你可以摸一张牌。
+// 规则（界限突破）：当你成为其他角色使用【杀】或【决斗】的目标后，你可以摸一张牌。
 //
 // 实现要点：
 // - `slash_targeted` 的 payload 里 `target` 为被杀目标、`source` 为出杀者。
@@ -11,8 +11,8 @@
 // - 不改写 `payload.canceled`，镇卫只摸牌、不取消本次杀。
 //
 // 引擎限制（general.md 如实记录）：
-// - 决斗目标部分暂不支持——成为目标没有对应钩子（只有 `slash_targeted`），
-// 故本包只实现"成为目标"的部分。
+// - 【决斗】目标部分暂不支持——成为【决斗】目标没有对应钩子（只有 `slash_targeted`），
+// 故本包只实现"成为【杀】目标"的部分。
 //
 // 注意：只 `import type`，类型信息运行时被完全擦除，故这个相对路径不影响实际加载。
 import type { SkillModule, SkillModuleCtx} from "../../../types/generals-pack.js";
@@ -22,7 +22,7 @@ id: "镇卫",
 displayName: "镇卫",
 kind: "triggered",
 description:
-"当你成为其他角色使用的目标后，你可以摸一张牌（成为目标的部分暂不支持，见 general.md）。",
+"当你成为其他角色使用【杀】的目标后，你可以摸一张牌（成为【决斗】目标的部分暂不支持，见 general.md）。",
 triggers: ["slash_targeted"],
 onTrigger: {
 slash_targeted: async (ctx, payload, logs) => {
@@ -41,7 +41,7 @@ if (!(await ctx.shouldActivateOptionalEffect(target, "界文聘/镇卫"))) {
 return;
 }
 const drawn = ctx.drawCards(target.id, 1);
-logs.push(`${target.name} 发动镇卫（成为 ${source.name} 的杀目标），摸 ${drawn} 张牌`);
+logs.push(`${target.name} 发动【镇卫】（成为 ${source.name} 的【杀】目标），摸 ${drawn} 张牌`);
 },
 },
 } satisfies SkillModule;

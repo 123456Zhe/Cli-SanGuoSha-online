@@ -1,6 +1,6 @@
 // 戡难（界刘繇）— 触发性代码技能，挂 `slash_targeted` 事件钩子。
 //
-// 规则（界限突破）：当你成为其他角色的牌的目标后，你可以摸一张牌。
+// 规则（界限突破）：当你成为其他角色使用的【杀】或锦囊牌的目标后，你可以摸一张牌。
 //
 // 实现要点：
 // - `slash_targeted` 的 payload 里 `target` 为被杀目标、`source` 为出杀者。
@@ -12,7 +12,7 @@
 //
 // 引擎限制（general.md 如实记录）：
 // - 成为锦囊牌目标的部分暂不支持——锦囊指定目标没有对应钩子（只有 `slash_targeted`），
-// 故本包只实现"成为目标"的部分。
+// 故本包只实现"成为【杀】目标"的部分。
 //
 // 注意：只 `import type`，类型信息运行时被完全擦除，故这个相对路径不影响实际加载。
 import type { SkillModule, SkillModuleCtx} from "../../../types/generals-pack.js";
@@ -22,7 +22,7 @@ id: "戡难",
 displayName: "戡难",
 kind: "triggered",
 description:
-"当你成为其他角色的牌的目标后，你可以摸一张牌（成为锦囊牌目标的部分暂不支持，见 general.md）。",
+"当你成为其他角色使用的【杀】的目标后，你可以摸一张牌（成为锦囊牌目标的部分暂不支持，见 general.md）。",
 triggers: ["slash_targeted"],
 onTrigger: {
 slash_targeted: async (ctx, payload, logs) => {
@@ -41,7 +41,7 @@ if (!(await ctx.shouldActivateOptionalEffect(target, "界刘繇/戡难"))) {
 return;
 }
 const drawn = ctx.drawCards(target.id, 1);
-logs.push(`${target.name} 发动戡难（成为 ${source.name} 的杀目标），摸 ${drawn} 张牌`);
+logs.push(`${target.name} 发动【戡难】（成为 ${source.name} 的【杀】目标），摸 ${drawn} 张牌`);
 },
 },
 } satisfies SkillModule;

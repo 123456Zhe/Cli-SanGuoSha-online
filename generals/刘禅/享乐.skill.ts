@@ -16,7 +16,7 @@
 // - 别在钩子里再发起杀：那会再次触发 `slash_targeted`（引擎不设保护）。
 //
 // 注意：只 `import type`，类型信息在运行时被完全擦除，因此这个相对路径不影响实际加载。
-// 本文件位于 `examples/generals/刘禅/`，`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
+// 本文件位于 `generals/刘禅/`，`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
 import type { SkillModule, SkillModuleCtx } from "../../../types/generals-pack.js";
 import type { Card, CardSource, Player, SkillEventPayload } from "../../../types/generals-pack.js";
 
@@ -37,7 +37,7 @@ export default {
   displayName: "享乐",
   kind: "triggered",
   triggers: ["slash_targeted"],
-  description: "锁定技，当你成为杀的目标后，使用者需弃置一张基本牌，否则此杀对你无效。",
+  description: "锁定技，当你成为【杀】的目标后，使用者需弃置一张基本牌，否则此【杀】对你无效。",
   onTrigger: {
     slash_targeted: async (ctx: SkillModuleCtx, payload: SkillEventPayload, logs: string[]): Promise<void> => {
       // payload.target = 成为【杀】目标的玩家（技能持有者）；payload.source = 【杀】的使用者。
@@ -53,9 +53,9 @@ export default {
       }
       const candidates = basicSourcesOf(ctx, user);
       if (candidates.length === 0) {
-        // 使用者一张基本牌都没有：直接令此杀无效。
+        // 使用者一张基本牌都没有：直接令此【杀】无效。
         payload.canceled = true;
-        logs.push(`${me.name} 的享乐生效：${user.name} 没有可弃置的基本牌，本次杀无效`);
+        logs.push(`${me.name} 的【享乐】生效：${user.name} 没有可弃置的基本牌，本次【杀】无效`);
         return;
       }
       // 要求使用者弃置一张基本牌（候选来源已过滤；引擎的弃牌交互是 allowPass:false，
@@ -63,19 +63,19 @@ export default {
       const discarded = await ctx.requestDiscardSelection(
         user,
         1,
-        `${me.name} 的享乐：${user.name} 需弃置一张基本牌，否则此杀对 ${me.name} 无效`,
+        `${me.name} 的【享乐】：${user.name} 需弃置一张基本牌，否则此【杀】对 ${me.name} 无效`,
         candidates,
       );
       const card = discarded[0];
       if (!card) {
-        // 未弃牌：本次杀无效。
+        // 未弃牌：本次【杀】无效。
         payload.canceled = true;
-        logs.push(`${me.name} 的享乐生效：${user.name} 未弃置基本牌，本次杀无效`);
+        logs.push(`${me.name} 的【享乐】生效：${user.name} 未弃置基本牌，本次【杀】无效`);
         return;
       }
       // 隐式约定：requestDiscardSelection 只把牌移出原区域，不会自动进弃牌堆；
       // 弃牌须走 ctx.discardCards（发 card_discarded 触发点，供落英等技能监听）。
-      logs.push(`${me.name} 的享乐结算：${user.name} 弃置 ${card.type}，本次杀继续结算`);
+      logs.push(`${me.name} 的【享乐】结算：${user.name} 弃置【${card.type}】，本次【杀】继续结算`);
       await ctx.discardCards([card], user, "弃置", logs);
     },
   },

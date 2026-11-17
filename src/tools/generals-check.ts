@@ -20,6 +20,8 @@ import { runSelfPlay, SelfPlayViolation } from "./selfplay.js";
  * 2. **静态 lint**：读原始 JSON，抓 loader 会静默吞掉的东西——
  *    未知触发点名（会被 `triggers.filter` 丢掉）、未知顶层字段（拼错 `rule`/`trigers`）、
  *    什么都没干的技能（`kind: "triggered"` 但无 triggers/规则）、尚未被引擎消费的 `kind: "conversion"`……
+ *    另抓：`general.json` 缺文末换行、文案丢牌名（写作工具丢【】后留下的"空槽"残留）、
+ *    代码技能误用 `payload.player`（先剥离注释与字符串再匹配，注释/字符串里的同名文本不误报）。
  * 3. **可选自对弈**：`--selfplay=N` 时对每个成功加载的武将强制指派给全场，跑 N 局不变量断言。
  *
  * 用法：
@@ -126,6 +128,146 @@ const readJson = (path: string): { value?: unknown; error?: string } => {
   }
 };
 
+/**
+ * 剥离源码里的注释与字符串字面量内容（只留可执行代码），供 `payload.player` 这类
+ * "代码里才算数"的静态检查用——注释/字符串里出现同名文本不应误报。
+ * 模板字符串只剥离字面量部分，`${...}` 里的代码保留（里面是真代码，如 `${payload.player}`）。
+ */
+const stripCommentsAndStrings = (source: string): string => {
+  let out = "";
+  let i = 0;
+  const n = source.length;
+  // 模板插值 `${...}` 的嵌套栈：每层记它内部对象字面量的 `{` 深度，
+  // 只有深度为 0 时的 `}` 才是插值结束（`${{a: 1}.a}` 里第一个 `}` 关的是对象）。
+  const templateStack: number[] = [];
+  let state: "code" | "lineComment" | "blockComment" | "sq" | "dq" | "template" = "code";
+  while (i < n) {
+    const ch = source[i] as string;
+    const next = source[i + 1];
+    switch (state) {
+      case "code": {
+        if (ch === "/" && next === "/") {
+          state = "lineComment";
+          i += 2;
+        } else if (ch === "/" && next === "*") {
+          state = "blockComment";
+          i += 2;
+        } else if (ch === "'") {
+          state = "sq";
+          i += 1;
+        } else if (ch === '"') {
+          state = "dq";
+          i += 1;
+        } else if (ch === "`") {
+          state = "template";
+          i += 1;
+        } else if (ch === "{" && templateStack.length > 0) {
+          templateStack[templateStack.length - 1] = (templateStack[templateStack.length - 1] as number) + 1;
+          out += ch;
+          i += 1;
+        } else if (ch === "}" && templateStack.length > 0) {
+          const depth = templateStack[templateStack.length - 1] as number;
+          if (depth > 0) {
+            templateStack[templateStack.length - 1] = depth - 1;
+            out += ch;
+          } else {
+            templateStack.pop();
+            state = "template";
+          }
+          i += 1;
+        } else {
+          out += ch;
+          i += 1;
+        }
+        break;
+      }
+      case "lineComment": {
+        if (ch === "\n") {
+          out += ch;
+          state = "code";
+        }
+        i += 1;
+        break;
+      }
+      case "blockComment": {
+        if (ch === "*" && next === "/") {
+          state = "code";
+          i += 2;
+        } else {
+          if (ch === "\n") {
+            out += ch;
+          }
+          i += 1;
+        }
+        break;
+      }
+      case "sq": {
+        if (ch === "\\") {
+          i += 2;
+        } else if (ch === "'") {
+          state = "code";
+          i += 1;
+        } else {
+          i += 1;
+        }
+        break;
+      }
+      case "dq": {
+        if (ch === "\\") {
+          i += 2;
+        } else if (ch === '"') {
+          state = "code";
+          i += 1;
+        } else {
+          i += 1;
+        }
+        break;
+      }
+      case "template": {
+        if (ch === "\\") {
+          i += 2;
+        } else if (ch === "`") {
+          state = "code";
+          i += 1;
+        } else if (ch === "$" && next === "{") {
+          templateStack.push(0);
+          state = "code";
+          i += 2;
+        } else {
+          i += 1;
+        }
+        break;
+      }
+    }
+  }
+  return out;
+};
+
+/** 文案丢牌名的典型残留（写作工具丢【】后留下的"空槽"，见界文聘/界诸葛瞻/界骆统/界关羽/界刘繇五包）。 */
+const DROPPED_CARD_NAME_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
+  { pattern: /或的目标/, hint: "“或的目标”——“或”前丢了【杀】/【决斗】等牌名" },
+  { pattern: /使用的目标/, hint: "“使用的目标”——“使用”与“目标”之间丢了【杀】等牌名" },
+  { pattern: /成为的目标/, hint: "“成为的目标”——“成为”与“目标”之间丢了牌名" },
+  { pattern: /一张或[；。，、）]/, hint: "“一张或…”——“或”后丢了牌名" },
+  // “每当使用或打出”是合法句式（每当…时），只拦“当”前无“每”的空槽。
+  { pattern: /(?<!每)当使用或打出/, hint: "“当使用或打出”——“当”后丢了【杀】等牌名" },
+  { pattern: /当[；。]/, hint: "“当；/当。”——“当”后丢了牌名" },
+  { pattern: /随机\//, hint: "“随机/”——“/”两侧丢了牌名" },
+];
+
+/** 静态 lint：文案丢牌名（description/注释/general.md 里的"空槽"残留）。 */
+const lintDroppedCardNames = (
+  label: string,
+  text: string,
+  push: (level: CheckIssueLevel, message: string) => void,
+): void => {
+  for (const { pattern, hint } of DROPPED_CARD_NAME_PATTERNS) {
+    if (pattern.test(text)) {
+      push("error", `${label} 疑似丢牌名：${hint}（写作工具丢【】的常见残留，请核对官方文本补齐）`);
+    }
+  }
+};
+
 /** 静态 lint：一个武将包目录（loader 的失败项由 loader 自己报告，这里只补"静默忽略"的部分）。 */
 const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, message: string) => void): GeneralCheckPack => {
   const skills: string[] = [];
@@ -136,6 +278,17 @@ const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, me
     return { folder, skills, loaded: false, skillsLoaded: [] };
   }
   const general = parsed.value;
+  // general.json 必须以换行结尾（缺换行已复发五次：群杜预/潘璋/卞夫人/界张嶷/魏杜预）。
+  const generalRaw = readFileSync(generalPath, "utf-8");
+  if (!generalRaw.endsWith("\n")) {
+    push("error", "general.json 缺文末换行（请在文件末尾补一个换行）");
+  }
+  lintDroppedCardNames("general.json", generalRaw, push);
+  // general.md 也扫一遍丢牌名（文案与技能文件同源，丢法一样）。
+  const generalMdPath = join(dir, folder, "general.md");
+  if (existsSync(generalMdPath)) {
+    lintDroppedCardNames("general.md", readFileSync(generalMdPath, "utf-8"), push);
+  }
   const name = typeof general.name === "string" ? general.name : undefined;
   const declared = Array.isArray(general.skills) ? general.skills.filter((item): item is string => typeof item === "string") : [];
 
@@ -181,21 +334,25 @@ const lintPack = (dir: string, folder: string, push: (level: CheckIssueLevel, me
     }
     // 代码技能源码扫描：SkillEventPayload 没有 `player` 字段（2026-11-10 诸葛瑾/弘援笔误，
     // 读 payload.player 恒为 undefined 导致技能静默不生效；generals/ 不进 typecheck，拦不住）。
+    // 先剥离注释与字符串再匹配——注释/字符串里的同名文本不应误报。
     for (const ext of [".skill.ts", ".skill.mjs"]) {
       const codePath = `${base}${ext}`;
       if (!existsSync(codePath)) {
         continue;
       }
-      if (/payload\s*\.\s*player\b/.test(readFileSync(codePath, "utf-8"))) {
+      const source = readFileSync(codePath, "utf-8");
+      if (/payload\s*\.\s*player\b/.test(stripCommentsAndStrings(source))) {
         push(
           "error",
           `${skill}${ext} 用了 payload.player：SkillEventPayload 没有 player 字段（应为 payload.actor），技能会静默不生效`,
         );
       }
+      lintDroppedCardNames(`${skill}${ext}`, source, push);
     }
     if (!hasJson) {
       continue;
     }
+    lintDroppedCardNames(`${skill}.skill.json`, readFileSync(`${base}.skill.json`, "utf-8"), push);
     const skillParsed = readJson(`${base}.skill.json`);
     if (!isRecord(skillParsed.value)) {
       push("error", `${skill}.skill.json 不是合法 JSON：${skillParsed.error ?? "内容不是对象"}`);

@@ -309,6 +309,6 @@ npm run generals:check -- --dir=generals --strict   # 警告也算失败
 npm run generals:check -- --dir=generals --selfplay=3   # 每个武将强制上场跑 3 局不变量断言
 ```
 
-- 校验器直接调用真实 loader，并额外抓 loader 会**静默吞掉**的写法：未知触发点名、拼错的字段名、既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、`kind: "conversion"` 却没有 `conversions` 的"空转换技"、非主动技能上的 `targetIntent`……避免"写错了却不报错"。
+- 校验器直接调用真实 loader，并额外抓 loader 会**静默吞掉**的写法：未知触发点名、拼错的字段名、既无 `triggers` 也无 `rules` 的"空技能"、`kind: "active"` 但没有 `play()`、`kind: "conversion"` 却没有 `conversions` 的"空转换技"、非主动技能上的 `targetIntent`、`general.json` 缺文末换行、文案丢牌名、误用 `payload.player`……避免"写错了却不报错"。
 - `--selfplay=N` 用无头自对弈（`src/tools/selfplay.ts`）断言"不崩、不卡死、体力/生死自洽"，同一 seed 可复现。
 - `rules.md` 的 §14 与 §16.3 由武将库 + 技能注册表生成：改完技能说明跑 `npm run rules:gen`，`npm run rules:check`（及 `src/tools/gen-rules.test.ts`）会卡住文档漂移。

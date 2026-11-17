@@ -27,7 +27,8 @@ const writePack = (
 ): void => {
   const dir = join(root, folder);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "general.json"), JSON.stringify(general));
+  // general.json 带文末换行（校验器要求缺换行即报错，夹具本身要是干净的）。
+  writeFileSync(join(dir, "general.json"), `${JSON.stringify(general)}\n`);
   for (const [name, content] of Object.entries(skills)) {
     const isCode = typeof content === "string";
     writeFileSync(join(dir, `${name}${isCode ? ".skill.ts" : ".skill.json"}`), isCode ? content : JSON.stringify(content));
@@ -234,4 +235,71 @@ void test("校验器：代码技能用 payload.player 应报错（回归：诸�
   );
   assert.ok(!messages.some((message) => message.includes("对字段") && message.includes("payload.player")), "用 payload.actor 的技能不应被误报");
   assert.ok(report.errors > 0);
+});
+
+void test("校验器：payload.player 只在注释/字符串里出现时不误报，模板插值里出现仍报错", async () => {
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["注释里", "字符串里", "插值里"] }),
+    {
+      注释里:
+        '// 注意：SkillEventPayload 没有 payload.player 字段\n' +
+        'export default { id: "注释里", displayName: "注释里", kind: "triggered", description: "x", triggers: ["before_draw"], onTrigger: { before_draw: (ctx, payload, logs) => { /* payload.player 是错的 */ } } } satisfies SkillModule;',
+      字符串里:
+        'export default { id: "字符串里", displayName: "字符串里", kind: "triggered", description: "x", triggers: ["before_draw"], onTrigger: { before_draw: (ctx, payload, logs) => { logs.push("不要写 payload.player"); } } } satisfies SkillModule;',
+      插值里:
+        'export default { id: "插值里", displayName: "插值里", kind: "triggered", description: "x", triggers: ["before_draw"], onTrigger: { before_draw: (ctx, payload, logs) => { logs.push(`目标是 ${payload.player?.name}`); } } } satisfies SkillModule;',
+    },
+  );
+
+  const report = await checkGeneralPacks({ dir: root });
+  const messages = report.issues.map((issue) => issue.message);
+  assert.ok(!messages.some((message) => message.includes("注释里") && message.includes("payload.player")), "注释里的 payload.player 不应误报");
+  assert.ok(!messages.some((message) => message.includes("字符串里") && message.includes("payload.player")), "字符串里的 payload.player 不应误报");
+  assert.ok(
+    messages.some((message) => message.includes("插值里") && message.includes("payload.player")),
+    `模板插值 \${payload.player} 是真代码，应报错，实际：${messages.join(" | ")}`,
+  );
+});
+
+void test("校验器：general.json 缺文末换行应报错", async () => {
+  writePack("测试将", validGeneral({ name: "测试将", skills: [] }));
+  // writePack 默认带换行，这里故意去掉，模拟第五次复发的写法。
+  writeFileSync(join(root, "测试将", "general.json"), JSON.stringify(validGeneral({ name: "测试将", skills: [] })));
+
+  const report = await checkGeneralPacks({ dir: root });
+  assert.ok(
+    report.issues.some((issue) => issue.level === "error" && issue.message.includes("缺文末换行")),
+    `缺换行应报错，实际：${report.issues.map((issue) => issue.message).join(" | ")}`,
+  );
+});
+
+void test("校验器：文案丢牌名应报错，带【】的正确文案不误报", async () => {
+  writePack(
+    "测试将",
+    validGeneral({ name: "测试将", skills: ["丢牌名", "没丢牌名"] }),
+    {
+      丢牌名: {
+        kind: "triggered",
+        description: "锁定技，你每回合第一次成为或的目标后，此牌对你无效。",
+        displayName: "丢牌名",
+        triggers: ["slash_targeted"],
+      },
+      没丢牌名: {
+        kind: "triggered",
+        // “每当使用或打出”是合法句式（界吴懿 general.json 的写法），不能误报。
+        description: "锁定技，你每回合第一次成为【杀】或【决斗】的目标后，此牌对你无效。每当使用或打出杀/闪时，你可以摸一张牌。",
+        displayName: "没丢牌名",
+        triggers: ["slash_targeted"],
+      },
+    },
+  );
+
+  const report = await checkGeneralPacks({ dir: root });
+  const messages = report.issues.map((issue) => issue.message);
+  assert.ok(
+    messages.some((message) => message.includes("丢牌名.skill.json") && message.includes("疑似丢牌名")),
+    `“成为或的目标”应报丢牌名，实际：${messages.join(" | ")}`,
+  );
+  assert.ok(!messages.some((message) => message.includes("没丢牌名") && message.includes("疑似丢牌名")), "带【】的正确文案不应被误报");
 });

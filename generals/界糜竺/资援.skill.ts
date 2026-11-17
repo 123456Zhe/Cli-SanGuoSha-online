@@ -11,30 +11,29 @@ SkillModuleCtx,
 //
 // 实现要点：
 // - 限一次：`canUse` 查 `ctx.skillUsedThisTurn`（plain "资援"，与飞军同一约定），`play` 里 `ctx.markSkillUsed`。
-// - 子集自动挑选：无按点数和选子集的交互，故自动挑选点数之和恰为13的手牌子集（张数最少者；并列取枚举顺序首个）；无合法子集时 `canUse` 为 false。
+// - 子集自动挑选：无按点数和选子集的交互，故自动挑选点数之和恰为13的手牌子集（张数最少者；并列取先遇到的）；
+//   搜索用 DP（`findThirteenSubset`，O(13n)），不用 2^n 枚举；无合法子集时 `canUse` 为 false。
 // - 给牌：子集牌用 `removeHandCardAt` 逐张移出手牌（触发失去手牌钩子），再 push 到目标手牌；仅手牌可给，木牛内牌不给（FAQ）。
 // - 回血：引擎无回血接口，直接改 `hp` 并封顶到 maxHp（满血目标回血无效果，与 FAQ 一致）；出牌阶段使用、目标非濒死，无需死亡结算。
 
-/** 在手牌中找点数之和恰为13的子集（张数最少者；无则返回 null）。 */
+/** 在手牌中找点数之和恰为13的子集（张数最少者；无则返回 null）。DP：dp[s] = 和为 s 的最少张子集，O(13n)。
+ * 不用 2^n 枚举：手牌 20 张以上时枚举要跑 100 万+ 次（2026-11-09 巡检报的性能问题）。
+ * 倒序更新保证每张牌只用一次；并列时保留先遇到的（按手牌顺序）。 */
 function findThirteenSubset(hand: Card[]): Card[] | null {
-const n = hand.length;
-let best: Card[] | null = null;
-const total = 1 << n;
-for (let mask = 0; mask < total; mask += 1) {
-const subset: Card[] = [];
-let sum = 0;
-for (let i = 0; i < n; i += 1) {
-if (mask & (1 << i)) {
-subset.push(hand[i]);
-sum += hand[i].rank;
+const dp: Array<Card[] | null> = Array.from({ length: 14 }, () => null);
+dp[0] = [];
+for (const card of hand) {
+if (card.rank > 13) continue;
+for (let sum = 13 - card.rank; sum >= 0; sum -= 1) {
+const prev = dp[sum];
+if (prev === null) continue;
+const next = dp[sum + card.rank];
+if (next === null || prev.length + 1 < next.length) {
+dp[sum + card.rank] = [...prev, card];
 }
 }
-if (sum!== 13) continue;
-if (best === null || subset.length < best.length) {
-best = subset;
 }
-}
-return best;
+return dp[13];
 }
 
 function fmt(c: Card): string {
@@ -61,12 +60,12 @@ play: async (ctx: SkillModuleCtx, player: Player, targetId?: string) => {
 const logs: string[] = [];
 const target = ctx.players.find((p) => p.id === targetId);
 if (!target ||!target.alive) {
-logs.push(`${player.name} 发动资援失败：未选中有效角色`);
+logs.push(`${player.name} 发动【资援】失败：未选中有效角色`);
 return logs;
 }
 const subset = findThirteenSubset(player.hand);
 if (subset === null) {
-logs.push(`${player.name} 发动资援失败：手牌中无点数之和为13的子集`);
+logs.push(`${player.name} 发动【资援】失败：手牌中无点数之和为13的子集`);
 return logs;
 }
 // 按手牌下标降序逐张移出（避免下标移位），再交给目标。
@@ -89,7 +88,7 @@ target.hp + 1,
 );
 ctx.markSkillUsed(player.id, "资援");
 logs.push(
-`${player.name} 发动，将 ${given.map(fmt).join("、")} 交给 ${target.name}，${target.name}回复 1 点体力（${beforeHp}→${target.hp}）`,
+`${player.name} 发动【资援】，将 ${given.map(fmt).join("、")} 交给 ${target.name}，${target.name}回复 1 点体力（${beforeHp}→${target.hp}）`,
 );
 return logs;
 },

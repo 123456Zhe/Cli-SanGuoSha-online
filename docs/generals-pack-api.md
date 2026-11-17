@@ -234,6 +234,7 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
 - 弃牌/失去牌：`requestDiscardSelection` / `requestFlexibleDiscard` / `removeHandCardAt` / `removeUsableCardBySourceId` / `discardFromPlayerHand` / `discardSelfCards` / `discardCards`（牌因弃置/判定入堆的中央入口，见下）。
 - 伤害/死亡：`applyDamage`（随后必须自己结算死亡/胜负，见下）、`useSlash(attacker, target, {kind, card})`（完整结算一张杀：含闪响应/铁骑/藤甲/濒死/胜负/回合推进）。
 - 回合状态：`skillUsedThisTurn` / `markSkillUsed`（外部技能无 `oncePerTurn` 自动限制，需要限次请在 `canUse` 里查 `skillUsedThisTurn` 并在 `play` 里 `markSkillUsed`）。
+- 牌类判定：`isEquipCard(cardType)`（是否为装备牌，引擎的装备列表，新增装备自动跟进；不要在包里硬编码装备名——群杜预/武库曾因此静默漏计）。
 - 轮次状态（Phase 9）：`skillUsedThisRound` / `markSkillUsedThisRound` / `isSkillUsedThisRound`（"每轮限一次"类技能用；轮次回到起始座位时引擎自动清空，与每回合口径对应）。
 
 调用方必须自己做的事（漏做会静默坏掉）：

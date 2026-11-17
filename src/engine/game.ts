@@ -2996,7 +2996,7 @@ export class SanGuoGame {
     return isSlashCardImpl(cardType);
   }
 
-  private isEquipCard(cardType: CardType): cardType is EquipCardType {
+  isEquipCard(cardType: CardType): cardType is EquipCardType {
     return isEquipCardImpl(cardType);
   }
 

@@ -11,13 +11,14 @@
 //   若 `equip_lost` 再计就会双计；自己装备被拆/被顺也不计（文本只说"其他角色"）。
 // - `card_used` 只计 reason === "使用"：装备牌被当响应"打出"（如经转换当闪）不计。
 // - 标记存在包内共享模块 `wuku-state.ts` 的 WeakMap 里（上限 3，见该文件）。
+// - 装备判定走 `ctx.isEquipCard`（引擎的装备列表，新增装备自动跟进），不要在包里硬编码装备名。
 import type {
   Player,
   SkillEventPayload,
   SkillModule,
   SkillModuleCtx,
 } from "../../../types/generals-pack.js";
-import { EQUIPMENT_TYPES, addMark } from "./wuku-state.js";
+import { addMark } from "./wuku-state.js";
 
 const SKILL_ID = "群杜预/武库";
 
@@ -38,11 +39,11 @@ export default {
       if (!holder || payload.actor?.id !== holder.id) {
         return;
       }
-      if (payload.reason !== "使用" || !payload.card || !EQUIPMENT_TYPES.has(payload.card.type)) {
+      if (payload.reason !== "使用" || !payload.card || !ctx.isEquipCard(payload.card.type)) {
         return;
       }
       const marks = addMark(holder);
-      logs.push(`${holder.name} 使用装备${payload.card.type}，武库标记 +1（当前 ${marks} 枚）`);
+      logs.push(`${holder.name} 使用装备${payload.card.type}，【武库】标记 +1（当前 ${marks} 枚）`);
     },
     equip_lost: (ctx: SkillModuleCtx, payload: SkillEventPayload, logs: string[]) => {
       const holder = findHolder(ctx);
@@ -55,7 +56,7 @@ export default {
       }
       const marks = addMark(holder);
       logs.push(
-        `${payload.actor?.name ?? "一名角色"}失去装备${payload.equip}，${holder.name} 武库标记 +1（当前 ${marks} 枚）`,
+        `${payload.actor?.name ?? "一名角色"}失去装备${payload.equip}，${holder.name} 【武库】标记 +1（当前 ${marks} 枚）`,
       );
     },
   },

@@ -6,6 +6,7 @@ import { getSkillRules } from "./skill-rules.js";
 import type { SkillModuleCtx } from "./skill-module.js";
 import {
   CardSource,
+  EquipCardType,
   GameAction,
   InteractionDecision,
   InteractionRequest,
@@ -33,6 +34,8 @@ export type SkillUseContext = {
   decide(request: InteractionRequest): Promise<InteractionDecision>;
   nextInteractionId(): number;
   buildUsableSources(player: Player): CardSource[];
+  /** 是否为装备牌（引擎的装备列表，新增装备自动跟进；包里不要硬编码装备名）。 */
+  isEquipCard(cardType: CardType): cardType is EquipCardType;
   requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]>;
   /** "弃置任意张牌"（制衡）：逐张询问直到玩家放弃，返回实际弃置张数（已入弃牌堆并结算失去装备） */
   requestFlexibleDiscard(player: Player, reason: string, logs: string[]): Promise<number>;

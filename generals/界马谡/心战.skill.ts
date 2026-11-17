@@ -13,6 +13,8 @@ SkillModuleCtx,
 // - 条件：手牌数 > 体力上限（maxHp）。
 // - 观看牌堆顶三张：`ctx.drawTopCards(3)`（取走牌堆顶；心战的获得/放回与取走等价）。
 // - 红桃自动全取："任意数量"的一合法选择（全部红桃）；其余原序 `placeCardsOnTop`（"任意顺序"的一合法选择）。
+// - 日志不点名非红桃牌：牌堆顶顺序是隐藏信息，点名等于公开牌堆顶（2026-11-09 巡检报的泄牌 bug）；
+//   只记"看了几张、获得哪些红桃、其余几张放回"（获得的红桃是展示过的，可以点名）。
 // - 无目标：不设 `requiresTarget` / `getTargets`。
 
 export default {
@@ -30,7 +32,7 @@ play: async (ctx: SkillModuleCtx, player: Player) => {
 const logs: string[] = [];
 const revealed = ctx.drawTopCards(3);
 if (revealed.length === 0) {
-logs.push(`${player.name} 发动，但牌堆顶无牌`);
+logs.push(`${player.name} 发动【心战】，但牌堆顶无牌`);
 return logs;
 }
 const hearts = revealed.filter((c) => c.suit === "heart");
@@ -39,7 +41,7 @@ player.hand.push(...hearts);
 ctx.placeCardsOnTop(rest);
 ctx.markSkillUsed(player.id, "心战");
 logs.push(
-`${player.name} 发动，观看牌堆顶 ${revealed.map((c) => `${c.type}${c.rank}`).join("、")}，获得红桃 ${hearts.map((c) => `${c.type}${c.rank}`).join("、") || "无"}，其余置于牌堆顶`,
+`${player.name} 发动【心战】，观看牌堆顶 ${revealed.length} 张牌，获得红桃 ${hearts.map((c) => `${c.type}${c.rank}`).join("、") || "无"}，其余 ${rest.length} 张置于牌堆顶`,
 );
 return logs;
 },

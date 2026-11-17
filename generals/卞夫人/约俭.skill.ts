@@ -12,7 +12,7 @@ SkillModuleCtx,
 // 实现要点：
 // - 手牌上限：`handLimit` 纯函数返回 maxHp - hp（与神赵云绝境同一写法），
 // 上限 = 体力 + (体力上限 - 体力) = 体力上限。
-// - 濒死分支：`dying` 钩子；手牌不足 2 张时不发动；弃置用 requestDiscardSelection
+// - 濒死分支：`dying` 钩子；手牌与木牛内牌合计不足 2 张时不发动；弃置用 requestDiscardSelection
 // （不传预置 sources，让引擎每轮重建来源，避免 count>1 时复用旧列表踩到已移走的牌，
 // 与结姻同口径）；弃置成功后回复 1 点体力（封顶体力上限）。
 // - 限制：弃置仅限手牌与木牛内牌（buildUsableSources 默认范围，装备区不在候选里）；
@@ -36,7 +36,9 @@ if (!ctx.hasSkill(actor, SKILL_ID)) return;
 // 同一次濒死里，先执行的钩子（如另一名卞夫人的挽危）可能已把人救回 1 点以上：
 // 必须重查体力，否则会在满血时白白弃两张牌（真实对局验证 10 局里抓到 2 次）。
 if (actor.hp > 0) return;
-if (actor.hand.length < 2) return;
+// 弃置范围是手牌 + 木牛流马内牌（requestDiscardSelection 默认来源），前置拦截必须同口径计数，
+// 否则手牌 1 张 + 木牛内 1 张时会被误拦（2026-11-14 巡检报的 bug）。
+if (actor.hand.length + actor.treasureCards.length < 2) return;
 if (!(await ctx.shouldActivateOptionalEffect(actor, SKILL_ID))) return;
 const discarded = await ctx.requestDiscardSelection(actor, 2, "约俭：弃置两张牌");
 if (discarded.length < 2) {

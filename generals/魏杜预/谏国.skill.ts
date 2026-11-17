@@ -17,6 +17,8 @@ SkillModuleCtx,
 // - 引擎主动技能没有"二选一"交互，分支按目标自动选择（见 general.md 已知限制）：
 // 目标是自己且手牌数 ≥ 2 → 弃1摸半（补给向）；其余 → 摸1弃半（削弱向）。
 // - 弃牌均由目标本人选择（requestDiscardSelection 交互式询问）；弃掉的牌走 ctx.discardCards 置入弃牌堆（发 card_discarded 触发点）。
+// - 弃牌只限手牌：传手牌来源过滤（`buildUsableSources` 只取 origin === "hand"），木牛流马内牌不可被当手牌弃掉
+// （官方文本"弃置一半数量的手牌"/"弃一张牌"均指手牌；2026-11-16 巡检报的 bug）。
 // - X 向上取整（Math.ceil），在第二步结算时按目标当时手牌数算。
 
 const KEY_DRAW_DISCARD = "魏杜预/谏国·摸弃";
@@ -69,19 +71,21 @@ logs.push(`${player.name} 发动【谏国】失败：该项本回合已用过`);
 return logs;
 }
 ctx.markSkillUsed(player.id, branchKey(branch));
+// 谏国弃牌只限手牌：预置手牌来源，木牛流马内牌不在候选里。
+const handSources = ctx.buildUsableSources(target).filter((s) => s.origin === "hand");
 if (branch === "draw-discard") {
 const drawn = ctx.drawCards(target.id, 1);
 const half = Math.ceil(target.hand.length / 2);
 const discarded =
 half > 0
-? await ctx.requestDiscardSelection(target, half, "谏国：弃置一半数量的手牌")
+? await ctx.requestDiscardSelection(target, half, "谏国：弃置一半数量的手牌", handSources)
 : [];
 for (const card of discarded) await ctx.discardCards([card], target, "弃置", logs);
 logs.push(
 `${player.name} 发动【谏国】：${target.name} 摸 ${drawn} 张牌，然后弃置 ${discarded.length} 张手牌`,
 );
 } else {
-const discarded = await ctx.requestDiscardSelection(target, 1, "谏国：弃置一张牌");
+const discarded = await ctx.requestDiscardSelection(target, 1, "谏国：弃置一张牌", handSources);
 for (const card of discarded) await ctx.discardCards([card], target, "弃置", logs);
 const half = Math.ceil(target.hand.length / 2);
 const drawn = half > 0? ctx.drawCards(target.id, half): 0;

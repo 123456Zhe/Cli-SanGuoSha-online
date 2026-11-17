@@ -81,7 +81,7 @@ export type SkillRuleKey = keyof typeof SKILL_RULE_KEY_KINDS;
  *   （其他牌类如延时锦囊需要目标/距离/判定区逻辑，loader 会明确拒绝）；
  * - `asResponse` 列出可作为哪些响应打出（闪/杀/无懈可击/桃）；缺省 = 只能在出牌阶段主动使用。
  *
- * 出牌阶段主动使用时走 `GameAction.convertVia`/`convertTo`（`cardIndex = -10000 - 手牌下标`）。
+ * 出牌阶段主动使用时走 `GameAction.convertVia`/`convertTo`（手牌 `cardIndex = -10000 - 手牌下标`，木牛流马内牌 `-20000 - 木牛下标`）。
  * **内置技能（武圣/龙胆/国色/倾国/急救）仍是各自硬编码的分支**，不要给它们再填 `conversion`，否则会重复枚举。
  */
 export type SkillConversion = {

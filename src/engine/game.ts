@@ -767,6 +767,7 @@ export class SanGuoGame {
    * 外部武将包 `conversion`（当牌转换，Phase 7）的可玩动作枚举。
    *
    * 约定 `cardIndex = -10000 - 手牌下标`（避开内置已占用的 -100/-200/-400/-500/-1000 与 -1/-11/-12/-13），
+   * 木牛流马内牌另用 `-20000 - 木牛下标`（与响应侧 `appendConversionSources` 同口径：手牌 + 木牛内牌都可当），
    * 并用 `convertVia`/`convertTo` 标明"通过哪个技能、当成哪张牌"，`playAction` 据此复算，不信任客户端。
    * 枚举引擎结算得了的牌类：杀/火杀/雷杀（需要目标）、桃（自己体力未满）、酒与普通锦囊
    * （Phase 8；需要目标的按牌类枚举，无目标的不设目标）。
@@ -833,6 +834,21 @@ export class SanGuoGame {
           convertTo: conversion.to,
         });
       });
+      // 木牛流马内牌也可当牌转换（与响应侧同口径；`treasureCards` 只在装备木牛时非空）。
+      player.treasureCards.forEach((card, oxIndex) => {
+        if (!matchesConversionFilter(card, conversion.from)) {
+          return;
+        }
+        actions.push({
+          type: "play",
+          cardIndex: -20000 - oxIndex,
+          label: `发动${displayName}：将${describeCard(card)}（木牛流马）当${conversion.to}${conversion.to === CardType.Peach ? "对自己使用" : "使用"}`,
+          requiresTarget: needsTarget,
+          targets,
+          convertVia: skillId,
+          convertTo: conversion.to,
+        });
+      });
     }
   }
 
@@ -886,15 +902,22 @@ export class SanGuoGame {
   /**
    * 当牌转换在**出牌阶段**的结算（`playAction` 的 `cardIndex <= -10000` 分支）。
    * 复算全部条件：技能归属、转换声明、源牌是否满足 `from`、杀次数、目标合法性。
+   * 源牌分两处：`origin: "hand"` 取手牌下标（`removeHandCardAt`，触发失去手牌钩子），
+   * `origin: "treasure"` 取木牛下标（直接 splice，木牛内牌不是手牌，不触发失去手牌钩子）。
    */
   private async resolveConversionUse(
     player: Player,
-    handIndex: number,
+    source: { origin: "hand" | "treasure"; index: number },
     viaSkillId: SkillId | undefined,
     convertTo: CardType | undefined,
     targetId: string | undefined,
   ): Promise<string[]> {
-    const card = player.hand[handIndex];
+    // 木牛内牌：必须确实装备着木牛流马（防客户端伪造 -20000 段下标）。
+    if (source.origin === "treasure" && player.treasure !== CardType.WoodenOx) {
+      return ["使用卡牌失败"];
+    }
+    const pool = source.origin === "treasure" ? player.treasureCards : player.hand;
+    const card = pool[source.index];
     if (!card || !viaSkillId || !convertTo) {
       return ["使用卡牌失败"];
     }
@@ -914,6 +937,11 @@ export class SanGuoGame {
     if (!this.canUseConversionNow(player, viaSkillId, conversion)) {
       return [`${player.name} 当前无法发动${displayName}的当牌转换`];
     }
+    // 取走源牌：手牌走 removeHandCardAt（触发失去手牌钩子），木牛内牌直接 splice。
+    const takeSourceCard = async (): Promise<Card | undefined> =>
+      source.origin === "treasure"
+        ? player.treasureCards.splice(source.index, 1)[0]
+        : this.removeHandCardAt(player, source.index);
     const isSlashLike = this.isSlashCard(conversion.to);
     if (!isSlashLike && conversion.to !== CardType.Peach) {
       // Phase 8：酒与普通锦囊——造一张"源牌花色/点数 + 目标牌类"的合成牌，走通用结算
@@ -923,7 +951,7 @@ export class SanGuoGame {
       if (targetError) {
         return [targetError];
       }
-      const used = await this.removeHandCardAt(player, handIndex);
+      const used = await takeSourceCard();
       if (!used) {
         return ["使用卡牌失败"];
       }
@@ -955,7 +983,7 @@ export class SanGuoGame {
       }
       target = candidate;
     }
-    const used = await this.removeHandCardAt(player, handIndex);
+    const used = await takeSourceCard();
     if (!used) {
       return ["使用卡牌失败"];
     }
@@ -1101,10 +1129,15 @@ export class SanGuoGame {
       return [];
     }
     if (action.cardIndex <= -10000) {
-      // 外部武将包当牌转换（Phase 7）：cardIndex = -10000 - 手牌下标。
+      // 外部武将包当牌转换（Phase 7）：手牌 `cardIndex = -10000 - 手牌下标`，
+      // 木牛流马内牌 `cardIndex = -20000 - 木牛下标`（与响应侧同口径）。
       // **必须排在所有内置负下标分支之前**（`<= -1000` 是木牛流马，否则会被它先吃掉）。
       // 不信任客户端：convertVia/convertTo 与源牌都由 resolveConversionUse 复算。
-      return this.resolveConversionUse(player, -10000 - action.cardIndex, action.convertVia, action.convertTo, targetId);
+      const source =
+        action.cardIndex <= -20000
+          ? { origin: "treasure" as const, index: -20000 - action.cardIndex }
+          : { origin: "hand" as const, index: -10000 - action.cardIndex };
+      return this.resolveConversionUse(player, source, action.convertVia, action.convertTo, targetId);
     }
     if (action.cardIndex <= -100 && action.cardIndex > -200) {
       const index = -100 - action.cardIndex;

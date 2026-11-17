@@ -112,7 +112,7 @@ export type GameAction =
       needsTargetCard?: boolean;
       /**
        * 当牌转换（Phase 7）：本次"使用"是外部武将包 `conversion` 把这张牌当成 `convertTo` 用。
-       * `cardIndex <= -10000` 时必填（`-10000 - 手牌下标`）。
+       * `cardIndex <= -10000` 时必填（手牌 `-10000 - 手牌下标`；木牛流马内牌 `-20000 - 木牛下标`）。
        */
       convertVia?: SkillId;
       convertTo?: CardType;

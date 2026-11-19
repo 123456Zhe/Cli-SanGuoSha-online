@@ -17,7 +17,7 @@
 | 项 | 用法 |
 |---|---|
 | 技能类型 | `kind: "triggered"` + `triggers: ["card_discarded"]` + `globalHook: true`（监听其他角色弃牌/判定） |
-| 持有者定位 | 全局钩子内 `ctx.players.find((p) => p.alive && ctx.hasSkill(p, "曹植/落英"))` |
+| 持有者定位 | 全局钩子内 `ctx.players.filter((p) => p.alive && ctx.hasSkill(p, "曹植/落英"))`，按座位顺序逐个询问，直到有人获得或全部拒绝 |
 | 条件 | `payload.card.suit === "club"`（梅花）+ `payload.actor.id!== holder.id`（其他角色）+ 牌仍在 `ctx.discardPile` 中（多曹植同局时先获得者已取走，后触发者须跳过；先查弃牌堆再询问，避免无效提问） |
 | 效果 | 可选发动（`shouldActivateOptionalEffect`）后按 id 从 `ctx.discardPile` splice 取出并 push 进持有者手牌（与内置天妒同一取牌方式） |
 | 依赖 | **Phase 10 引擎**：`card_discarded` 触发点 + `discardCards` 中央入口；旧引擎上不触发 |

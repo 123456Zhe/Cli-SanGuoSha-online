@@ -20,7 +20,16 @@ import {
 } from "./types.js";
 
 export type CardZonesContext = {
-  applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[], damageCard?: Card, damageKind?: DamageKind | null, isChainSpread?: boolean): Promise<void>;
+  applyDamage(
+    source: Player | null,
+    target: Player,
+    amount: number,
+    reason: string,
+    logs: string[],
+    damageCard?: Card,
+    damageKind?: DamageKind | null,
+    isChainSpread?: boolean,
+  ): Promise<void>;
   buildUsableSources(player: Player): Array<CardSource & { card: Card }>;
   checkLianYing(player: Player, logs?: string[]): Promise<void>;
   readonly currentPlayer: Player;
@@ -73,7 +82,13 @@ export function drawCards(ctx: CardZonesContext, playerId: string, count: number
    * "使用/打出"的牌入堆不要走这里（直接 `discardPile.push`），否则落英会误触发；
    * 装备重建牌、拼点牌、洛神红牌同样不走这里。
    */
-export async function discardCards(ctx: CardZonesContext, cards: Card[], actor: Player, reason: "弃置" | "判定", logs: string[]): Promise<void> {
+export async function discardCards(
+  ctx: CardZonesContext,
+  cards: Card[],
+  actor: Player,
+  reason: "弃置" | "判定",
+  logs: string[],
+): Promise<void> {
   for (const card of cards) {
     ctx.discardPile.push(card);
     await ctx.emitSkillTrigger("card_discarded", { actor, card, reason }, logs);
@@ -92,7 +107,12 @@ export function drawCard(ctx: CardZonesContext): Card | null {
   return card ?? null;
 }
 
-export async function drawJudgmentCard(ctx: CardZonesContext, reason: string, logs: string[], owner?: Player): Promise<Card | null> {
+export async function drawJudgmentCard(
+  ctx: CardZonesContext,
+  reason: string,
+  logs: string[],
+  owner?: Player,
+): Promise<Card | null> {
   let card = ctx.drawCard();
   if (!card) {
     logs.push(`${reason}无法判定：牌堆为空`);
@@ -157,7 +177,12 @@ export async function drawJudgmentCard(ctx: CardZonesContext, reason: string, lo
   return card;
 }
 
-export async function discardFromPlayerHand(ctx: CardZonesContext, player: Player, count: number, logs: string[]): Promise<number> {
+export async function discardFromPlayerHand(
+  ctx: CardZonesContext,
+  player: Player,
+  count: number,
+  logs: string[],
+): Promise<number> {
   let discarded = 0;
   const discardLogs: string[] = [];
   for (let i = 0; i < count && player.hand.length > 0; i += 1) {
@@ -175,7 +200,12 @@ export async function discardFromPlayerHand(ctx: CardZonesContext, player: Playe
   return discarded;
 }
 
-export async function removeHandCardAt(ctx: CardZonesContext, player: Player, index: number, logs?: string[]): Promise<Card | undefined> {
+export async function removeHandCardAt(
+  ctx: CardZonesContext,
+  player: Player,
+  index: number,
+  logs?: string[],
+): Promise<Card | undefined> {
   const removed = player.hand.splice(index, 1)[0];
   if (removed) {
     // 拦截点 hand_card_lost：只通知，不改变移除结果。
@@ -202,7 +232,11 @@ export async function checkLianYing(ctx: CardZonesContext, player: Player, logs?
   }
 }
 
-export async function takeRandomHandCard(ctx: CardZonesContext, player: Player, receiver: Player): Promise<Card | undefined> {
+export async function takeRandomHandCard(
+  ctx: CardZonesContext,
+  player: Player,
+  receiver: Player,
+): Promise<Card | undefined> {
   if (player.hand.length === 0) {
     return undefined;
   }
@@ -239,14 +273,29 @@ export function placeCardsOnBottom(ctx: CardZonesContext, cards: Card[]): void {
   ctx.deck.push(...cards);
 }
 
-export async function emitSkillTrigger(ctx: CardZonesContext, trigger: SkillTrigger, payload: SkillEventPayload, logs: string[]): Promise<void> {
+export async function emitSkillTrigger(
+  ctx: CardZonesContext,
+  trigger: SkillTrigger,
+  payload: SkillEventPayload,
+  logs: string[],
+): Promise<void> {
   const hooks = ctx.skillHooks[trigger];
   for (const hook of hooks) {
     await hook(payload, logs);
   }
 }
 
-export async function applyDamage(ctx: CardZonesContext, source: Player | null, target: Player, amount: number, reason: string, logs: string[], damageCard?: Card, damageKind?: DamageKind | null, isChainSpread = false): Promise<void> {
+export async function applyDamage(
+  ctx: CardZonesContext,
+  source: Player | null,
+  target: Player,
+  amount: number,
+  reason: string,
+  logs: string[],
+  damageCard?: Card,
+  damageKind?: DamageKind | null,
+  isChainSpread = false,
+): Promise<void> {
   const payload: SkillEventPayload = {
     source,
     target,

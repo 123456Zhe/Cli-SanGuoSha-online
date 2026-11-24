@@ -48,11 +48,22 @@ export type PlayExecuteContext = {
   phase: TurnPhase;
   players: Player[];
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
-  requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]>;
+  requestDiscardSelection(
+    player: Player,
+    count: number,
+    reason: string,
+    providedSources?: CardSource[],
+  ): Promise<Card[]>;
   resolveArrowRain(user: Player, trickCard?: Card): Promise<string[]>;
   resolveBarbarian(user: Player, trickCard?: Card): Promise<string[]>;
   resolveCollateral(user: Player, target: Player): Promise<string[]>;
-  resolveConversionUse(player: Player, source: { origin: "hand" | "treasure"; index: number }, viaSkillId: SkillId | undefined, convertTo: CardType | undefined, targetId: string | undefined): Promise<string[]>;
+  resolveConversionUse(
+    player: Player,
+    source: { origin: "hand" | "treasure"; index: number },
+    viaSkillId: SkillId | undefined,
+    convertTo: CardType | undefined,
+    targetId: string | undefined,
+  ): Promise<string[]>;
   resolveDeaths(): Promise<string[]>;
   resolveDelayedTrick(user: Player, usedCard: Card, targetId: string): Promise<string[]>;
   resolveDismantle(user: Player, target: Player, selectedCardId?: string): Promise<string[]>;
@@ -62,21 +73,43 @@ export type PlayExecuteContext = {
   resolveHarvest(user: Player): string[];
   resolveIronChain(user: Player, target: Player): Promise<string[]>;
   resolvePeachGarden(user: Player): string[];
-  resolveSlash(attacker: Player, target: Player, fromSerpent?: boolean, kind?: "normal" | "fire" | "thunder", damageCard?: Card): Promise<string[]>;
+  resolveSlash(
+    attacker: Player,
+    target: Player,
+    fromSerpent?: boolean,
+    kind?: "normal" | "fire" | "thunder",
+    damageCard?: Card,
+  ): Promise<string[]>;
   resolveSnatch(user: Player, target: Player, selectedCardId?: string): Promise<string[]>;
-  resolveUsedCard(player: Player, usedCard: Card, targetId: string | undefined, fromTreasure: boolean, selectedCardId?: string): Promise<string[]>;
+  resolveUsedCard(
+    player: Player,
+    usedCard: Card,
+    targetId: string | undefined,
+    fromTreasure: boolean,
+    selectedCardId?: string,
+  ): Promise<string[]>;
   resolveWinner(): string[];
   shouldActivateOptionalEffect(player: Player, effect: SkillName | CardType): Promise<boolean>;
   slashUsedThisTurn: boolean;
   tryNegateGlobal(user: Player, trickType: CardType, logs: string[]): Promise<boolean>;
   turn: number;
-  useSkillAction(playerId: string, action: Extract<GameAction, { type: "skill" }>, targetId?: string): Promise<string[]>;
+  useSkillAction(
+    playerId: string,
+    action: Extract<GameAction, { type: "skill" }>,
+    targetId?: string,
+  ): Promise<string[]>;
   wineBuffPlayerIds: Set<string>;
   wineUsedPlayerIds: Set<string>;
   winner: "human" | "ai" | "draw" | null;
 };
 
-export async function playAction(ctx: PlayExecuteContext, playerId: string, action: GameAction, targetId?: string, selectedCardId?: string): Promise<string[]> {
+export async function playAction(
+  ctx: PlayExecuteContext,
+  playerId: string,
+  action: GameAction,
+  targetId?: string,
+  selectedCardId?: string,
+): Promise<string[]> {
   if (ctx.winner !== null) {
     return [];
   }
@@ -358,7 +391,14 @@ export async function playAction(ctx: PlayExecuteContext, playerId: string, acti
   return ctx.resolveUsedCard(player, usedCard, targetId, false, selectedCardId);
 }
 
-export async function resolveUsedCard(ctx: PlayExecuteContext, player: Player, usedCard: Card, targetId: string | undefined, fromTreasure: boolean, selectedCardId?: string): Promise<string[]> {
+export async function resolveUsedCard(
+  ctx: PlayExecuteContext,
+  player: Player,
+  usedCard: Card,
+  targetId: string | undefined,
+  fromTreasure: boolean,
+  selectedCardId?: string,
+): Promise<string[]> {
   ctx.discardPile.push(usedCard);
   const logs: string[] = [];
   // 拦截点 card_used：使用一张牌时（结算前）通知，reason="使用"。

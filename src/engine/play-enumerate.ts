@@ -55,10 +55,20 @@ export type PlayEnumerateContext = {
   players: Player[];
   removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined>;
   resolveDeaths(): Promise<string[]>;
-  resolveUsedCard(player: Player, usedCard: Card, targetId: string | undefined, fromTreasure: boolean, selectedCardId?: string): Promise<string[]>;
+  resolveUsedCard(
+    player: Player,
+    usedCard: Card,
+    targetId: string | undefined,
+    fromTreasure: boolean,
+    selectedCardId?: string,
+  ): Promise<string[]>;
   resolveWinner(): string[];
   slashUsedThisTurn: boolean;
-  useSlash(attacker: Player, target: Player, options?: { kind?: SlashKind; card?: Card; fromSerpent?: boolean }): Promise<string[]>;
+  useSlash(
+    attacker: Player,
+    target: Player,
+    options?: { kind?: SlashKind; card?: Card; fromSerpent?: boolean },
+  ): Promise<string[]>;
   validateConversionTarget(player: Player, convertTo: CardType, targetId: string | undefined): string | null;
   wineUsedPlayerIds: Set<string>;
   winner: "human" | "ai" | "draw" | null;
@@ -390,7 +400,12 @@ export function getPlayableActions(ctx: PlayEnumerateContext, playerId: string):
    * 代码技能的 `canUseConversion` 门控（"每回合限次/消耗标记"类限制）在枚举与结算时各复算一次。
    * 必须纯（只读），枚举与结算都调它。
    */
-export function canUseConversionNow(ctx: PlayEnumerateContext, player: Player, skillId: SkillId, conversion: SkillConversion): boolean {
+export function canUseConversionNow(
+  ctx: PlayEnumerateContext,
+  player: Player,
+  skillId: SkillId,
+  conversion: SkillConversion,
+): boolean {
   if (conversion.to === CardType.Wine && ctx.wineUsedPlayerIds.has(player.id)) {
     return false;
   }
@@ -402,12 +417,23 @@ export function canUseConversionNow(ctx: PlayEnumerateContext, player: Player, s
 }
 
   /** Phase 8：转换成功结算后通知技能扣费（只在成功时调用一次）。 */
-export async function notifyConversionUsed(ctx: PlayEnumerateContext, player: Player, skillId: SkillId, conversion: SkillConversion, logs: string[]): Promise<void> {
+export async function notifyConversionUsed(
+  ctx: PlayEnumerateContext,
+  player: Player,
+  skillId: SkillId,
+  conversion: SkillConversion,
+  logs: string[],
+): Promise<void> {
   const module = getPackSkill(skillId);
   await module?.onConversionUsed?.(ctx as unknown as SkillModuleCtx, player, conversion, logs);
 }
 
-export function appendConversionActions(ctx: PlayEnumerateContext, player: Player, actions: GameAction[], canPlaySlash: boolean): void {
+export function appendConversionActions(
+  ctx: PlayEnumerateContext,
+  player: Player,
+  actions: GameAction[],
+  canPlaySlash: boolean,
+): void {
   for (const { skillId, conversion } of ctx.playerConversions(player)) {
     // Phase 8：门控（限次/标记）不过的转换不枚举。
     if (!ctx.canUseConversionNow(player, skillId, conversion)) {
@@ -491,7 +517,12 @@ export function responseConversions(ctx: PlayEnumerateContext, player: Player, k
    * 需要目标的牌必须给目标、铁索连环以外不能指定自己、决斗受空城保护、
    * 距离 1 锦囊（顺手牵羊）看距离。杀走原有分支，这里不管。
    */
-export function validateConversionTarget(ctx: PlayEnumerateContext, player: Player, convertTo: CardType, targetId: string | undefined): string | null {
+export function validateConversionTarget(
+  ctx: PlayEnumerateContext,
+  player: Player,
+  convertTo: CardType,
+  targetId: string | undefined,
+): string | null {
   if (!ctx.cardNeedsTarget(convertTo)) {
     return null;
   }
@@ -517,7 +548,14 @@ export function validateConversionTarget(ctx: PlayEnumerateContext, player: Play
    * 源牌分两处：`origin: "hand"` 取手牌下标（`removeHandCardAt`，触发失去手牌钩子），
    * `origin: "treasure"` 取木牛下标（直接 splice，木牛内牌不是手牌，不触发失去手牌钩子）。
    */
-export async function resolveConversionUse(ctx: PlayEnumerateContext, player: Player, source: { origin: "hand" | "treasure"; index: number }, viaSkillId: SkillId | undefined, convertTo: CardType | undefined, targetId: string | undefined): Promise<string[]> {
+export async function resolveConversionUse(
+  ctx: PlayEnumerateContext,
+  player: Player,
+  source: { origin: "hand" | "treasure"; index: number },
+  viaSkillId: SkillId | undefined,
+  convertTo: CardType | undefined,
+  targetId: string | undefined,
+): Promise<string[]> {
   // 木牛内牌：必须确实装备着木牛流马（防客户端伪造 -20000 段下标）。
   if (source.origin === "treasure" && player.treasure !== CardType.WoodenOx) {
     return ["使用卡牌失败"];

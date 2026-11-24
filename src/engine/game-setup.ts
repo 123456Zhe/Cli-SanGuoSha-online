@@ -64,7 +64,10 @@ export type GameSetupContext = {
   winner: "human" | "ai" | "draw" | null;
 };
 
-export async function initDefaultGame(ctx: GameSetupContext, options: Partial<GameInitOptions> = {}): Promise<string[]> {
+export async function initDefaultGame(
+  ctx: GameSetupContext,
+  options: Partial<GameInitOptions> = {},
+): Promise<string[]> {
   const initOptions = ctx.normalizeInitOptions(options);
   const roleList = ctx.buildRoleList(initOptions.playerCount);
   const distribution = ctx.getRoleDistribution(roleList);
@@ -124,7 +127,12 @@ export async function initDefaultGame(ctx: GameSetupContext, options: Partial<Ga
   return logs;
 }
 
-export async function initNetworkGame(ctx: GameSetupContext, playerConfigs: NetworkPlayerConfig[], openingHandCount = 4, startImmediately = true): Promise<string[]> {
+export async function initNetworkGame(
+  ctx: GameSetupContext,
+  playerConfigs: NetworkPlayerConfig[],
+  openingHandCount = 4,
+  startImmediately = true,
+): Promise<string[]> {
   if (playerConfigs.length < 2 || playerConfigs.length > 6) {
     throw new Error("联机人数必须在 2 到 6 人之间");
   }
@@ -205,7 +213,14 @@ export function normalizeInitOptions(ctx: GameSetupContext, options: Partial<Gam
   };
 }
 
-export function createPlayer(ctx: GameSetupContext, id: string, name: string, isAI: boolean, general: GeneralDefinition, role: PlayerRole,): Player {
+export function createPlayer(
+  ctx: GameSetupContext,
+  id: string,
+  name: string,
+  isAI: boolean,
+  general: GeneralDefinition,
+  role: PlayerRole,
+): Player {
   return {
     id,
     name,

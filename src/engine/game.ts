@@ -1,4 +1,4 @@
-import { Card, CardType, CARD_LIBRARY_SUMMARY} from "./cards.js";
+import { Card, CardType, CARD_LIBRARY_SUMMARY } from "./cards.js";
 import {
   cardNeedsTarget as cardNeedsTargetImpl,
   DamageKind,
@@ -48,7 +48,7 @@ import {
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
 import type { SkillConversion } from "./skill-registry.js";
 import type { SlashKind } from "./card-utils.js";
-import { getHandLimit} from "./skill-rules.js";
+import { getHandLimit } from "./skill-rules.js";
 import {
   canPlaySlashInTurn as canPlaySlashInTurnImpl,
   canUseAssault as canUseAssaultImpl,
@@ -334,7 +334,11 @@ export class SanGuoGame {
     return initDefaultGameImpl(this as unknown as GameSetupContext, options);
   }
 
-  async initNetworkGame(playerConfigs: NetworkPlayerConfig[], openingHandCount = 4, startImmediately = true): Promise<string[]> {
+  async initNetworkGame(
+    playerConfigs: NetworkPlayerConfig[],
+    openingHandCount = 4,
+    startImmediately = true,
+  ): Promise<string[]> {
     return initNetworkGameImpl(this as unknown as GameSetupContext, playerConfigs, openingHandCount, startImmediately);
   }
 
@@ -424,7 +428,12 @@ export class SanGuoGame {
     return canUseConversionNowImpl(this as unknown as PlayEnumerateContext, player, skillId, conversion);
   }
 
-  private async notifyConversionUsed(player: Player, skillId: SkillId, conversion: SkillConversion, logs: string[]): Promise<void> {
+  private async notifyConversionUsed(
+    player: Player,
+    skillId: SkillId,
+    conversion: SkillConversion,
+    logs: string[],
+  ): Promise<void> {
     return notifyConversionUsedImpl(this as unknown as PlayEnumerateContext, player, skillId, conversion, logs);
   }
 
@@ -444,7 +453,13 @@ export class SanGuoGame {
     return validateConversionTargetImpl(this as unknown as PlayEnumerateContext, player, convertTo, targetId);
   }
 
-  private async resolveConversionUse(player: Player, source: { origin: "hand" | "treasure"; index: number }, viaSkillId: SkillId | undefined, convertTo: CardType | undefined, targetId: string | undefined): Promise<string[]> {
+  private async resolveConversionUse(
+    player: Player,
+    source: { origin: "hand" | "treasure"; index: number },
+    viaSkillId: SkillId | undefined,
+    convertTo: CardType | undefined,
+    targetId: string | undefined,
+  ): Promise<string[]> {
     return resolveConversionUseImpl(this as unknown as PlayEnumerateContext, player, source, viaSkillId, convertTo, targetId);
   }
 
@@ -556,7 +571,12 @@ export class SanGuoGame {
     return logs;
   }
 
-  async playAction(playerId: string, action: GameAction, targetId?: string, selectedCardId?: string): Promise<string[]> {
+  async playAction(
+    playerId: string,
+    action: GameAction,
+    targetId?: string,
+    selectedCardId?: string,
+  ): Promise<string[]> {
     return playActionImpl(this as unknown as PlayExecuteContext, playerId, action, targetId, selectedCardId);
   }
 
@@ -568,7 +588,13 @@ export class SanGuoGame {
     return tryNegateGlobalImpl(this as unknown as ResolveContext, user, trickType, logs);
   }
 
-  private async resolveUsedCard(player: Player, usedCard: Card, targetId: string | undefined, fromTreasure: boolean, selectedCardId?: string): Promise<string[]> {
+  private async resolveUsedCard(
+    player: Player,
+    usedCard: Card,
+    targetId: string | undefined,
+    fromTreasure: boolean,
+    selectedCardId?: string,
+  ): Promise<string[]> {
     return resolveUsedCardImpl(this as unknown as PlayExecuteContext, player, usedCard, targetId, fromTreasure, selectedCardId);
   }
 
@@ -665,15 +691,30 @@ export class SanGuoGame {
     return buildResponseSourcesImpl(this as unknown as CardSourcesContext, player, kind, selfRescue);
   }
 
-  private async consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
+  private async consumeResponseCard(
+    player: Player,
+    kind: ResponseKind,
+    sourceId: string,
+    logs: string[],
+  ): Promise<boolean> {
     return consumeResponseCardImpl(this as unknown as ResponsePipelineContext, player, kind, sourceId, logs);
   }
 
-  private async requestCardResponse(player: Player, kind: ResponseKind, trigger: { cardName: string; actorId: string }, logs: string[]): Promise<boolean> {
+  private async requestCardResponse(
+    player: Player,
+    kind: ResponseKind,
+    trigger: { cardName: string; actorId: string },
+    logs: string[],
+  ): Promise<boolean> {
     return requestCardResponseImpl(this as unknown as ResponsePipelineContext, player, kind, trigger, logs);
   }
 
-  private async requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
+  private async requestDiscardSelection(
+    player: Player,
+    count: number,
+    reason: string,
+    providedSources?: CardSource[],
+  ): Promise<Card[]> {
     return requestDiscardSelectionImpl(this as unknown as CardSourcesContext, player, count, reason, providedSources);
   }
 
@@ -681,7 +722,12 @@ export class SanGuoGame {
     return canPlayerRespondImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
-  private async consumeSelectedResponse(player: Player, kind: ResponseKind, optionId: string, logs: string[]): Promise<boolean> {
+  private async consumeSelectedResponse(
+    player: Player,
+    kind: ResponseKind,
+    optionId: string,
+    logs: string[],
+  ): Promise<boolean> {
     return consumeSelectedResponseImpl(this as unknown as ResponsePipelineContext, player, kind, optionId, logs);
   }
 
@@ -817,7 +863,13 @@ export class SanGuoGame {
     return normalizeInitOptionsImpl(this as unknown as GameSetupContext, options);
   }
 
-  private createPlayer(id: string, name: string, isAI: boolean, general: GeneralDefinition, role: PlayerRole,): Player {
+  private createPlayer(
+    id: string,
+    name: string,
+    isAI: boolean,
+    general: GeneralDefinition,
+    role: PlayerRole,
+  ): Player {
     return createPlayerImpl(this as unknown as GameSetupContext, id, name, isAI, general, role);
   }
 
@@ -868,7 +920,16 @@ export class SanGuoGame {
     return emitSkillTriggerImpl(this as unknown as CardZonesContext, trigger, payload, logs);
   }
 
-  private async applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[], damageCard?: Card, damageKind?: DamageKind | null, isChainSpread = false): Promise<void> {
+  private async applyDamage(
+    source: Player | null,
+    target: Player,
+    amount: number,
+    reason: string,
+    logs: string[],
+    damageCard?: Card,
+    damageKind?: DamageKind | null,
+    isChainSpread = false,
+  ): Promise<void> {
     return applyDamageImpl(this as unknown as CardZonesContext, source, target, amount, reason, logs, damageCard, damageKind, isChainSpread);
   }
 

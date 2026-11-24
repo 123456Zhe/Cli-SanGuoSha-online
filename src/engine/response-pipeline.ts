@@ -44,7 +44,12 @@ export type ResponsePipelineContext = {
   players: Player[];
   randomIndex(length: number): number;
   removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined>;
-  requestCardResponse(player: Player, kind: ResponseKind, trigger: { cardName: string; actorId: string }, logs: string[]): Promise<boolean>;
+  requestCardResponse(
+    player: Player,
+    kind: ResponseKind,
+    trigger: { cardName: string; actorId: string },
+    logs: string[],
+  ): Promise<boolean>;
   responseConversions(player: Player, kind: ResponseKind): { skillId: SkillId; conversion: SkillConversion }[];
   responsePolicyByPlayer: Map<string, Partial<Record<ResponseKind, boolean>>>;
   responseSelectionByPlayer: Map<string, Partial<Record<ResponseKind, string>>>;
@@ -53,7 +58,10 @@ export type ResponsePipelineContext = {
   takePlayerResponseSelection(playerId: string, kind: ResponseKind): string | undefined;
 };
 
-export async function decide(ctx: ResponsePipelineContext, request: InteractionRequest): Promise<InteractionDecision> {
+export async function decide(
+  ctx: ResponsePipelineContext,
+  request: InteractionRequest,
+): Promise<InteractionDecision> {
   const playerId =
     request.kind === "respond" ? request.responderId : request.kind === "collateral" ? request.targetId : request.playerId;
   const target = ctx.players.find((player) => player.id === playerId);
@@ -74,7 +82,10 @@ export async function decide(ctx: ResponsePipelineContext, request: InteractionR
   return ctx.autoDecision(request);
 }
 
-export function autoDecisionForDeadPlayer(ctx: ResponsePipelineContext, request: InteractionRequest): InteractionDecision {
+export function autoDecisionForDeadPlayer(
+  ctx: ResponsePipelineContext,
+  request: InteractionRequest,
+): InteractionDecision {
   if (
     request.kind === "optional-effect" ||
     request.kind === "respond" ||
@@ -123,7 +134,13 @@ export function autoDecision(ctx: ResponsePipelineContext, request: InteractionR
   return { choice: "pass" };
 }
 
-export async function consumeResponseCard(ctx: ResponsePipelineContext, player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
+export async function consumeResponseCard(
+  ctx: ResponsePipelineContext,
+  player: Player,
+  kind: ResponseKind,
+  sourceId: string,
+  logs: string[],
+): Promise<boolean> {
   const source = ctx.peekUsableCard(player, sourceId);
   if (!source) {
     return false;
@@ -191,7 +208,13 @@ export async function consumeResponseCard(ctx: ResponsePipelineContext, player: 
   return true;
 }
 
-export async function requestCardResponse(ctx: ResponsePipelineContext, player: Player, kind: ResponseKind, trigger: { cardName: string; actorId: string }, logs: string[]): Promise<boolean> {
+export async function requestCardResponse(
+  ctx: ResponsePipelineContext,
+  player: Player,
+  kind: ResponseKind,
+  trigger: { cardName: string; actorId: string },
+  logs: string[],
+): Promise<boolean> {
   const policy = ctx.responsePolicyByPlayer.get(player.id);
   if (policy && policy[kind] === false) {
     ctx.setPlayerResponseSelection(player.id, kind, null);
@@ -252,7 +275,13 @@ export function canPlayerRespond(ctx: ResponsePipelineContext, playerId: string,
   return allowed !== false;
 }
 
-export async function consumeSelectedResponse(ctx: ResponsePipelineContext, player: Player, kind: ResponseKind, optionId: string, logs: string[]): Promise<boolean> {
+export async function consumeSelectedResponse(
+  ctx: ResponsePipelineContext,
+  player: Player,
+  kind: ResponseKind,
+  optionId: string,
+  logs: string[],
+): Promise<boolean> {
   let cardId = optionId;
   if (optionId.startsWith("qingguo:") || optionId.startsWith("wusheng:") || optionId.startsWith("longdan:")) {
     cardId = optionId.slice(optionId.indexOf(":") + 1);
@@ -268,7 +297,12 @@ export async function consumeSelectedResponse(ctx: ResponsePipelineContext, play
   return false;
 }
 
-export async function consumePeachResponse(ctx: ResponsePipelineContext, player: Player, dyingPlayerId: string, logs: string[]): Promise<boolean> {
+export async function consumePeachResponse(
+  ctx: ResponsePipelineContext,
+  player: Player,
+  dyingPlayerId: string,
+  logs: string[],
+): Promise<boolean> {
   const targetedDecisions = ctx.peachDecisions.get(dyingPlayerId);
   if (targetedDecisions?.has(player.id)) {
     const optionId = targetedDecisions.get(player.id);
@@ -279,7 +313,11 @@ export async function consumePeachResponse(ctx: ResponsePipelineContext, player:
   return ctx.requestCardResponse(player, "peach", { cardName: CardType.Peach, actorId: dyingPlayerId }, logs);
 }
 
-export function takePlayerResponseSelection(ctx: ResponsePipelineContext, playerId: string, kind: ResponseKind): string | undefined {
+export function takePlayerResponseSelection(
+  ctx: ResponsePipelineContext,
+  playerId: string,
+  kind: ResponseKind,
+): string | undefined {
   const selected = ctx.responseSelectionByPlayer.get(playerId);
   if (!selected) {
     return undefined;
@@ -294,7 +332,11 @@ export function takePlayerResponseSelection(ctx: ResponsePipelineContext, player
   return optionId;
 }
 
-export function getPlayerResponseOptions(ctx: ResponsePipelineContext, playerId: string, kind: ResponseKind): ResponseOption[] {
+export function getPlayerResponseOptions(
+  ctx: ResponsePipelineContext,
+  playerId: string,
+  kind: ResponseKind,
+): ResponseOption[] {
   const player = ctx.players.find((item) => item.id === playerId);
   if (!player || !player.alive) {
     return [];
@@ -337,7 +379,12 @@ export function getPlayerResponseOptions(ctx: ResponsePipelineContext, playerId:
   return [...direct, ...wuSheng, ...longDan];
 }
 
-export function setPlayerResponseSelection(ctx: ResponsePipelineContext, playerId: string, kind: ResponseKind, optionId: string | null): void {
+export function setPlayerResponseSelection(
+  ctx: ResponsePipelineContext,
+  playerId: string,
+  kind: ResponseKind,
+  optionId: string | null,
+): void {
   if (optionId === null) {
     const existed = ctx.responseSelectionByPlayer.get(playerId);
     if (!existed) {
@@ -354,7 +401,12 @@ export function setPlayerResponseSelection(ctx: ResponsePipelineContext, playerI
   ctx.responseSelectionByPlayer.set(playerId, existed);
 }
 
-export function setPeachDecision(ctx: ResponsePipelineContext, dyingPlayerId: string, rescuerId: string, optionId: string | null): void {
+export function setPeachDecision(
+  ctx: ResponsePipelineContext,
+  dyingPlayerId: string,
+  rescuerId: string,
+  optionId: string | null,
+): void {
   const decisions = ctx.peachDecisions.get(dyingPlayerId) ?? new Map<string, string | null>();
   decisions.set(rescuerId, optionId);
   ctx.peachDecisions.set(dyingPlayerId, decisions);

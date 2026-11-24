@@ -107,7 +107,12 @@ export function takeEquipSlot(ctx: CardSourcesContext, player: Player, slot: str
    * 逐张询问"要弃哪张"，直到玩家放弃或已无牌可弃；返回实际弃置张数。
    * 复用现有 choose-discard 请求（allowPass=true），CLI / WebUI / Go 客户端均已支持放弃选项。
    */
-export async function requestFlexibleDiscard(ctx: CardSourcesContext, player: Player, reason: string, logs: string[]): Promise<number> {
+export async function requestFlexibleDiscard(
+  ctx: CardSourcesContext,
+  player: Player,
+  reason: string,
+  logs: string[],
+): Promise<number> {
   const maxCount = ctx.buildAnyDiscardSources(player).length;
   let discarded = 0;
   while (discarded < maxCount) {
@@ -183,7 +188,11 @@ export function peekUsableCard(ctx: CardSourcesContext, player: Player, sourceId
   return { sourceId, origin: origin as CardSource["origin"], card, label: card.type };
 }
 
-export async function removeUsableCardBySourceId(ctx: CardSourcesContext, player: Player, sourceId: string): Promise<Card | undefined> {
+export async function removeUsableCardBySourceId(
+  ctx: CardSourcesContext,
+  player: Player,
+  sourceId: string,
+): Promise<Card | undefined> {
   const separator = sourceId.indexOf(":");
   if (separator < 0) {
     return undefined;
@@ -263,7 +272,12 @@ export function buildSlashSources(ctx: CardSourcesContext, player: Player): Card
    * 外部武将包 `conversion.asResponse`（Phase 7）的响应来源：把满足 `from` 的牌标成"可当 `kind` 打出"。
    * `viaSkill`/`asType` 是给 `consumeResponseCard` 的凭据——只有带标记的来源才允许"非直接牌类"响应。
    */
-export function appendConversionSources(ctx: CardSourcesContext, player: Player, kind: ResponseKind, sources: CardSource[]): void {
+export function appendConversionSources(
+  ctx: CardSourcesContext,
+  player: Player,
+  kind: ResponseKind,
+  sources: CardSource[],
+): void {
   const conversions = ctx.responseConversions(player, kind);
   if (conversions.length === 0) {
     return;
@@ -324,14 +338,25 @@ export function buildPeachSources(ctx: CardSourcesContext, player: Player, selfR
   return sources;
 }
 
-export function buildResponseSources(ctx: CardSourcesContext, player: Player, kind: ResponseKind, selfRescue = false): CardSource[] {
+export function buildResponseSources(
+  ctx: CardSourcesContext,
+  player: Player,
+  kind: ResponseKind,
+  selfRescue = false,
+): CardSource[] {
   if (kind === "dodge") return ctx.buildDodgeSources(player);
   if (kind === "slash") return ctx.buildSlashSources(player);
   if (kind === "negate") return ctx.buildNegateSources(player);
   return ctx.buildPeachSources(player, selfRescue);
 }
 
-export async function requestDiscardSelection(ctx: CardSourcesContext, player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
+export async function requestDiscardSelection(
+  ctx: CardSourcesContext,
+  player: Player,
+  count: number,
+  reason: string,
+  providedSources?: CardSource[],
+): Promise<Card[]> {
   const picked: Card[] = [];
   for (let i = 0; i < count; i += 1) {
     const sources = providedSources ?? ctx.buildUsableSources(player);

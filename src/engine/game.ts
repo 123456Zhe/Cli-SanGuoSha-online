@@ -120,6 +120,16 @@ import {
 } from "./game-setup.js";
 import type { GameSetupContext } from "./game-setup.js";
 
+import {
+  startTurn as startTurnImpl,
+  endPlayPhase as endPlayPhaseImpl,
+  shouldSkipDiscardPhase as shouldSkipDiscardPhaseImpl,
+  finishTurn as finishTurnImpl,
+  moveToNextPlayer as moveToNextPlayerImpl,
+  advanceIfCurrentPlayerDead as advanceIfCurrentPlayerDeadImpl,
+} from "./turn-flow.js";
+import type { TurnFlowContext } from "./turn-flow.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -135,7 +145,6 @@ export type {
 export { GENERAL_LIBRARY } from "./generals.js";
 export type { CardSource, DecisionHandler, InteractionDecision, InteractionRequest, ResponseKind } from "./interaction.js";
 
-const drawCountPerTurn = 2;
 
 
 export class SanGuoGame {
@@ -2144,157 +2153,19 @@ export class SanGuoGame {
   }
 
   async startTurn(): Promise<string[]> {
-    if (this.winner !== null) {
-      return [];
-    }
-    this.phase = TurnPhase.Judgment;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.aiTurnSeenStatesSet().clear();
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    const player = this.currentPlayer;
-    const logs = [`第 ${this.turn} 回合：${player.name} 的回合`];
-    // Phase 8：准备阶段触发点（官方回合流程的第一阶段，在判定阶段之前）。
-    await this.emitSkillTrigger("prepare_phase_start", { actor: player }, logs);
-    logs.push(`进入${TurnPhase.Judgment}`);
-    if (player.delayedTricks.length > 0) {
-      logs.push(...(await this.resolveDelayedJudgments(player)));
-    } else {
-      logs.push(`${player.name} 的判定区为空`);
-    }
-    logs.push(...(await this.resolveDeaths()));
-    if (this.winner !== null) {
-      return logs;
-    }
-    this.phase = TurnPhase.Draw;
-    logs.push(`进入${TurnPhase.Draw}`);
-    if (player.faceDown) {
-      player.faceDown = false;
-      logs.push(`${player.name} 翻至正面，跳过本回合`);
-      if (this.hasSkill(player, SkillName.JieWei) && await this.shouldActivateOptionalEffect(player, SkillName.JieWei)) {
-        const drawn = this.drawCards(player.id, 1);
-        logs.push(`${player.name} 发动${SkillName.JieWei}，摸了 ${drawn} 张牌`);
-      }
-      this.moveToNextPlayer();
-      if (this.winner !== null) return logs;
-      if (this.staged) {
-        this.pendingNextTurn = true;
-        return logs;
-      }
-      logs.push(...(await this.startTurn()));
-      return logs;
-    }
-    this.resetTurnSkillState(player.id);
-    await this.emitSkillTrigger("turn_start", { actor: player }, logs);
-    if (this.skipDrawPhase === player.id) {
-      this.skipDrawPhase = null;
-      logs.push(`${player.name} 跳过摸牌阶段`);
-    } else {
-      const drawPayload: SkillEventPayload = { actor: player, drawCount: drawCountPerTurn };
-      await this.emitSkillTrigger("before_draw", drawPayload, logs);
-      const drawn = this.drawCards(player.id, drawPayload.drawCount ?? drawCountPerTurn);
-      logs.push(`${player.name} 摸了 ${drawn} 张牌`);
-    }
-    this.phase = TurnPhase.Play;
-    // 克己口径：官方是"出牌阶段内未使用/打出过杀"。杀只能在出牌阶段使用/打出，
-    // 在此重置后，这两个 flag 即精确等于"本出牌阶段"的使用记录。
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    if (this.skipPlayPhase === player.id) {
-      this.skipPlayPhase = null;
-      logs.push(`${player.name} 跳过出牌阶段`);
-      logs.push(...(await this.endPlayPhase(player.id)));
-      return logs;
-    }
-    logs.push(`进入${TurnPhase.Play}`);
-    return logs;
+    return startTurnImpl(this as unknown as TurnFlowContext);
   }
 
   private async endPlayPhase(playerId: string): Promise<string[]> {
-    const player = this.mustGetPlayer(playerId);
-    if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
-      return [];
-    }
-    this.phase = TurnPhase.Discard;
-    const logs: string[] = [];
-    logs.push(`进入${TurnPhase.Discard}`);
-    if (!await this.shouldSkipDiscardPhase(player, logs)) {
-      // 手牌上限 = 体力值 + rules.handLimitDelta（绝境这类技能会把它抬高），统一走 getHandLimit。
-      const handLimit = getHandLimit(player);
-      if (!player.isAI && player.hand.length > handLimit) {
-        logs.push(`${player.name} 需要弃置 ${player.hand.length - handLimit} 张手牌`);
-        return logs;
-      }
-      while (player.hand.length > handLimit) {
-        const index = this.randomIndex(player.hand.length);
-        const removed = await this.removeHandCardAt(player, index);
-        if (removed) {
-          logs.push(`${player.name} 弃置了 ${removed.type}`);
-          await this.discardCards([removed], player, "弃置", logs);
-        }
-      }
-    }
-    if (this.staged) {
-      this.pendingTurnEndPlayer = player.id;
-    } else {
-      logs.push(...(await this.finishTurn(player)));
-    }
-    return logs;
+    return endPlayPhaseImpl(this as unknown as TurnFlowContext, playerId);
   }
 
-  /**
-   * 弃牌阶段入口的拦截点（Phase 6）：让外部武将包与声明式规则有机会跳过整个弃牌阶段。
-   *
-   * 两条路径，任一命中即跳过：
-   * 1. `discard_phase_start` 钩子把 `payload.skipDiscardPhase` 置 true（钩子自行处理"是否发动"询问）；
-   * 2. 声明式规则 `rules.skipDiscardPhaseIfNoSlash`：出牌阶段内未使用/打出过杀时，询问玩家是否发动（克己）。
-   */
   private async shouldSkipDiscardPhase(player: Player, logs: string[]): Promise<boolean> {
-    const payload: SkillEventPayload = { actor: player };
-    await this.emitSkillTrigger("discard_phase_start", payload, logs);
-    if (payload.skipDiscardPhase) {
-      logs.push(`${player.name} 跳过弃牌阶段`);
-      return true;
-    }
-    const skillId = findSkillWithBooleanRule(player, "skipDiscardPhaseIfNoSlash");
-    if (!skillId || this.slashUsedThisTurn || this.slashPlayedThisTurn) {
-      return false;
-    }
-    if (!await this.shouldActivateOptionalEffect(player, skillId)) {
-      return false;
-    }
-    const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-    logs.push(`${player.name} 发动${displayName}，跳过弃牌阶段`);
-    return true;
+    return shouldSkipDiscardPhaseImpl(this as unknown as TurnFlowContext, player, logs);
   }
 
   async finishTurn(player: Player): Promise<string[]> {
-    const logs: string[] = [];
-    this.phase = TurnPhase.End;
-    logs.push(`进入${TurnPhase.End}`);
-    // Phase 8：结束阶段触发点（弃牌阶段之后、回合结束之前；闭月/据守等内置结束阶段效果之前发出）。
-    await this.emitSkillTrigger("end_phase_start", { actor: player }, logs);
-    if (this.hasSkill(player, SkillName.BiYue) && await this.shouldActivateOptionalEffect(player, SkillName.BiYue)) {
-      const drawn = this.drawCards(player.id, 1);
-      logs.push(`${player.name} 的${SkillName.BiYue}生效，摸了 ${drawn} 张牌`);
-    }
-    if (this.hasSkill(player, SkillName.JuShou) && await this.shouldActivateOptionalEffect(player, SkillName.JuShou)) {
-      const drawn = this.drawCards(player.id, 3);
-      player.faceDown = true;
-      logs.push(`${player.name} 发动${SkillName.JuShou}，摸了 ${drawn} 张牌并将武将牌翻至背面`);
-    }
-    logs.push(`${player.name} 结束回合`);
-    this.moveToNextPlayer();
-    if (this.winner !== null) {
-      return logs;
-    }
-    if (this.staged) {
-      this.pendingNextTurn = true;
-      return logs;
-    }
-    logs.push(...(await this.startTurn()));
-    return logs;
+    return finishTurnImpl(this as unknown as TurnFlowContext, player);
   }
 
   private findTargetsByCard(playerId: string, cardType: CardType): string[] {
@@ -2477,52 +2348,11 @@ export class SanGuoGame {
   }
 
   private moveToNextPlayer(): void {
-    const livingPlayers = this.players.filter((player) => player.alive);
-    if (livingPlayers.length <= 1) {
-      this.resolveWinner();
-      return;
-    }
-    let moved = false;
-    // Phase 9：轮次推进——遍历经过本轮起始座位即一轮结束（起始玩家已阵亡时，
-    // 遍历会直接越过其座位，轮次照常推进，锚点顺延到落点座位）。
-    let wrapped = false;
-    for (let i = 0; i < this.players.length; i += 1) {
-      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
-      if (this.currentPlayerIndex === this.roundStartIndex) {
-        wrapped = true;
-      }
-      if (this.players[this.currentPlayerIndex]?.alive) {
-        moved = true;
-        break;
-      }
-    }
-    if (moved) {
-      this.turn += 1;
-      if (wrapped) {
-        this.round += 1;
-        this.roundStartIndex = this.currentPlayerIndex;
-        this.skillUsedThisRound = new Map();
-      }
-    }
+    return moveToNextPlayerImpl(this as unknown as TurnFlowContext);
   }
 
   private async advanceIfCurrentPlayerDead(logs: string[]): Promise<void> {
-    if (this.winner !== null) {
-      return;
-    }
-    const current = this.players[this.currentPlayerIndex];
-    if (current?.alive) {
-      return;
-    }
-    this.moveToNextPlayer();
-    if (this.winner !== null) {
-      return;
-    }
-    if (this.staged) {
-      this.pendingNextTurn = true;
-      return;
-    }
-    logs.push(...(await this.startTurn()));
+    return advanceIfCurrentPlayerDeadImpl(this as unknown as TurnFlowContext, logs);
   }
 
   private normalizeInitOptions(options: Partial<GameInitOptions>): GameInitOptions {

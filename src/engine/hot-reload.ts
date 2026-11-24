@@ -9,7 +9,7 @@ import type { SkillHook, SkillTrigger } from "./types.js";
 export type HotReloadReport = {
   ok: boolean;
   message: string;
-  /** 引擎源码指纹（game.ts 等 10 个文件的 sha256 前 12 位），用于确认加载的确实是新代码 */
+  /** 引擎源码指纹（`ENGINE_SOURCES` 全部文件的 sha256 前 12 位），用于确认加载的确实是新代码 */
   sourceHash: string;
 };
 
@@ -17,9 +17,21 @@ export type GameConstructor = new (rng?: () => number) => SanGuoGame;
 
 const engineDir = dirname(fileURLToPath(import.meta.url));
 
-/** 参与热重载指纹校验的引擎源码文件 */
-const ENGINE_SOURCES = [
+/**
+ * 参与热重载指纹校验的引擎源码文件。
+ * 新增 `src/engine` 模块（尤其从 `game.ts` 拆出的模块）必须加进这张表，
+ * 否则只改那个模块时指纹不变，"reload 到底有没有生效"就无从判断。
+ */
+export const ENGINE_SOURCES = [
   "game.ts",
+  "game-setup.ts",
+  "turn-flow.ts",
+  "card-zones.ts",
+  "card-sources.ts",
+  "response-pipeline.ts",
+  "play-enumerate.ts",
+  "play-execute.ts",
+  "ai-driver.ts",
   "skill-hooks.ts",
   "cards.ts",
   "skills.ts",
@@ -29,6 +41,11 @@ const ENGINE_SOURCES = [
   "types.ts",
   "resolve.ts",
   "ai-heuristics.ts",
+  "general-pack.ts",
+  "skill-module.ts",
+  "skill-registry.ts",
+  "skill-rules.ts",
+  "hot-reload.ts",
 ] as const;
 
 const hashEngineSources = (): string => {

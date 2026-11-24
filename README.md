@@ -139,7 +139,16 @@ npm run webui
 
 - `src/index.ts`：程序入口，解析运行参数与环境变量，创建 `SanGuoGame` 与 `CliSanGuoApp` 并启动。
 - `src/ui/app.ts`：CLI 交互层，负责界面分区渲染、键盘事件处理、游戏设置流程、用户行动输入、AI 回合驱动。
-- `src/engine/game.ts`：核心引擎，负责牌堆与玩家状态、阶段推进、卡牌与技能结算、胜负判定。
+- `src/engine/game.ts`：核心引擎门面（`SanGuoGame`：玩家/牌堆状态、交互管线、技能状态），
+  具体流程拆在下面的模块里——每块都以 context-interface 模式接入（首参 `XxxContext`），`game.ts` 只保留薄封装：
+  - `game-setup.ts`：建局（默认人机局 / 联机局）、身份与武将分配。
+  - `turn-flow.ts`：回合流程（准备/判定/摸牌/出牌/弃牌/结束）与座位轮转。
+  - `card-zones.ts`：摸牌/弃牌/判定牌/手牌移除、击杀归属与 `applyDamage`（含铁索传导）。
+  - `card-sources.ts`：`CardSource` 来源枚举（手牌/木牛流马/装备）、响应来源（闪/杀/无懈/桃）与逐张弃牌。
+  - `response-pipeline.ts`：`decide()` 分发（`DecisionHandler` / 自动决策）、响应牌打出与求桃。
+  - `play-enumerate.ts`：`getPlayableActions`、当牌转换门控与目标复算、`findTargetsByCard`。
+  - `play-execute.ts`：`playAction` 的负下标分支（当牌转换/国色/龙胆/武圣/木牛/丈八蛇矛）与 `resolveUsedCard`。
+  - `ai-driver.ts`：`runAITurn` / `getBestAiDecision` 与“回合内局面重复”防空转。
 - `src/engine/general-pack.ts`：外部武将包 loader（扫描 `generals/*/general.json`、schema 校验、技能文件加载、命名空间 id、每包 try/catch 隔离）。
 - `src/engine/skill-module.ts`：外部技能运行时契约（`SkillModule`）与全局注册表（挂 `globalThis`，热重载后存活）。
 - `src/engine/skill-registry.ts`：内置技能元数据注册表（45 技能）+ 统一查询 `resolveSkillDescriptor`。
@@ -165,6 +174,10 @@ npm run webui
 
 ## 3. 引擎状态模型（game.ts）
 
+`game.ts` 只保留 `SanGuoGame` 的状态字段、构造与薄封装；建局、回合流程、牌区/伤害、
+牌来源、响应管线、出牌枚举/执行、AI 驱动分别在 §1 列出的 `game-*.ts` / `turn-flow.ts` /
+`card-*.ts` / `response-pipeline.ts` / `play-*.ts` / `ai-driver.ts` 里。
+
 - `GameSnapshot` 是 UI 与 AI 的统一只读视图，包含：
   - `turn`：当前轮次（按“当前行动玩家的一次完整回合”为单位）。
   - `currentPlayerId`、`phase`：当前行动者与阶段。
@@ -173,8 +186,8 @@ npm run webui
   - `deckCount`、`discardCount`：牌堆规模信息。
 - `Player` 结构保存角色身份、体力、手牌、装备区、武将技能、存活状态。
 - 引擎对外暴露动作与查询接口：
-  - `getPlayableActions`：给定玩家，返回可执行动作清单。
-  - `playTurnAction`：执行动作并返回本次结算日志。
+  - `getPlayableActions`：给定玩家，返回可执行动作清单（实现在 `play-enumerate.ts`）。
+  - `playAction`：执行动作并返回本次结算日志（实现在 `play-execute.ts`）。
   - 响应相关接口：用于“闪/杀/无懈可击”等被动应对与策略选择。
 
 ## 4. 回合推进与结算主线

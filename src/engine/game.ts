@@ -1,24 +1,14 @@
-import { Card, CardType, CARD_LIBRARY_SUMMARY, createDeck, shuffle } from "./cards.js";
+import { Card, CardType, CARD_LIBRARY_SUMMARY } from "./cards.js";
 import {
-  attributeDamageKind,
   cardNeedsTarget as cardNeedsTargetImpl,
   DamageKind,
-  describeCard,
   hasRemovableCard as cardUtilsHasRemovableCard,
   isDelayedTrickCard as isDelayedTrickCardImpl,
-  isDistanceOneTrickCard,
   isEquipCard as isEquipCardImpl,
   isNonDelayedTrickCard as isNonDelayedTrickCardImpl,
   isSlashCard as isSlashCardImpl,
-  matchesConversionFilter,
-  responseKindToCardType,
-  slashKindFromCardType,
-  slashKindOf,
 } from "./card-utils.js";
 import {
-  AiHeuristicsContext,
-  pickBestAiAction,
-  pickBestTarget,
 } from "./ai-heuristics.js";
 import {
   buildRoleList,
@@ -33,9 +23,7 @@ import {
   canReachForSlash as canReachForSlashImpl,
   createCard as createCardImpl,
   discardSelfCards as discardSelfCardsImpl,
-  discardWoodenOxStoredCards as discardWoodenOxStoredCardsImpl,
   expandSlashTargets as expandSlashTargetsImpl,
-  onLoseEquip as onLoseEquipImpl,
   removeRandomCardFromPlayer as removeRandomCardFromPlayerImpl,
   ResolveContext,
   resolveArrowRain as resolveArrowRainImpl,
@@ -58,12 +46,9 @@ import {
   tryNegateGlobal as tryNegateGlobalImpl,
 } from "./resolve.js";
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
-import { getPackSkill, getPackSkills } from "./skill-module.js";
-import type { SkillModuleCtx } from "./skill-module.js";
-import { resolveSkillDescriptor } from "./skill-registry.js";
 import type { SkillConversion } from "./skill-registry.js";
 import type { SlashKind } from "./card-utils.js";
-import { findSkillWithBooleanRule, getHandLimit, getSkillRules, isImmuneTo } from "./skill-rules.js";
+import { getHandLimit } from "./skill-rules.js";
 import {
   canPlaySlashInTurn as canPlaySlashInTurnImpl,
   canUseAssault as canUseAssaultImpl,
@@ -111,6 +96,109 @@ import {
   TurnPhase,
 } from "./types.js";
 
+import {
+  initDefaultGame as initDefaultGameImpl,
+  initNetworkGame as initNetworkGameImpl,
+  normalizeInitOptions as normalizeInitOptionsImpl,
+  createPlayer as createPlayerImpl,
+  applyLordBonus as applyLordBonusImpl,
+} from "./game-setup.js";
+import type { GameSetupContext } from "./game-setup.js";
+
+import {
+  startTurn as startTurnImpl,
+  endPlayPhase as endPlayPhaseImpl,
+  shouldSkipDiscardPhase as shouldSkipDiscardPhaseImpl,
+  finishTurn as finishTurnImpl,
+  moveToNextPlayer as moveToNextPlayerImpl,
+  advanceIfCurrentPlayerDead as advanceIfCurrentPlayerDeadImpl,
+} from "./turn-flow.js";
+import type { TurnFlowContext } from "./turn-flow.js";
+
+import {
+  drawCards as drawCardsImpl,
+  discardCards as discardCardsImpl,
+  drawCard as drawCardImpl,
+  drawJudgmentCard as drawJudgmentCardImpl,
+  discardFromPlayerHand as discardFromPlayerHandImpl,
+  removeHandCardAt as removeHandCardAtImpl,
+  checkLianYing as checkLianYingImpl,
+  takeRandomHandCard as takeRandomHandCardImpl,
+  drawTopCards as drawTopCardsImpl,
+  placeCardsOnTop as placeCardsOnTopImpl,
+  placeCardsOnBottom as placeCardsOnBottomImpl,
+  emitSkillTrigger as emitSkillTriggerImpl,
+  applyDamage as applyDamageImpl,
+  isKongChengProtected as isKongChengProtectedImpl,
+  damageCreditMap as damageCreditMapImpl,
+  removeCardFromAllZones as removeCardFromAllZonesImpl,
+  oxStoredTurnMap as oxStoredTurnMapImpl,
+  canTakeStoredCard as canTakeStoredCardImpl,
+  noteDamageSource as noteDamageSourceImpl,
+  takeDamageSource as takeDamageSourceImpl,
+} from "./card-zones.js";
+import type { CardZonesContext } from "./card-zones.js";
+
+import {
+  buildAnyDiscardSources as buildAnyDiscardSourcesImpl,
+  takeEquipSlot as takeEquipSlotImpl,
+  requestFlexibleDiscard as requestFlexibleDiscardImpl,
+  buildUsableSources as buildUsableSourcesImpl,
+  peekUsableCard as peekUsableCardImpl,
+  removeUsableCardBySourceId as removeUsableCardBySourceIdImpl,
+  buildDodgeSources as buildDodgeSourcesImpl,
+  buildSlashSources as buildSlashSourcesImpl,
+  appendConversionSources as appendConversionSourcesImpl,
+  buildNegateSources as buildNegateSourcesImpl,
+  buildPeachSources as buildPeachSourcesImpl,
+  buildResponseSources as buildResponseSourcesImpl,
+  requestDiscardSelection as requestDiscardSelectionImpl,
+} from "./card-sources.js";
+import type { CardSourcesContext } from "./card-sources.js";
+
+import {
+  decide as decideImpl,
+  autoDecisionForDeadPlayer as autoDecisionForDeadPlayerImpl,
+  autoDecision as autoDecisionImpl,
+  consumeResponseCard as consumeResponseCardImpl,
+  requestCardResponse as requestCardResponseImpl,
+  canPlayerRespond as canPlayerRespondImpl,
+  consumeSelectedResponse as consumeSelectedResponseImpl,
+  consumePeachResponse as consumePeachResponseImpl,
+  takePlayerResponseSelection as takePlayerResponseSelectionImpl,
+  getPlayerResponseOptions as getPlayerResponseOptionsImpl,
+  setPlayerResponseSelection as setPlayerResponseSelectionImpl,
+  setPeachDecision as setPeachDecisionImpl,
+  clearPeachDecisions as clearPeachDecisionsImpl,
+} from "./response-pipeline.js";
+import type { ResponsePipelineContext } from "./response-pipeline.js";
+
+import {
+  getPlayableActions as getPlayableActionsImpl,
+  canUseConversionNow as canUseConversionNowImpl,
+  notifyConversionUsed as notifyConversionUsedImpl,
+  appendConversionActions as appendConversionActionsImpl,
+  playerConversions as playerConversionsImpl,
+  responseConversions as responseConversionsImpl,
+  validateConversionTarget as validateConversionTargetImpl,
+  resolveConversionUse as resolveConversionUseImpl,
+  findTargetsByCard as findTargetsByCardImpl,
+} from "./play-enumerate.js";
+import type { PlayEnumerateContext } from "./play-enumerate.js";
+
+import { playAction as playActionImpl, resolveUsedCard as resolveUsedCardImpl } from "./play-execute.js";
+import type { PlayExecuteContext } from "./play-execute.js";
+
+import {
+  runAITurn as runAITurnImpl,
+  getBestAiDecision as getBestAiDecisionImpl,
+  aiTurnSeenStatesSet as aiTurnSeenStatesSetImpl,
+  buildAiTurnProgressKey as buildAiTurnProgressKeyImpl,
+  noteAiTurnProgress as noteAiTurnProgressImpl,
+  beginAiTurnProgress as beginAiTurnProgressImpl,
+} from "./ai-driver.js";
+import type { AiDriverContext } from "./ai-driver.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -125,17 +213,6 @@ export type {
 } from "./types.js";
 export { GENERAL_LIBRARY } from "./generals.js";
 export type { CardSource, DecisionHandler, InteractionDecision, InteractionRequest, ResponseKind } from "./interaction.js";
-
-const drawCountPerTurn = 2;
-
-const defaultInitOptions: GameInitOptions = {
-  playerCount: 3,
-  aiCount: 2,
-  openingHandCount: 4,
-  humanName: "主公",
-  humanRole: PlayerRole.Lord,
-  humanGeneral: "孙策",
-};
 
 export class SanGuoGame {
   private players: Player[];
@@ -252,126 +329,16 @@ export class SanGuoGame {
   }
 
   async initDefaultGame(options: Partial<GameInitOptions> = {}): Promise<string[]> {
-    const initOptions = this.normalizeInitOptions(options);
-    const roleList = this.buildRoleList(initOptions.playerCount);
-    const distribution = this.getRoleDistribution(roleList);
-    const humanRole = roleList.includes(initOptions.humanRole) ? initOptions.humanRole : PlayerRole.Lord;
-    const humanGeneralDefinition = this.resolveGeneralByName(initOptions.humanGeneral);
-    const rolePool = [...roleList];
-    const humanRoleIndex = rolePool.indexOf(humanRole);
-    if (humanRoleIndex >= 0) {
-      rolePool.splice(humanRoleIndex, 1);
-    }
-
-    this.players = [this.createPlayer("human", initOptions.humanName, false, humanGeneralDefinition, humanRole)];
-    const usedGeneralNames = new Set<string>([humanGeneralDefinition.name]);
-    for (let i = 0; i < rolePool.length; i += 1) {
-      const role = rolePool[i] ?? PlayerRole.Rebel;
-      const general = this.pickRandomUnusedGeneral(usedGeneralNames);
-      usedGeneralNames.add(general.name);
-      this.players.push(this.createPlayer(`ai-${i + 1}`, `玩家${this.getAiName(i)}`, true, general, role));
-    }
-    this.applyLordBonus();
-    this.deck = shuffle(createDeck(), this.rng);
-    this.discardPile = [];
-    this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord && player.alive);
-    if (this.currentPlayerIndex < 0) {
-      this.currentPlayerIndex = 0;
-    }
-    this.turn = 1;
-    this.round = 1;
-    this.roundStartIndex = this.currentPlayerIndex;
-    this.phase = TurnPhase.Draw;
-    this.winner = null;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    this.skillUsedThisTurn = new Map();
-    this.skillUsedThisRound = new Map();
-    this.skillCountsThisTurn = new Map();
-    this.skillFlagsThisTurn = new Map();
-    this.responsePolicyByPlayer.clear();
-    this.responseSelectionByPlayer.clear();
-    this.optionalEffectDecisions.clear();
-
-    const logs = [
-      `对局开始：${initOptions.playerCount} 人局`,
-      `身份配比：反贼${distribution.rebel} 忠臣${distribution.loyalist} 内奸${distribution.traitor}`,
-      `你的身份：${humanRole}`,
-      `你的武将：${humanGeneralDefinition.name}`,
-      `初始手牌：每人 ${initOptions.openingHandCount} 张`,
-      "发牌中...",
-    ];
-    for (const player of this.players) {
-      const drawn = this.drawCards(player.id, initOptions.openingHandCount);
-      logs.push(`${player.name}[${player.general}] 获得 ${drawn} 张手牌`);
-    }
-    logs.push(...(await this.startTurn()));
-    return logs;
+    return initDefaultGameImpl(this as unknown as GameSetupContext, options);
   }
 
   async initNetworkGame(playerConfigs: NetworkPlayerConfig[], openingHandCount = 4, startImmediately = true): Promise<string[]> {
-    if (playerConfigs.length < 2 || playerConfigs.length > 6) {
-      throw new Error("联机人数必须在 2 到 6 人之间");
-    }
-    const ids = new Set(playerConfigs.map((player) => player.id));
-    if (ids.size !== playerConfigs.length) {
-      throw new Error("联机玩家 ID 不能重复");
-    }
-    const roles = this.buildRoleList(playerConfigs.length);
-    const shuffledRoles = shuffle(roles, this.rng);
-    const usedGeneralNames = new Set<string>();
-    // 调试指定武将：按座位顺序先到先得，随机分配永远优先让位于显式指定；
-    // 未知武将/被重复指定一律报错，绝不静默换人（否则玩家以为选上了实际没生效）。
-    const pickGeneralFor = (config: NetworkPlayerConfig, index: number): GeneralDefinition => {
-      if (config.general === undefined) {
-        return this.pickRandomUnusedGeneral(usedGeneralNames);
-      }
-      const general = this.resolveGeneralByName(config.general);
-      if (usedGeneralNames.has(general.name)) {
-        throw new Error(`联机建局失败：武将「${general.name}」被指定了多次（座位 ${index + 1}：${config.name}）`);
-      }
-      return general;
-    };
-    this.players = playerConfigs.map((config, index) => {
-      const general = pickGeneralFor(config, index);
-      usedGeneralNames.add(general.name);
-      return this.createPlayer(config.id, config.name, config.isAI ?? false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
-    });
-    this.applyLordBonus();
-    this.deck = shuffle(createDeck(), this.rng);
-    this.discardPile = [];
-    this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord);
-    this.currentPlayerIndex = Math.max(0, this.currentPlayerIndex);
-    this.turn = 1;
-    this.round = 1;
-    this.roundStartIndex = this.currentPlayerIndex;
-    this.phase = TurnPhase.Draw;
-    this.winner = null;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    this.skillUsedThisTurn = new Map();
-    this.skillUsedThisRound = new Map();
-    this.skillCountsThisTurn = new Map();
-    this.skillFlagsThisTurn = new Map();
-    this.responsePolicyByPlayer.clear();
-    this.responseSelectionByPlayer.clear();
-    this.optionalEffectDecisions.clear();
-
-    const handCount = Math.min(6, Math.max(3, Math.floor(openingHandCount)));
-    const logs = [`联机对局开始：${playerConfigs.length} 人局`, `初始手牌：每人 ${handCount} 张`];
-    this.staged = true;
-    this.pendingNextTurn = false;
-    this.pendingTurnEndPlayer = null;
-    for (const player of this.players) {
-      const drawn = this.drawCards(player.id, handCount);
-      logs.push(`${player.name}[${player.general}] 获得 ${drawn} 张手牌`);
-    }
-    if (startImmediately) logs.push(...(await this.startTurn()));
-    return logs;
+    return initNetworkGameImpl(
+      this as unknown as GameSetupContext,
+      playerConfigs,
+      openingHandCount,
+      startImmediately,
+    );
   }
 
   getSnapshot(): GameSnapshot {
@@ -453,458 +420,38 @@ export class SanGuoGame {
   }
 
   getPlayableActions(playerId: string): GameAction[] {
-    if (this.winner !== null) {
-      return [];
-    }
-    const player = this.mustGetPlayer(playerId);
-    if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
-      return [];
-    }
-    const actions: GameAction[] = [];
-    const canPlaySlash = this.canPlaySlashInTurn(player);
-
-    player.hand.forEach((card, cardIndex) => {
-      if (card.type === CardType.Dodge || card.type === CardType.Negate) {
-        return;
-      }
-      if (this.isSlashCard(card.type) && !canPlaySlash) {
-        return;
-      }
-      if (card.type === CardType.Peach && player.hp >= player.maxHp) {
-        return;
-      }
-      if (card.type === CardType.Lightning && player.delayedTricks.some((t) => t.cardType === CardType.Lightning)) {
-        return;
-      }
-      // 酒方法Ⅰ：每回合限用一次
-      if (card.type === CardType.Wine && this.wineUsedPlayerIds.has(player.id)) {
-        return;
-      }
-      const targets = this.findTargetsByCard(player.id, card.type);
-      if (this.cardNeedsTarget(card.type) && targets.length === 0) {
-        return;
-      }
-      actions.push({
-        type: "play",
-        cardIndex,
-        label: `使用 ${card.type}`,
-        requiresTarget: this.cardNeedsTarget(card.type),
-        targets,
-        // 顺手牵羊/过河拆桥结算时需要从目标处选一张牌，其他牌不需要
-        needsTargetCard: card.type === CardType.Snatch || card.type === CardType.Dismantle,
-      });
-      // 铁索连环可重铸：弃置并摸一张
-      if (card.type === CardType.IronChain) {
-        actions.push({
-          type: "play",
-          cardIndex: -500 - cardIndex,
-          label: `重铸 ${card.type}（弃置并摸1张牌）`,
-          requiresTarget: false,
-          targets: [],
-          needsTargetCard: false,
-        });
-      }
-    });
-    if (canPlaySlash && this.hasSkill(player, SkillName.LongDan)) {
-      player.hand.forEach((card, cardIndex) => {
-        if (card.type !== CardType.Dodge) {
-          return;
-        }
-        const targets = this.findTargetsByCard(player.id, CardType.Slash);
-        if (targets.length === 0) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -200 - cardIndex,
-          label: `使用 龙胆（将${CardType.Dodge}当${CardType.Slash}）`,
-          requiresTarget: true,
-          targets,
-        });
-      });
-    }
-    if (canPlaySlash && this.hasSkill(player, SkillName.WuSheng)) {
-      player.hand.forEach((card, cardIndex) => {
-        if (this.isSlashCard(card.type) || card.color !== "red") {
-          return;
-        }
-        const targets = this.findTargetsByCard(player.id, CardType.Slash);
-        if (targets.length === 0) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -400 - cardIndex,
-          label: `使用 武圣（将红牌${card.type}当${CardType.Slash}）`,
-          requiresTarget: true,
-          targets,
-        });
-      });
-    }
-    if (this.hasSkill(player, SkillName.GuoSe)) {
-      player.hand.forEach((card, cardIndex) => {
-        if (card.suit !== "diamond") {
-          return;
-        }
-        const targets = this.findTargetsByCard(player.id, CardType.Indulgence);
-        if (targets.length === 0) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -100 - cardIndex,
-          label: `使用 国色（将方块牌${card.type}当${CardType.Indulgence}）`,
-          requiresTarget: true,
-          targets,
-        });
-      });
-    }
-    if (
-      player.weapon === CardType.SerpentSpear &&
-      player.hand.length >= 2 &&
-      (!this.slashUsedThisTurn || getSkillRules(player).slashLimitExempt)
-    ) {
-      const targets = this.findTargetsByCard(player.id, CardType.Slash);
-      if (targets.length > 0) {
-        actions.push({
-          type: "play",
-          cardIndex: -1,
-          label: "使用 丈八蛇矛（弃2张手牌当杀）",
-          requiresTarget: true,
-          targets,
-        });
-      }
-    }
-    if (player.treasure === CardType.WoodenOx) {
-      if (player.hand.length > 0) {
-        actions.push({
-          type: "play",
-          cardIndex: -11,
-          label: `使用 ${CardType.WoodenOx}（置入1张手牌）`,
-          requiresTarget: false,
-          targets: [],
-        });
-      }
-      const moveTargets = this.players
-        .filter((item) => item.alive && item.id !== player.id)
-        .map((item) => item.id);
-      if (moveTargets.length > 0) {
-        actions.push({
-          type: "play",
-          cardIndex: -12,
-          label: `使用 ${CardType.WoodenOx}（移动给其他角色）`,
-          requiresTarget: true,
-          targets: moveTargets,
-        });
-      }
-      player.treasureCards.forEach((card, index) => {
-        // 木牛流马下的杀同样受每回合出杀次数限制
-        if (this.isSlashCard(card.type) && !this.canPlaySlashInTurn(player)) {
-          return;
-        }
-        const targets = this.findTargetsByCard(player.id, card.type);
-        if (this.cardNeedsTarget(card.type) && targets.length === 0) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -1000 - index,
-          label: `使用 木牛流马下的 ${card.type}`,
-          requiresTarget: this.cardNeedsTarget(card.type),
-          targets,
-          needsTargetCard: card.type === CardType.Snatch || card.type === CardType.Dismantle,
-        });
-      });
-      // 取出：本回合刚置入的牌不能本回合就取出（防置入/取出无收益空转），跨回合取出不受影响
-      if (player.treasureCards.some((card) => this.canTakeStoredCard(card))) {
-        actions.push({
-          type: "play",
-          cardIndex: -13,
-          label: `使用 ${CardType.WoodenOx}（取出1张牌）`,
-          requiresTarget: false,
-          targets: [],
-        });
-      }
-    }
-
-    if (this.canUseAssault(player)) {
-      const targets = this.findTargetsByCard(player.id, CardType.Slash);
-      if (targets.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.Assault,
-          label: `发动${SkillName.Assault}（弃1牌对1名角色造成1伤害）`,
-          requiresTarget: true,
-          targets,
-        });
-      }
-    }
-    if (this.canUseZhiHeng(player)) {
-      actions.push({
-        type: "skill",
-        skill: SkillName.ZhiHeng,
-        label: `发动${SkillName.ZhiHeng}（弃任意张并摸等量，限一次）`,
-        requiresTarget: false,
-        targets: [],
-      });
-    }
-    if (this.canUseQingNang(player)) {
-      const targets = this.players.filter((item) => item.alive && item.hp < item.maxHp).map((item) => item.id);
-      if (targets.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.QingNang,
-          label: `发动${SkillName.QingNang}（弃1手牌令1名角色回复1点）`,
-          requiresTarget: true,
-          targets,
-        });
-      }
-    }
-    if (this.canUseKuRou(player)) {
-      actions.push({
-        type: "skill",
-        skill: SkillName.KuRou,
-        label: `发动${SkillName.KuRou}（失去1点体力并摸2张牌）`,
-        requiresTarget: false,
-        targets: [],
-      });
-    }
-    if (this.canUseRenDe(player)) {
-      const renDeTargets = this.players
-        .filter((item) => item.alive && item.id !== player.id)
-        .map((item) => item.id);
-      if (renDeTargets.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.RenDe,
-          label: `发动${SkillName.RenDe}（将手牌交给1名角色，本回合累计给出2张回复1点）`,
-          requiresTarget: true,
-          targets: renDeTargets,
-        });
-      }
-    }
-    if (this.canUseFanJian(player)) {
-      const targets = this.players.filter((item) => item.alive && item.id !== player.id).map((item) => item.id);
-      if (targets.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.FanJian,
-          label: `发动${SkillName.FanJian}（令目标声明花色并获得一张手牌）`,
-          requiresTarget: true,
-          targets,
-        });
-      }
-    }
-
-    if (this.canUseZhiBa(player)) {
-      const lord = this.getLordWithZhiBa();
-      if (lord && lord.id !== player.id && lord.hand.length > 0 && player.hand.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.ZhiBa,
-          label: `发动${SkillName.ZhiBa}（与主公拼点，未赢则主公得两张拼点牌）`,
-          requiresTarget: false,
-          targets: [lord.id],
-        });
-      }
-    }
-    if (this.canUseLiJian(player)) {
-      const maleTargets = this.players
-        .filter((p) => p.alive && p.gender === "男")
-        .map((p) => p.id);
-      if (maleTargets.length >= 2) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.LiJian,
-          label: `发动${SkillName.LiJian}（弃1牌令两名男性角色决斗）`,
-          requiresTarget: true,
-          targets: maleTargets,
-        });
-      }
-    }
-    if (this.canUseJieYin(player)) {
-      const maleWounded = this.players
-        .filter((p) => p.alive && p.gender === "男" && p.id !== player.id && p.hp < p.maxHp)
-        .map((p) => p.id);
-      if (player.hand.length >= 2 && maleWounded.length > 0) {
-        actions.push({
-          type: "skill",
-          skill: SkillName.JieYin,
-          label: `发动${SkillName.JieYin}（弃2牌令自己与一名男性角色各回复1点体力）`,
-          requiresTarget: true,
-          targets: maleWounded,
-        });
-      }
-    }
-    // 外部武将包主动技能（阶段 2）：按玩家已拥有的命名空间技能 id 枚举。
-    const packCtx = this as unknown as SkillModuleCtx;
-    for (const entry of getPackSkills()) {
-      if (entry.kind !== "active" || !player.skills.includes(entry.id)) {
-        continue;
-      }
-      if (entry.canUse && !entry.canUse(packCtx, player)) {
-        continue;
-      }
-      const requiresTarget = entry.requiresTarget ?? false;
-      const targets = requiresTarget ? (entry.getTargets?.(packCtx, player) ?? []) : [];
-      if (requiresTarget && targets.length === 0) {
-        continue;
-      }
-      actions.push({
-        type: "skill",
-        skill: entry.id,
-        label: entry.label ?? `发动${entry.displayName}`,
-        requiresTarget,
-        targets,
-      });
-    }
-    this.appendConversionActions(player, actions, canPlaySlash);
-    actions.push({ type: "end", label: "结束出牌阶段" });
-    return actions;
+    return getPlayableActionsImpl(this as unknown as PlayEnumerateContext, playerId);
   }
 
-  /**
-   * 外部武将包 `conversion`（当牌转换，Phase 7）的可玩动作枚举。
-   *
-   * 约定 `cardIndex = -10000 - 手牌下标`（避开内置已占用的 -100/-200/-400/-500/-1000 与 -1/-11/-12/-13），
-   * 木牛流马内牌另用 `-20000 - 木牛下标`（与响应侧 `appendConversionSources` 同口径：手牌 + 木牛内牌都可当），
-   * 并用 `convertVia`/`convertTo` 标明"通过哪个技能、当成哪张牌"，`playAction` 据此复算，不信任客户端。
-   * 枚举引擎结算得了的牌类：杀/火杀/雷杀（需要目标）、桃（自己体力未满）、酒与普通锦囊
-   * （Phase 8；需要目标的按牌类枚举，无目标的不设目标）。
-   * 闪/无懈可击是响应牌，不进可玩动作列表（走 `provide_response`）。
-   */
-  /**
-   * Phase 8：一条当牌转换当前是否可用。酒每回合限一次（与可玩动作列表同口径）；
-   * 代码技能的 `canUseConversion` 门控（"每回合限次/消耗标记"类限制）在枚举与结算时各复算一次。
-   * 必须纯（只读），枚举与结算都调它。
-   */
   private canUseConversionNow(player: Player, skillId: SkillId, conversion: SkillConversion): boolean {
-    if (conversion.to === CardType.Wine && this.wineUsedPlayerIds.has(player.id)) {
-      return false;
-    }
-    const module = getPackSkill(skillId);
-    if (module?.canUseConversion && !module.canUseConversion(this as unknown as SkillModuleCtx, player, conversion)) {
-      return false;
-    }
-    return true;
+    return canUseConversionNowImpl(this as unknown as PlayEnumerateContext, player, skillId, conversion);
   }
 
-  /** Phase 8：转换成功结算后通知技能扣费（只在成功时调用一次）。 */
-  private async notifyConversionUsed(player: Player, skillId: SkillId, conversion: SkillConversion, logs: string[]): Promise<void> {
-    const module = getPackSkill(skillId);
-    await module?.onConversionUsed?.(this as unknown as SkillModuleCtx, player, conversion, logs);
+  private async notifyConversionUsed(
+    player: Player,
+    skillId: SkillId,
+    conversion: SkillConversion,
+    logs: string[],
+  ): Promise<void> {
+    return notifyConversionUsedImpl(this as unknown as PlayEnumerateContext, player, skillId, conversion, logs);
   }
 
   private appendConversionActions(player: Player, actions: GameAction[], canPlaySlash: boolean): void {
-    for (const { skillId, conversion } of this.playerConversions(player)) {
-      // Phase 8：门控（限次/标记）不过的转换不枚举。
-      if (!this.canUseConversionNow(player, skillId, conversion)) {
-        continue;
-      }
-      const isSlashLike = this.isSlashCard(conversion.to);
-      if (isSlashLike && !canPlaySlash) {
-        continue;
-      }
-      if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
-        continue;
-      }
-      // Phase 8：闪/无懈可击只能响应（走 provide_response），不能主动使用。
-      if (conversion.to === CardType.Dodge || conversion.to === CardType.Negate) {
-        continue;
-      }
-      const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-      // Phase 8：酒与普通锦囊也可当——需要目标的按牌类枚举目标（决斗/拆/顺/借刀/火攻/铁索），
-      // 不需要目标的（无中生有/五谷丰登/桃园结义/万箭齐发/南蛮入侵/酒）不设目标。
-      const needsTarget = isSlashLike || this.cardNeedsTarget(conversion.to);
-      const targets = needsTarget ? this.findTargetsByCard(player.id, conversion.to) : [];
-      if (needsTarget && targets.length === 0) {
-        continue;
-      }
-      player.hand.forEach((card, cardIndex) => {
-        if (!matchesConversionFilter(card, conversion.from)) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -10000 - cardIndex,
-          label: `发动${displayName}：将${describeCard(card)}当${conversion.to}${conversion.to === CardType.Peach ? "对自己使用" : "使用"}`,
-          requiresTarget: needsTarget,
-          targets,
-          convertVia: skillId,
-          convertTo: conversion.to,
-        });
-      });
-      // 木牛流马内牌也可当牌转换（与响应侧同口径；`treasureCards` 只在装备木牛时非空）。
-      player.treasureCards.forEach((card, oxIndex) => {
-        if (!matchesConversionFilter(card, conversion.from)) {
-          return;
-        }
-        actions.push({
-          type: "play",
-          cardIndex: -20000 - oxIndex,
-          label: `发动${displayName}：将${describeCard(card)}（木牛流马）当${conversion.to}${conversion.to === CardType.Peach ? "对自己使用" : "使用"}`,
-          requiresTarget: needsTarget,
-          targets,
-          convertVia: skillId,
-          convertTo: conversion.to,
-        });
-      });
-    }
+    return appendConversionActionsImpl(this as unknown as PlayEnumerateContext, player, actions, canPlaySlash);
   }
 
-  /** 该玩家拥有的全部当牌转换（外部包声明式 `conversions`；内置技能不走这里）。 */
   private playerConversions(player: Player): { skillId: SkillId; conversion: SkillConversion }[] {
-    const result: { skillId: SkillId; conversion: SkillConversion }[] = [];
-    for (const skillId of new Set(player.skills)) {
-      for (const conversion of resolveSkillDescriptor(skillId).conversions ?? []) {
-        result.push({ skillId, conversion });
-      }
-    }
-    return result;
+    return playerConversionsImpl(this as unknown as PlayEnumerateContext, player);
   }
 
-  /** 该玩家能否用某种转换作为 `kind` 响应打出（`asResponse` 命中且源牌匹配）。 */
   private responseConversions(player: Player, kind: ResponseKind): { skillId: SkillId; conversion: SkillConversion }[] {
-    return this.playerConversions(player).filter(
-      (entry) =>
-        (entry.conversion.asResponse ?? []).includes(kind) &&
-        responseKindToCardType(kind) === entry.conversion.to &&
-        // Phase 8：门控（限次/标记）不过的转换既不提供来源、也不被验证接受。
-        this.canUseConversionNow(player, entry.skillId, entry.conversion),
-    );
+    return responseConversionsImpl(this as unknown as PlayEnumerateContext, player, kind);
   }
 
-  /**
-   * Phase 8：当牌转换（酒/普通锦囊）的目标合法性复算，与 `playAction` 的手牌使用前检查同口径：
-   * 需要目标的牌必须给目标、铁索连环以外不能指定自己、决斗受空城保护、
-   * 距离 1 锦囊（顺手牵羊）看距离。杀走原有分支，这里不管。
-   */
   private validateConversionTarget(player: Player, convertTo: CardType, targetId: string | undefined): string | null {
-    if (!this.cardNeedsTarget(convertTo)) {
-      return null;
-    }
-    if (!targetId) {
-      return "需要选择目标";
-    }
-    const target = this.mustGetPlayer(targetId);
-    if (!target.alive || (target.id === player.id && convertTo !== CardType.IronChain)) {
-      return "目标无效";
-    }
-    if (convertTo === CardType.Duel && this.isKongChengProtected(target, convertTo)) {
-      return `${target.name} 的${SkillName.KongCheng}生效，无法成为目标`;
-    }
-    if (isDistanceOneTrickCard(convertTo) && !this.canReachForDistanceOneTrick(player, target)) {
-      return `目标超出距离，${convertTo}只能对距离 1 以内的角色使用`;
-    }
-    return null;
+    return validateConversionTargetImpl(this as unknown as PlayEnumerateContext, player, convertTo, targetId);
   }
 
-  /**
-   * 当牌转换在**出牌阶段**的结算（`playAction` 的 `cardIndex <= -10000` 分支）。
-   * 复算全部条件：技能归属、转换声明、源牌是否满足 `from`、杀次数、目标合法性。
-   * 源牌分两处：`origin: "hand"` 取手牌下标（`removeHandCardAt`，触发失去手牌钩子），
-   * `origin: "treasure"` 取木牛下标（直接 splice，木牛内牌不是手牌，不触发失去手牌钩子）。
-   */
   private async resolveConversionUse(
     player: Player,
     source: { origin: "hand" | "treasure"; index: number },
@@ -912,98 +459,14 @@ export class SanGuoGame {
     convertTo: CardType | undefined,
     targetId: string | undefined,
   ): Promise<string[]> {
-    // 木牛内牌：必须确实装备着木牛流马（防客户端伪造 -20000 段下标）。
-    if (source.origin === "treasure" && player.treasure !== CardType.WoodenOx) {
-      return ["使用卡牌失败"];
-    }
-    const pool = source.origin === "treasure" ? player.treasureCards : player.hand;
-    const card = pool[source.index];
-    if (!card || !viaSkillId || !convertTo) {
-      return ["使用卡牌失败"];
-    }
-    // 同一技能可声明多条相同 `to`、不同 `from` 的转换：必须找到"源牌也匹配"的那一条，
-    // 不能只按 skillId+to 取第一条（否则合法牌会被误拒）。
-    const conversion = this.playerConversions(player).find(
-      (entry) =>
-        entry.skillId === viaSkillId &&
-        entry.conversion.to === convertTo &&
-        matchesConversionFilter(card, entry.conversion.from),
-    )?.conversion;
-    if (!conversion) {
-      return ["使用卡牌失败"];
-    }
-    const displayName = resolveSkillDescriptor(viaSkillId).displayName ?? viaSkillId;
-    // Phase 8：门控复算（不信任客户端；枚举时已算过一次，这里防过期快照/伪造）。
-    if (!this.canUseConversionNow(player, viaSkillId, conversion)) {
-      return [`${player.name} 当前无法发动${displayName}的当牌转换`];
-    }
-    // 取走源牌：手牌走 removeHandCardAt（触发失去手牌钩子），木牛内牌直接 splice。
-    const takeSourceCard = async (): Promise<Card | undefined> =>
-      source.origin === "treasure"
-        ? player.treasureCards.splice(source.index, 1)[0]
-        : this.removeHandCardAt(player, source.index);
-    const isSlashLike = this.isSlashCard(conversion.to);
-    if (!isSlashLike && conversion.to !== CardType.Peach) {
-      // Phase 8：酒与普通锦囊——造一张"源牌花色/点数 + 目标牌类"的合成牌，走通用结算
-      // `resolveUsedCard`（决斗/拆/顺/无中生有/借刀/火攻/铁索/桃园/五谷/万箭/南蛮/酒都在其中）。
-      // 杀/桃仍走原有分支，避免既有转换的行为变化。合成牌沿用源牌 id 进弃牌堆（源牌本身不再另行入堆）。
-      const targetError = this.validateConversionTarget(player, conversion.to, targetId);
-      if (targetError) {
-        return [targetError];
-      }
-      const used = await takeSourceCard();
-      if (!used) {
-        return ["使用卡牌失败"];
-      }
-      const synthetic: Card = { id: used.id, type: conversion.to, color: used.color, suit: used.suit, rank: used.rank };
-      const logs = [`${player.name} 发动${displayName}，将${describeCard(used)}当${conversion.to}使用`];
-      logs.push(...(await this.resolveUsedCard(player, synthetic, targetId, false)));
-      await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
-      return logs;
-    }
-    if (conversion.to === CardType.Peach && player.hp >= player.maxHp) {
-      return [`${player.name} 当前体力已满`];
-    }
-    let target: Player | null = null;
-    if (isSlashLike) {
-      if (this.slashUsedThisTurn && !getSkillRules(player).slashLimitExempt && player.weapon !== CardType.Crossbow) {
-        return [`${player.name} 本回合已使用过杀`];
-      }
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const candidate = this.mustGetPlayer(targetId);
-      if (
-        !candidate.alive ||
-        candidate.id === player.id ||
-        !this.canReachForSlash(player, candidate) ||
-        this.isKongChengProtected(candidate, conversion.to)
-      ) {
-        return ["目标无效"];
-      }
-      target = candidate;
-    }
-    const used = await takeSourceCard();
-    if (!used) {
-      return ["使用卡牌失败"];
-    }
-    this.discardPile.push(used);
-    const logs = [`${player.name} 发动${displayName}，将${describeCard(used)}当${conversion.to}使用`];
-    if (isSlashLike && target) {
-      if (!getSkillRules(player).slashLimitExempt) {
-        this.slashUsedThisTurn = true;
-      }
-      logs.push(...(await this.useSlash(player, target, { kind: slashKindOf(player, conversion.to), card: used })));
-      await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
-      return logs;
-    }
-    player.hp = Math.min(player.maxHp, player.hp + 1);
-    logs.push(`${player.name} 回复 1 点体力`);
-    logs.push(...(await this.resolveDeaths()));
-    logs.push(...this.resolveWinner());
-    await this.advanceIfCurrentPlayerDead(logs);
-    await this.notifyConversionUsed(player, viaSkillId, conversion, logs);
-    return logs;
+    return resolveConversionUseImpl(
+      this as unknown as PlayEnumerateContext,
+      player,
+      source,
+      viaSkillId,
+      convertTo,
+      targetId,
+    );
   }
 
   getPendingDiscardCount(playerId: string): number {
@@ -1115,285 +578,7 @@ export class SanGuoGame {
   }
 
   async playAction(playerId: string, action: GameAction, targetId?: string, selectedCardId?: string): Promise<string[]> {
-    if (this.winner !== null) {
-      return [];
-    }
-    if (action.type === "end") {
-      return this.endPlayPhase(playerId);
-    }
-    if (action.type === "skill") {
-      return this.useSkillAction(playerId, action, targetId);
-    }
-    const player = this.mustGetPlayer(playerId);
-    if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
-      return [];
-    }
-    if (action.cardIndex <= -10000) {
-      // 外部武将包当牌转换（Phase 7）：手牌 `cardIndex = -10000 - 手牌下标`，
-      // 木牛流马内牌 `cardIndex = -20000 - 木牛下标`（与响应侧同口径）。
-      // **必须排在所有内置负下标分支之前**（`<= -1000` 是木牛流马，否则会被它先吃掉）。
-      // 不信任客户端：convertVia/convertTo 与源牌都由 resolveConversionUse 复算。
-      const source =
-        action.cardIndex <= -20000
-          ? { origin: "treasure" as const, index: -20000 - action.cardIndex }
-          : { origin: "hand" as const, index: -10000 - action.cardIndex };
-      return this.resolveConversionUse(player, source, action.convertVia, action.convertTo, targetId);
-    }
-    if (action.cardIndex <= -100 && action.cardIndex > -200) {
-      const index = -100 - action.cardIndex;
-      const converted = player.hand[index];
-      if (!converted || converted.suit !== "diamond" || !this.hasSkill(player, SkillName.GuoSe)) {
-        return ["使用卡牌失败"];
-      }
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      if (!target.alive || target.id === player.id) {
-        return ["目标无效"];
-      }
-      if (target.delayedTricks.some((t) => t.cardType === CardType.Indulgence)) {
-        return ["目标判定区已有乐不思蜀"];
-      }
-      const used = await this.removeHandCardAt(player, index);
-      if (!used) {
-        return ["使用卡牌失败"];
-      }
-      this.discardPile.push(used);
-      const convertedCard = this.createCard(CardType.Indulgence, `guose-${this.turn}`);
-      const logs = [`${player.name} 发动${SkillName.GuoSe}，将方块牌 ${used.type} 当${CardType.Indulgence}使用`];
-      logs.push(...(await this.resolveDelayedTrick(player, convertedCard, target.id)));
-      logs.push(...(await this.resolveDeaths()));
-      logs.push(...this.resolveWinner());
-      await this.advanceIfCurrentPlayerDead(logs);
-      return logs;
-    }
-    if (action.cardIndex <= -200 && action.cardIndex > -400) {
-      const index = -200 - action.cardIndex;
-      const converted = player.hand[index];
-      if (!converted || converted.type !== CardType.Dodge || !this.hasSkill(player, SkillName.LongDan)) {
-        return ["使用卡牌失败"];
-      }
-      if (!this.canPlaySlashInTurn(player)) {
-        return [`${player.name} 本回合已使用过杀`];
-      }
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      if (
-        !target.alive ||
-        target.id === player.id ||
-        !this.canReachForSlash(player, target) ||
-        this.isKongChengProtected(target, CardType.Slash)
-      ) {
-        return ["目标无效"];
-      }
-      const used = await this.removeHandCardAt(player, index);
-      if (!used) {
-        return ["使用卡牌失败"];
-      }
-      this.discardPile.push(used);
-      this.slashUsedThisTurn = true;
-      const logs = [`${player.name} 发动${SkillName.LongDan}，将${CardType.Dodge}当${CardType.Slash}使用`];
-      logs.push(...(await this.resolveSlash(player, target, false, slashKindOf(player, used.type), used)));
-      logs.push(...(await this.resolveDeaths()));
-      logs.push(...this.resolveWinner());
-      await this.advanceIfCurrentPlayerDead(logs);
-      return logs;
-    }
-    if (action.cardIndex <= -500 && action.cardIndex > -1000) {
-      // 铁索连环重铸：弃置此牌并摸一张
-      const index = -500 - action.cardIndex;
-      const card = player.hand[index];
-      if (!card || card.type !== CardType.IronChain) {
-        return [`${player.name} 当前无法重铸${CardType.IronChain}`];
-      }
-      const removed = await this.removeHandCardAt(player, index);
-      if (!removed) {
-        return ["使用卡牌失败"];
-      }
-      const discardLogs: string[] = [];
-      await this.discardCards([removed], player, "弃置", discardLogs);
-      const drawn = this.drawCards(player.id, 1);
-      const logs = [`${player.name} 重铸${CardType.IronChain}，摸了 ${drawn} 张牌`, ...discardLogs];
-      logs.push(...(await this.resolveDeaths()));
-      logs.push(...this.resolveWinner());
-      await this.advanceIfCurrentPlayerDead(logs);
-      return logs;
-    }
-    if (action.cardIndex <= -400 && action.cardIndex > -1000) {
-      const index = -400 - action.cardIndex;
-      const converted = player.hand[index];
-      if (!converted || converted.type === CardType.Slash || converted.color !== "red" || !this.hasSkill(player, SkillName.WuSheng)) {
-        return ["使用卡牌失败"];
-      }
-      if (!this.canPlaySlashInTurn(player)) {
-        return [`${player.name} 本回合已使用过杀`];
-      }
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      if (
-        !target.alive ||
-        target.id === player.id ||
-        !this.canReachForSlash(player, target) ||
-        this.isKongChengProtected(target, CardType.Slash)
-      ) {
-        return ["目标无效"];
-      }
-      const used = await this.removeHandCardAt(player, index);
-      if (!used) {
-        return ["使用卡牌失败"];
-      }
-      this.discardPile.push(used);
-      this.slashUsedThisTurn = true;
-      const logs = [`${player.name} 发动${SkillName.WuSheng}，将红色${used.type}当${CardType.Slash}使用`];
-      logs.push(...(await this.resolveSlash(player, target, false, slashKindOf(player, used.type), used)));
-      logs.push(...(await this.resolveDeaths()));
-      logs.push(...this.resolveWinner());
-      await this.advanceIfCurrentPlayerDead(logs);
-      return logs;
-    }
-    if (action.cardIndex === -11) {
-      if (player.treasure !== CardType.WoodenOx || player.hand.length === 0) {
-        return [`${player.name} 当前无法发动${CardType.WoodenOx}`];
-      }
-      const handSources = this.buildUsableSources(player).filter((source) => source.origin === "hand");
-      const [moved] = await this.requestDiscardSelection(player, 1, "木牛流马：选择1张手牌置于其下", handSources);
-      if (!moved) {
-        return [`${player.name} 当前无法发动${CardType.WoodenOx}`];
-      }
-      player.treasureCards.push(moved);
-      this.oxStoredTurnMap().set(moved.id, this.turn);
-      return [`${player.name} 将 ${moved.type} 置于${CardType.WoodenOx}下方`];
-    }
-    if (action.cardIndex === -13) {
-      if (player.treasure !== CardType.WoodenOx || player.treasureCards.length === 0) {
-        return [`${player.name} 当前无法从${CardType.WoodenOx}取牌`];
-      }
-      const oxSources = this.buildUsableSources(player).filter(
-        (source) => source.origin === "treasure" && this.canTakeStoredCard(source.card),
-      );
-      const [taken] = await this.requestDiscardSelection(player, 1, "木牛流马：选择取出1张牌", oxSources);
-      if (!taken) {
-        return [`${player.name} 当前无法从${CardType.WoodenOx}取牌`];
-      }
-      player.hand.push(taken);
-      return [`${player.name} 从${CardType.WoodenOx}取出了 ${taken.type}`];
-    }
-    if (action.cardIndex === -12) {
-      if (player.treasure !== CardType.WoodenOx || !targetId) {
-        return ["目标无效"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      if (!target.alive || target.id === player.id) {
-        return ["目标无效"];
-      }
-      const logs = [`${player.name} 将${CardType.WoodenOx}移动给${target.name}`];
-      if (target.treasure !== null) {
-        this.discardPile.push(this.createCard(target.treasure, `replace-${this.turn}`));
-        logs.push(`${target.name} 的旧宝物 ${target.treasure} 被替换并弃置`);
-      }
-      target.treasure = CardType.WoodenOx;
-      target.treasureCards.push(...player.treasureCards);
-      player.treasureCards = [];
-      player.treasure = null;
-      return logs;
-    }
-    if (action.cardIndex <= -1000) {
-      if (player.treasure !== CardType.WoodenOx) {
-        return [`${player.name} 当前无法使用${CardType.WoodenOx}下的牌`];
-      }
-      const index = -1000 - action.cardIndex;
-      const preview = player.treasureCards[index];
-      // 木牛流马下的杀同样受每回合出杀次数限制（防客户端绕过可玩动作列表）
-      if (preview && this.isSlashCard(preview.type) && !this.canPlaySlashInTurn(player)) {
-        return [`${player.name} 本回合已使用过杀`];
-      }
-      const usedCard = player.treasureCards.splice(index, 1)[0];
-      if (!usedCard) {
-        return ["使用卡牌失败"];
-      }
-      return this.resolveUsedCard(player, usedCard, targetId, true, selectedCardId);
-    }
-    if (action.cardIndex === -1) {
-      if (player.weapon !== CardType.SerpentSpear || player.hand.length < 2) {
-        return [`${player.name} 当前无法发动丈八蛇矛`];
-      }
-      if (this.slashUsedThisTurn && !getSkillRules(player).slashLimitExempt) {
-        return [`${player.name} 本回合已使用过杀`];
-      }
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      if (!target.alive || target.id === player.id || !this.canReachForSlash(player, target)) {
-        return ["目标无效"];
-      }
-      const first = await this.removeHandCardAt(player, 0);
-      const second = await this.removeHandCardAt(player, 0);
-      if (!first || !second) {
-        return [`${player.name} 手牌不足，无法发动丈八蛇矛`];
-      }
-      const discardLogs: string[] = [];
-      await this.discardCards([first, second], player, "弃置", discardLogs);
-      if (!getSkillRules(player).slashLimitExempt) {
-        this.slashUsedThisTurn = true;
-      }
-      const logs = [
-        `${player.name} 发动丈八蛇矛，弃置 ${first.type}、${second.type} 视为使用杀`,
-        ...discardLogs,
-        ...(await this.resolveSlash(player, target, true, slashKindOf(player, undefined))),
-      ];
-      return logs;
-    }
-    const card = player.hand[action.cardIndex];
-    if (!card) {
-      return [`${player.name} 选择了无效卡牌`];
-    }
-    if (
-      this.isSlashCard(card.type) &&
-      this.slashUsedThisTurn &&
-      !getSkillRules(player).slashLimitExempt &&
-      player.weapon !== CardType.Crossbow
-    ) {
-      return [`${player.name} 本回合已使用过杀`];
-    }
-    if (card.type === CardType.Peach && player.hp >= player.maxHp) {
-      return [`${player.name} 当前体力已满`];
-    }
-    if (card.type === CardType.Negate) {
-      return [`${player.name} 不能主动使用无懈可击`];
-    }
-    if (this.cardNeedsTarget(card.type)) {
-      if (!targetId) {
-        return ["需要选择目标"];
-      }
-      const target = this.mustGetPlayer(targetId);
-      // 铁索连环是唯一可以指定**自己**的有目标牌（`findTargetsByCard` 就是按"含自己"枚举的，
-      // 官方规则同样允许"横置/重置一名角色，包括你自己"）。此前这里一律拒绝自己，
-      // 导致 UI/AI 能选到一个 playAction 必然拒绝的目标 → 联机实测出现"目标无效"死循环。
-      if (!target.alive || (target.id === player.id && card.type !== CardType.IronChain)) {
-        return ["目标无效"];
-      }
-      if ((this.isSlashCard(card.type) || card.type === CardType.Duel) && this.isKongChengProtected(target, card.type)) {
-        return [`${target.name} 的${SkillName.KongCheng}生效，无法成为目标`];
-      }
-      if (this.isSlashCard(card.type) && !this.canReachForSlash(player, target)) {
-        return ["目标超出攻击范围"];
-      }
-      if (isDistanceOneTrickCard(card.type) && !this.canReachForDistanceOneTrick(player, target)) {
-        return [`目标超出距离，${card.type}只能对距离 1 以内的角色使用`];
-      }
-    }
-
-    const usedCard = await this.removeHandCardAt(player, action.cardIndex);
-    if (!usedCard) {
-      return ["使用卡牌失败"];
-    }
-    return this.resolveUsedCard(player, usedCard, targetId, false, selectedCardId);
+    return playActionImpl(this as unknown as PlayExecuteContext, playerId, action, targetId, selectedCardId);
   }
 
   /**
@@ -1411,139 +596,22 @@ export class SanGuoGame {
     fromTreasure: boolean,
     selectedCardId?: string,
   ): Promise<string[]> {
-    this.discardPile.push(usedCard);
-    const logs: string[] = [];
-    // 拦截点 card_used：使用一张牌时（结算前）通知，reason="使用"。
-    // targets 按"指定目标"口径填入：有 targetId 的牌取该角色（杀的丈八蛇矛追加目标在结算时展开，不在此列）；
-    // 全体锦囊按实际影响范围展开；无目标的牌（无中生有/桃/酒/装备）为空数组。
-    const usedTargets: Player[] = targetId
-      ? [this.mustGetPlayer(targetId)]
-      : usedCard.type === CardType.Barbarian || usedCard.type === CardType.ArrowRain
-        ? this.players.filter((p) => p.alive && p.id !== player.id)
-        : usedCard.type === CardType.PeachGarden || usedCard.type === CardType.Harvest
-          ? this.players.filter((p) => p.alive)
-          : usedCard.type === CardType.Lightning
-            ? [player]
-            : [];
-    await this.emitSkillTrigger(
-      "card_used",
-      { actor: player, card: usedCard, reason: "使用", targets: usedTargets },
-      logs,
+    return resolveUsedCardImpl(
+      this as unknown as PlayExecuteContext,
+      player,
+      usedCard,
+      targetId,
+      fromTreasure,
+      selectedCardId,
     );
-    if (fromTreasure) {
-      logs.push(`${player.name} 从${CardType.WoodenOx}下使用了 ${usedCard.type}`);
-    }
-    if (this.hasSkill(player, SkillName.JiZhi) && await this.shouldActivateOptionalEffect(player, SkillName.JiZhi) && this.isNonDelayedTrickCard(usedCard.type)) {
-      const drawn = this.drawCards(player.id, 1);
-      logs.push(`${player.name} 的${SkillName.JiZhi}生效，摸了 ${drawn} 张牌`);
-    }
-    if (this.isSlashCard(usedCard.type) && targetId) {
-      if (!getSkillRules(player).slashLimitExempt) {
-        this.slashUsedThisTurn = true;
-      }
-      const slashTargets = await this.expandSlashTargets(player, this.mustGetPlayer(targetId), player.hand.length === 0);
-      for (const slashTarget of slashTargets) {
-        logs.push(...(await this.resolveSlash(player, slashTarget, false, slashKindOf(player, usedCard.type), usedCard)));
-      }
-    } else if (usedCard.type === CardType.Peach) {
-      player.hp = Math.min(player.maxHp, player.hp + 1);
-      logs.push(`${player.name} 使用桃，回复 1 点体力`);
-    } else if (usedCard.type === CardType.Wine) {
-      // 方法Ⅰ：出牌阶段对自己使用，本回合下一张杀伤害+1（每回合限一次，由可玩动作列表保证）
-      this.wineUsedPlayerIds.add(player.id);
-      this.wineBuffPlayerIds.add(player.id);
-      logs.push(`${player.name} 使用酒，本回合下一张杀伤害+1`);
-    } else if (usedCard.type === CardType.Dismantle && targetId) {
-      logs.push(...(await this.resolveDismantle(player, this.mustGetPlayer(targetId), selectedCardId)));
-    } else if (usedCard.type === CardType.Snatch && targetId) {
-      logs.push(...(await this.resolveSnatch(player, this.mustGetPlayer(targetId), selectedCardId)));
-    } else if (usedCard.type === CardType.Duel && targetId) {
-      logs.push(...(await this.resolveDuel(player, this.mustGetPlayer(targetId), usedCard)));
-    } else if (usedCard.type === CardType.ExNihilo) {
-      if (await this.tryNegateGlobal(player, usedCard.type, logs)) {
-        logs.push(`${player.name} 的${usedCard.type}被无懈可击抵消`);
-      } else {
-        const drawn = this.drawCards(player.id, 2);
-        logs.push(`${player.name} 使用无中生有，摸了 ${drawn} 张牌`);
-      }
-    } else if (usedCard.type === CardType.Barbarian) {
-      logs.push(...(await this.resolveBarbarian(player, usedCard)));
-    } else if (usedCard.type === CardType.ArrowRain) {
-      logs.push(...(await this.resolveArrowRain(player, usedCard)));
-    } else if (usedCard.type === CardType.FireAttack && targetId) {
-      logs.push(...(await this.resolveFireAttack(player, this.mustGetPlayer(targetId), usedCard)));
-    } else if (usedCard.type === CardType.IronChain && targetId) {
-      logs.push(...(await this.resolveIronChain(player, this.mustGetPlayer(targetId))));
-    } else if (usedCard.type === CardType.Collateral && targetId) {
-      logs.push(...(await this.resolveCollateral(player, this.mustGetPlayer(targetId))));
-    } else if (usedCard.type === CardType.PeachGarden) {
-      if (await this.tryNegateGlobal(player, usedCard.type, logs)) {
-        logs.push(`${player.name} 的${usedCard.type}被无懈可击抵消`);
-      } else {
-        logs.push(...this.resolvePeachGarden(player));
-      }
-    } else if (usedCard.type === CardType.Harvest) {
-      if (await this.tryNegateGlobal(player, usedCard.type, logs)) {
-        logs.push(`${player.name} 的${usedCard.type}被无懈可击抵消`);
-      } else {
-        logs.push(...this.resolveHarvest(player));
-      }
-    } else if (usedCard.type === CardType.Lightning) {
-      logs.push(...(await this.resolveDelayedTrick(player, usedCard, player.id)));
-    } else if (this.isDelayedTrickCard(usedCard.type) && targetId) {
-      logs.push(...(await this.resolveDelayedTrick(player, usedCard, targetId)));
-    } else if (this.isEquipCard(usedCard.type)) {
-      logs.push(...(await this.resolveEquip(player, usedCard.type)));
-    }
-    logs.push(...(await this.resolveDeaths()));
-    logs.push(...this.resolveWinner());
-    await this.advanceIfCurrentPlayerDead(logs);
-    return logs;
   }
 
   async runAITurn(): Promise<string[]> {
-    if (this.winner !== null || !this.currentPlayer.isAI || !this.currentPlayer.alive) {
-      return [];
-    }
-    const logs: string[] = [];
-    this.beginAiTurnProgress();
-    while (true) {
-      const ai = this.currentPlayer;
-      const actions = this.getPlayableActions(ai.id);
-      const best = pickBestAiAction(this as unknown as AiHeuristicsContext, actions, ai.id);
-      if (!best || best.type === "end") {
-        logs.push(...(await this.endPlayPhase(ai.id)));
-        return logs;
-      }
-      const targetId = best.requiresTarget ? pickBestTarget(this as unknown as AiHeuristicsContext, best.targets) : undefined;
-      logs.push(...(await this.playAction(ai.id, best, targetId)));
-      if (this.winner !== null) {
-        return logs;
-      }
-      // 兜底：决策器零收益打转（局面重复出现）时强制结束，不再无限出牌
-      if (this.noteAiTurnProgress()) {
-        logs.push(`${ai.name} 的出牌陷入重复局面，强制结束出牌阶段`);
-        logs.push(...(await this.endPlayPhase(ai.id)));
-        return logs;
-      }
-    }
+    return runAITurnImpl(this as unknown as AiDriverContext);
   }
 
   getBestAiDecision(playerId: string): { action: GameAction; targetId?: string } | null {
-    const player = this.players.find((item) => item.id === playerId);
-    if (!player || !player.alive || !player.isAI) {
-      return null;
-    }
-    const actions = this.getPlayableActions(player.id);
-    const best = pickBestAiAction(this as unknown as AiHeuristicsContext, actions, player.id);
-    if (!best) {
-      return null;
-    }
-    if (best.type === "end" || !best.requiresTarget) {
-      return { action: best };
-    }
-    const targetId = pickBestTarget(this as unknown as AiHeuristicsContext, best.targets);
-    return targetId ? { action: best, targetId } : { action: best };
+    return getBestAiDecisionImpl(this as unknown as AiDriverContext, playerId);
   }
 
   setPlayerResponsePolicy(playerId: string, policy: Partial<Record<ResponseKind, boolean>> | null): void {
@@ -1572,423 +640,72 @@ export class SanGuoGame {
   }
 
   private async decide(request: InteractionRequest): Promise<InteractionDecision> {
-    const playerId =
-      request.kind === "respond" ? request.responderId : request.kind === "collateral" ? request.targetId : request.playerId;
-    const target = this.players.find((player) => player.id === playerId);
-    if (target && !target.alive) {
-      return this.autoDecisionForDeadPlayer(request);
-    }
-    const handler = this.decisionHandlers.get(playerId);
-    if (handler) {
-      try {
-        const decision = await handler(request);
-        if (decision) {
-          return decision;
-        }
-      } catch {
-        // 处理器异常时回退自动决策，避免结算中断
-      }
-    }
-    return this.autoDecision(request);
+    return decideImpl(this as unknown as ResponsePipelineContext, request);
   }
 
   private autoDecisionForDeadPlayer(request: InteractionRequest): InteractionDecision {
-    if (
-      request.kind === "optional-effect" ||
-      request.kind === "respond" ||
-      request.kind === "collateral"
-    ) {
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-discard") {
-      return request.sources[0] ? { choice: "pass" } : { choice: "card", sourceId: "" };
-    }
-    if (request.kind === "choose-suit") {
-      return { choice: "suit", suit: request.suits[0] ?? "heart" };
-    }
-    return { choice: "pass" };
+    return autoDecisionForDeadPlayerImpl(this as unknown as ResponsePipelineContext, request);
   }
 
   private autoDecision(request: InteractionRequest): InteractionDecision {
-    if (request.kind === "optional-effect") {
-      return { choice: "effect", enabled: false };
-    }
-    if (request.kind === "collateral") {
-      const victim = request.victims[0];
-      if (victim) {
-        const firstSlash = request.sources[0];
-        return firstSlash
-          ? { choice: "target", targetId: victim, sourceId: firstSlash.sourceId }
-          : { choice: "target", targetId: victim };
-      }
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-discard") {
-      const first = request.sources[0];
-      if (first) {
-        return { choice: "card", sourceId: first.sourceId };
-      }
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-suit") {
-      const suit = request.suits[this.randomIndex(request.suits.length)] ?? "heart";
-      return { choice: "suit", suit };
-    }
-    const first = request.sources[0];
-    if (first) {
-      return { choice: "card", sourceId: first.sourceId };
-    }
-    return { choice: "pass" };
+    return autoDecisionImpl(this as unknown as ResponsePipelineContext, request);
   }
 
-  /**
-   * "弃置任意张牌"（制衡等）的可选范围：手牌 + 木牛流马内存牌 + 装备区。
-   * 装备区用 `equip:<槽位>` 作为 sourceId，客户端只回传 sourceId，因此不需要协议变更。
-   */
   private buildAnyDiscardSources(player: Player): Array<CardSource & { card: Card }> {
-    const sources = [...this.buildUsableSources(player)];
-    const equipSource = (slot: string, label: string, type: CardType | null): void => {
-      if (type === null) {
-        return;
-      }
-      sources.push({
-        sourceId: `equip:${slot}`,
-        origin: "equip",
-        card: createCardImpl(this as unknown as ResolveContext, type, `equip-${slot}-${this.turn}`),
-        label: `${label} ${type}`,
-      });
-    };
-    equipSource("weapon", "武器", player.weapon);
-    equipSource("armor", "防具", player.armor);
-    equipSource("defenseHorse", "+1马", player.defenseHorse);
-    equipSource("attackHorse", "-1马", player.attackHorse);
-    equipSource("treasure", "宝物", player.treasure);
-    return sources;
+    return buildAnyDiscardSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private takeEquipSlot(player: Player, slot: string): EquipCardType | null {
-    if (slot === "weapon" && player.weapon !== null) {
-      const type = player.weapon;
-      player.weapon = null;
-      return type;
-    }
-    if (slot === "armor" && player.armor !== null) {
-      const type = player.armor;
-      player.armor = null;
-      return type;
-    }
-    if (slot === "defenseHorse" && player.defenseHorse !== null) {
-      const type = player.defenseHorse;
-      player.defenseHorse = null;
-      return type;
-    }
-    if (slot === "attackHorse" && player.attackHorse !== null) {
-      const type = player.attackHorse;
-      player.attackHorse = null;
-      return type;
-    }
-    if (slot === "treasure" && player.treasure !== null) {
-      const type = player.treasure;
-      player.treasure = null;
-      return type;
-    }
-    return null;
+    return takeEquipSlotImpl(this as unknown as CardSourcesContext, player, slot);
   }
 
-  /**
-   * 逐张询问"要弃哪张"，直到玩家放弃或已无牌可弃；返回实际弃置张数。
-   * 复用现有 choose-discard 请求（allowPass=true），CLI / WebUI / Go 客户端均已支持放弃选项。
-   */
   private async requestFlexibleDiscard(player: Player, reason: string, logs: string[]): Promise<number> {
-    const maxCount = this.buildAnyDiscardSources(player).length;
-    let discarded = 0;
-    while (discarded < maxCount) {
-      const sources = this.buildAnyDiscardSources(player);
-      if (sources.length === 0) {
-        break;
-      }
-      const decision = await this.decide({
-        kind: "choose-discard",
-        requestId: this.nextInteractionId(),
-        playerId: player.id,
-        reason: `${reason}（已选 ${discarded} 张，可放弃）`,
-        sources,
-        count: 1,
-        allowPass: true,
-      });
-      if (decision.choice !== "card") {
-        break;
-      }
-      const sourceId = decision.sourceId;
-      if (sourceId.startsWith("equip:")) {
-        const removed = this.takeEquipSlot(player, sourceId.slice("equip:".length));
-        if (removed === null) {
-          break;
-        }
-        this.discardPile.push(createCardImpl(this as unknown as ResolveContext, removed, `discard-${this.turn}`));
-        if (removed === CardType.WoodenOx) {
-          await discardWoodenOxStoredCardsImpl(this as unknown as ResolveContext, player, logs);
-        }
-        logs.push(`${player.name} 弃置装备 ${removed}`);
-        // 弃置装备同样属于"失去装备"，枭姬/白银狮子等技能应正常触发。
-        logs.push(...(await onLoseEquipImpl(this as unknown as ResolveContext, player, removed)));
-        discarded += 1;
-        continue;
-      }
-      const card = await this.removeUsableCardBySourceId(player, sourceId);
-      if (!card) {
-        break;
-      }
-      logs.push(`${player.name} 弃置 ${card.type}`);
-      await this.discardCards([card], player, "弃置", logs);
-      discarded += 1;
-    }
-    return discarded;
+    return requestFlexibleDiscardImpl(this as unknown as CardSourcesContext, player, reason, logs);
   }
 
   private buildUsableSources(player: Player): Array<CardSource & { card: Card }> {
-    const sources: Array<CardSource & { card: Card }> = [];
-    for (const card of player.hand) {
-      sources.push({ sourceId: `hand:${card.id}`, origin: "hand", card, label: describeCard(card) });
-    }
-    for (const card of player.treasureCards) {
-      sources.push({ sourceId: `treasure:${card.id}`, origin: "treasure", card, label: `${describeCard(card)}（木牛流马）` });
-    }
-    return sources;
+    return buildUsableSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
-  private peekUsableCard(player: Player, sourceId: string): (CardSource & { card: Card }) | undefined {
-    const separator = sourceId.indexOf(":");
-    if (separator < 0) {
-      return undefined;
-    }
-    const origin = sourceId.slice(0, separator);
-    const cardId = sourceId.slice(separator + 1);
-    const pool = origin === "treasure" ? player.treasureCards : origin === "hand" ? player.hand : null;
-    if (!pool) {
-      return undefined;
-    }
-    const card = pool.find((item) => item.id === cardId);
-    if (!card) {
-      return undefined;
-    }
-    return { sourceId, origin: origin as CardSource["origin"], card, label: card.type };
+  private peekUsableCard(player: Player, sourceId: string): (CardSource & { card: Card })| undefined {
+    return peekUsableCardImpl(this as unknown as CardSourcesContext, player, sourceId);
   }
 
   private async removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined> {
-    const separator = sourceId.indexOf(":");
-    if (separator < 0) {
-      return undefined;
-    }
-    const origin = sourceId.slice(0, separator);
-    const cardId = sourceId.slice(separator + 1);
-    if (origin === "treasure") {
-      const index = player.treasureCards.findIndex((item) => item.id === cardId);
-      if (index < 0) {
-        return undefined;
-      }
-      return player.treasureCards.splice(index, 1)[0];
-    }
-    if (origin === "hand") {
-      const index = player.hand.findIndex((item) => item.id === cardId);
-      if (index < 0) {
-        return undefined;
-      }
-      return this.removeHandCardAt(player, index);
-    }
-    return undefined;
+    return removeUsableCardBySourceIdImpl(this as unknown as CardSourcesContext, player, sourceId);
   }
 
   private buildDodgeSources(player: Player): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (source.card.type === CardType.Dodge) {
-        sources.push({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (this.hasSkill(player, SkillName.QingGuo)) {
-      for (const source of all) {
-        if (source.card.color === "black" && source.card.type !== CardType.Dodge) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.QingGuo}当${CardType.Dodge}` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.LongDan)) {
-      for (const source of all) {
-        if (this.isSlashCard(source.card.type)) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.LongDan}当${CardType.Dodge}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "dodge", sources);
-    return sources;
+    return buildDodgeSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private buildSlashSources(player: Player): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (this.isSlashCard(source.card.type)) {
-        sources.push({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (this.hasSkill(player, SkillName.WuSheng)) {
-      for (const source of all) {
-        if (source.card.color === "red" && !this.isSlashCard(source.card.type)) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.WuSheng}当${CardType.Slash}` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.LongDan)) {
-      for (const source of all) {
-        if (source.card.type === CardType.Dodge) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.LongDan}当${CardType.Slash}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "slash", sources);
-    return sources;
+    return buildSlashSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
-  /**
-   * 外部武将包 `conversion.asResponse`（Phase 7）的响应来源：把满足 `from` 的牌标成"可当 `kind` 打出"。
-   * `viaSkill`/`asType` 是给 `consumeResponseCard` 的凭据——只有带标记的来源才允许"非直接牌类"响应。
-   */
   private appendConversionSources(player: Player, kind: ResponseKind, sources: CardSource[]): void {
-    const conversions = this.responseConversions(player, kind);
-    if (conversions.length === 0) {
-      return;
-    }
-    const direct = responseKindToCardType(kind);
-    const all = this.buildUsableSources(player);
-    for (const { skillId, conversion } of conversions) {
-      const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-      for (const source of all) {
-        if (source.card.type === direct) {
-          continue;
-        }
-        if (!matchesConversionFilter(source.card, conversion.from)) {
-          continue;
-        }
-        sources.push({
-          ...source,
-          label: `${describeCard(source.card)}${displayName}当${conversion.to}`,
-          viaSkill: skillId,
-          asType: conversion.to,
-        });
-      }
-    }
+    return appendConversionSourcesImpl(this as unknown as CardSourcesContext, player, kind, sources);
   }
 
   private buildNegateSources(player: Player): CardSource[] {
-    const sources = this.buildUsableSources(player)
-      .filter((source) => source.card.type === CardType.Negate)
-      .map((source) => ({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` }));
-    this.appendConversionSources(player, "negate", sources);
-    return sources;
+    return buildNegateSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private buildPeachSources(player: Player, selfRescue = false): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (source.card.type === CardType.Peach) {
-        sources.push({ ...source, label: `使用${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (selfRescue) {
-      // 酒方法Ⅱ：濒死时可将酒当桃对自己使用（仅自救）
-      for (const source of all) {
-        if (source.card.type === CardType.Wine) {
-          sources.push({ ...source, label: `使用${describeCard(source.card)}自救（当${CardType.Peach}）` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.JiJiu) && player.id !== this.currentPlayer.id) {
-      for (const source of all) {
-        if (source.card.color === "red" && source.card.type !== CardType.Peach) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.JiJiu}当${CardType.Peach}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "peach", sources);
-    return sources;
+    return buildPeachSourcesImpl(this as unknown as CardSourcesContext, player, selfRescue);
   }
 
   private buildResponseSources(player: Player, kind: ResponseKind, selfRescue = false): CardSource[] {
-    if (kind === "dodge") return this.buildDodgeSources(player);
-    if (kind === "slash") return this.buildSlashSources(player);
-    if (kind === "negate") return this.buildNegateSources(player);
-    return this.buildPeachSources(player, selfRescue);
+    return buildResponseSourcesImpl(this as unknown as CardSourcesContext, player, kind, selfRescue);
   }
 
-  private async consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
-    const source = this.peekUsableCard(player, sourceId);
-    if (!source) {
-      return false;
-    }
-    const card = source.card;
-    // 酒方法Ⅱ：濒死者本人可将酒当桃使用（仅自救，他人救援只能用桃）
-    const wineAsPeach = kind === "peach" && card.type === CardType.Wine && player.hp <= 0;
-    const direct =
-      kind === "dodge"
-        ? card.type === CardType.Dodge
-        : kind === "slash"
-          ? this.isSlashCard(card.type)
-          : kind === "negate"
-            ? card.type === CardType.Negate
-            : card.type === CardType.Peach || wineAsPeach;
-    // Phase 8：本次响应若走了当牌转换，成功后要通知技能扣费（限次/标记）。
-    let viaConversion: { skillId: SkillId; conversion: SkillConversion } | undefined;
-    if (!direct) {
-      // 声明式 conversions（`viaSkill` 凭据）与内置转换技各自的"当 X"判定。
-      // 凭据只在来源列表里（`peekUsableCard` 只回 {card}），所以这里按 sourceId 回查一次候选来源；
-      // 再以技能的真实声明复算 `from`，让伪造的 sourceId 无法蒙过去。
-      const candidate = this.buildResponseSources(player, kind, kind === "peach" && player.hp <= 0).find(
-        (entry) => entry.sourceId === sourceId && entry.viaSkill,
-      );
-      viaConversion = candidate
-        ? this.responseConversions(player, kind).find(
-            (entry) => entry.skillId === candidate.viaSkill && matchesConversionFilter(card, entry.conversion.from),
-          )
-        : undefined;
-      const convertedLabel = viaConversion
-        ? `${resolveSkillDescriptor(viaConversion.skillId).displayName ?? viaConversion.skillId}当${viaConversion.conversion.to}`
-        : kind === "dodge" && card.color === "black" && this.hasSkill(player, SkillName.QingGuo)
-          ? `${SkillName.QingGuo}当${CardType.Dodge}`
-          : kind === "dodge" && this.isSlashCard(card.type) && this.hasSkill(player, SkillName.LongDan)
-            ? `${SkillName.LongDan}当${CardType.Dodge}`
-            : kind === "slash" && card.color === "red" && this.hasSkill(player, SkillName.WuSheng)
-              ? `${SkillName.WuSheng}当${CardType.Slash}`
-              : kind === "slash" && card.type === CardType.Dodge && this.hasSkill(player, SkillName.LongDan)
-                ? `${SkillName.LongDan}当${CardType.Slash}`
-                : kind === "peach" && card.color === "red" && this.hasSkill(player, SkillName.JiJiu)
-                  ? `${SkillName.JiJiu}当${CardType.Peach}`
-                  : null;
-      if (!convertedLabel) {
-        return false;
-      }
-      logs.push(`${player.name} 发动${convertedLabel}（${card.type}）`);
-    }
-    const removed = await this.removeUsableCardBySourceId(player, sourceId);
-    if (!removed) {
-      return false;
-    }
-    this.discardPile.push(removed);
-    // 本回合"打出"过杀（与出牌阶段"使用"杀分开计数，供克己等技能判定）。
-    if (kind === "slash") {
-      this.slashPlayedThisTurn = true;
-    }
-    // 拦截点 card_used：打出一张响应牌（reason="打出"）。
-    await this.emitSkillTrigger("card_used", { actor: player, card: removed, reason: "打出" }, logs);
-    if (viaConversion) {
-      await this.notifyConversionUsed(player, viaConversion.skillId, viaConversion.conversion, logs);
-    }
-    if (wineAsPeach) {
-      logs.push(`${player.name} 使用酒自救（当${CardType.Peach}）`);
-    }
-    return true;
+  private async consumeResponseCard(
+    player: Player,
+    kind: ResponseKind,
+    sourceId: string,
+    logs: string[],
+  ): Promise<boolean> {
+    return consumeResponseCardImpl(this as unknown as ResponsePipelineContext, player, kind, sourceId, logs);
   }
 
   private async requestCardResponse(
@@ -1997,134 +714,37 @@ export class SanGuoGame {
     trigger: { cardName: string; actorId: string },
     logs: string[],
   ): Promise<boolean> {
-    const policy = this.responsePolicyByPlayer.get(player.id);
-    if (policy && policy[kind] === false) {
-      this.setPlayerResponseSelection(player.id, kind, null);
-      return false;
-    }
-    const selection = this.takePlayerResponseSelection(player.id, kind);
-    if (selection) {
-      return await this.consumeSelectedResponse(player, kind, selection, logs);
-    }
-    // 酒方法Ⅱ：濒死者本人可将酒当桃自救
-    const selfRescue = kind === "peach" && trigger.actorId === player.id;
-    const sources = this.buildResponseSources(player, kind, selfRescue);
-    // 拦截点 provide_response（Phase 7）：在"没有任何来源 → 直接判为无法响应"**之前**发出，
-    // 钩子可往 payload.responseSources 里 push 额外来源（代码技能的当牌转换）。
-    const payload: SkillEventPayload = { actor: player, need: kind, responseSources: sources };
-    await this.emitSkillTrigger("provide_response", payload, logs);
-    const usable = payload.responseSources ?? sources;
-    if (usable.length === 0) {
-      return false;
-    }
-    const cardNames: Record<ResponseKind, string> = {
-      dodge: CardType.Dodge,
-      slash: CardType.Slash,
-      negate: CardType.Negate,
-      peach: CardType.Peach,
-    };
-    // 求桃时明确濒死者，救援者才知道要救谁
-    let reason = `${trigger.cardName}：是否打出${cardNames[kind]}？`;
-    if (kind === "peach") {
-      const dying = this.players.find((item) => item.id === trigger.actorId);
-      const dyingName = dying ? dying.name : "";
-      reason = trigger.actorId === player.id
-        ? `你濒死：是否打出${CardType.Peach}自救？`
-        : `${dyingName}濒死：是否打出${CardType.Peach}救援？`;
-    }
-    const decision = await this.decide({
-      kind: "respond",
-      requestId: this.nextInteractionId(),
-      responderId: player.id,
-      trigger,
-      responseKind: kind,
-      sources: usable,
-      allowPass: true,
-      reason,
-    });
-    if (decision.choice !== "card") {
-      return false;
-    }
-    return await this.consumeResponseCard(player, kind, decision.sourceId, logs);
+    return requestCardResponseImpl(this as unknown as ResponsePipelineContext, player, kind, trigger, logs);
   }
 
-  private async requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
-    const picked: Card[] = [];
-    for (let i = 0; i < count; i += 1) {
-      const sources = providedSources ?? this.buildUsableSources(player);
-      if (sources.length === 0) {
-        break;
-      }
-      const decision = await this.decide({
-        kind: "choose-discard",
-        requestId: this.nextInteractionId(),
-        playerId: player.id,
-        reason: count > 1 ? `${reason}（第 ${i + 1}/${count} 张）` : reason,
-        sources,
-        count: 1,
-        allowPass: false,
-      });
-      if (decision.choice !== "card") {
-        break;
-      }
-      const card = await this.removeUsableCardBySourceId(player, decision.sourceId);
-      if (!card) {
-        break;
-      }
-      picked.push(card);
-    }
-    return picked;
+  private async requestDiscardSelection(
+    player: Player,
+    count: number,
+    reason: string,
+    providedSources?: CardSource[],
+  ): Promise<Card[]> {
+    return requestDiscardSelectionImpl(this as unknown as CardSourcesContext, player, count, reason, providedSources);
   }
 
   private canPlayerRespond(playerId: string, kind: ResponseKind): boolean {
-    const policy = this.responsePolicyByPlayer.get(playerId);
-    if (!policy) {
-      return true;
-    }
-    const allowed = policy[kind];
-    return allowed !== false;
+    return canPlayerRespondImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
-  private async consumeSelectedResponse(player: Player, kind: ResponseKind, optionId: string, logs: string[]): Promise<boolean> {
-    let cardId = optionId;
-    if (optionId.startsWith("qingguo:") || optionId.startsWith("wusheng:") || optionId.startsWith("longdan:")) {
-      cardId = optionId.slice(optionId.indexOf(":") + 1);
-    }
-    const handSourceId = `hand:${cardId}`;
-    if (this.peekUsableCard(player, handSourceId)) {
-      return await this.consumeResponseCard(player, kind, handSourceId, logs);
-    }
-    const treasureSourceId = `treasure:${cardId}`;
-    if (this.peekUsableCard(player, treasureSourceId)) {
-      return await this.consumeResponseCard(player, kind, treasureSourceId, logs);
-    }
-    return false;
+  private async consumeSelectedResponse(
+    player: Player,
+    kind: ResponseKind,
+    optionId: string,
+    logs: string[],
+  ): Promise<boolean> {
+    return consumeSelectedResponseImpl(this as unknown as ResponsePipelineContext, player, kind, optionId, logs);
   }
 
   private async consumePeachResponse(player: Player, dyingPlayerId: string, logs: string[]): Promise<boolean> {
-    const targetedDecisions = this.peachDecisions.get(dyingPlayerId);
-    if (targetedDecisions?.has(player.id)) {
-      const optionId = targetedDecisions.get(player.id);
-      if (optionId === null || optionId === undefined) return false;
-      return await this.consumeSelectedResponse(player, "peach", optionId, logs);
-    }
-    if (!this.canPlayerRespond(player.id, "peach")) return false;
-    return this.requestCardResponse(player, "peach", { cardName: CardType.Peach, actorId: dyingPlayerId }, logs);
+    return consumePeachResponseImpl(this as unknown as ResponsePipelineContext, player, dyingPlayerId, logs);
   }
 
   private takePlayerResponseSelection(playerId: string, kind: ResponseKind): string | undefined {
-    const selected = this.responseSelectionByPlayer.get(playerId);
-    if (!selected) {
-      return undefined;
-    }
-    const optionId = selected[kind];
-    delete selected[kind];
-    if (Object.keys(selected).length === 0) {
-      this.responseSelectionByPlayer.delete(playerId);
-    } else {
-      this.responseSelectionByPlayer.set(playerId, selected);
-    }
-    return optionId;
+    return takePlayerResponseSelectionImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
   setOptionalEffectDecision(playerId: string, effect: SkillName | CardType, enabled: boolean | null): void {
@@ -2134,73 +754,19 @@ export class SanGuoGame {
   }
 
   getPlayerResponseOptions(playerId: string, kind: ResponseKind): ResponseOption[] {
-    const player = this.players.find((item) => item.id === playerId);
-    if (!player || !player.alive) {
-      return [];
-    }
-    if (kind === "negate" || kind === "peach") {
-      const cardType = kind === "negate" ? CardType.Negate : CardType.Peach;
-      return player.hand
-        .filter((card) => card.type === cardType)
-        .map((card) => ({ id: card.id, kind, label: `打出${cardType}` }));
-    }
-    if (kind === "dodge") {
-      const direct = player.hand
-        .filter((card) => card.type === CardType.Dodge)
-        .map((card) => ({ id: card.id, kind, label: `打出${CardType.Dodge}` }));
-      const qingGuo = this.hasSkill(player, SkillName.QingGuo)
-        ? player.hand
-            .filter((card) => card.color === "black" && card.type !== CardType.Dodge)
-            .map((card) => ({ id: `qingguo:${card.id}`, kind, label: `${SkillName.QingGuo}当${CardType.Dodge}` }))
-        : [];
-      const longDan = this.hasSkill(player, SkillName.LongDan)
-        ? player.hand
-            .filter((card) => this.isSlashCard(card.type))
-            .map((card) => ({ id: `longdan:${card.id}`, kind, label: `${SkillName.LongDan}当${CardType.Dodge}` }))
-        : [];
-      return [...direct, ...qingGuo, ...longDan];
-    }
-    const direct = player.hand
-      .filter((card) => this.isSlashCard(card.type))
-      .map((card) => ({ id: card.id, kind, label: `打出${card.type}` }));
-    const wuSheng = this.hasSkill(player, SkillName.WuSheng)
-      ? player.hand
-          .filter((card) => card.color === "red" && !this.isSlashCard(card.type))
-          .map((card) => ({ id: `wusheng:${card.id}`, kind, label: `${SkillName.WuSheng}当${CardType.Slash}` }))
-      : [];
-    const longDan = this.hasSkill(player, SkillName.LongDan)
-      ? player.hand
-          .filter((card) => card.type === CardType.Dodge)
-          .map((card) => ({ id: `longdan:${card.id}`, kind, label: `${SkillName.LongDan}当${CardType.Slash}` }))
-      : [];
-    return [...direct, ...wuSheng, ...longDan];
+    return getPlayerResponseOptionsImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
   setPlayerResponseSelection(playerId: string, kind: ResponseKind, optionId: string | null): void {
-    if (optionId === null) {
-      const existed = this.responseSelectionByPlayer.get(playerId);
-      if (!existed) {
-        return;
-      }
-      delete existed[kind];
-      if (Object.keys(existed).length === 0) {
-        this.responseSelectionByPlayer.delete(playerId);
-      }
-      return;
-    }
-    const existed = this.responseSelectionByPlayer.get(playerId) ?? {};
-    existed[kind] = optionId;
-    this.responseSelectionByPlayer.set(playerId, existed);
+    return setPlayerResponseSelectionImpl(this as unknown as ResponsePipelineContext, playerId, kind, optionId);
   }
 
   setPeachDecision(dyingPlayerId: string, rescuerId: string, optionId: string | null): void {
-    const decisions = this.peachDecisions.get(dyingPlayerId) ?? new Map<string, string | null>();
-    decisions.set(rescuerId, optionId);
-    this.peachDecisions.set(dyingPlayerId, decisions);
+    return setPeachDecisionImpl(this as unknown as ResponsePipelineContext, dyingPlayerId, rescuerId, optionId);
   }
 
   clearPeachDecisions(): void {
-    this.peachDecisions.clear();
+    return clearPeachDecisionsImpl(this as unknown as ResponsePipelineContext);
   }
 
   setDeferDyingResolution(enabled: boolean): void {
@@ -2258,403 +824,51 @@ export class SanGuoGame {
   }
 
   async startTurn(): Promise<string[]> {
-    if (this.winner !== null) {
-      return [];
-    }
-    this.phase = TurnPhase.Judgment;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.aiTurnSeenStatesSet().clear();
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    const player = this.currentPlayer;
-    const logs = [`第 ${this.turn} 回合：${player.name} 的回合`];
-    // Phase 8：准备阶段触发点（官方回合流程的第一阶段，在判定阶段之前）。
-    await this.emitSkillTrigger("prepare_phase_start", { actor: player }, logs);
-    logs.push(`进入${TurnPhase.Judgment}`);
-    if (player.delayedTricks.length > 0) {
-      logs.push(...(await this.resolveDelayedJudgments(player)));
-    } else {
-      logs.push(`${player.name} 的判定区为空`);
-    }
-    logs.push(...(await this.resolveDeaths()));
-    if (this.winner !== null) {
-      return logs;
-    }
-    this.phase = TurnPhase.Draw;
-    logs.push(`进入${TurnPhase.Draw}`);
-    if (player.faceDown) {
-      player.faceDown = false;
-      logs.push(`${player.name} 翻至正面，跳过本回合`);
-      if (this.hasSkill(player, SkillName.JieWei) && await this.shouldActivateOptionalEffect(player, SkillName.JieWei)) {
-        const drawn = this.drawCards(player.id, 1);
-        logs.push(`${player.name} 发动${SkillName.JieWei}，摸了 ${drawn} 张牌`);
-      }
-      this.moveToNextPlayer();
-      if (this.winner !== null) return logs;
-      if (this.staged) {
-        this.pendingNextTurn = true;
-        return logs;
-      }
-      logs.push(...(await this.startTurn()));
-      return logs;
-    }
-    this.resetTurnSkillState(player.id);
-    await this.emitSkillTrigger("turn_start", { actor: player }, logs);
-    if (this.skipDrawPhase === player.id) {
-      this.skipDrawPhase = null;
-      logs.push(`${player.name} 跳过摸牌阶段`);
-    } else {
-      const drawPayload: SkillEventPayload = { actor: player, drawCount: drawCountPerTurn };
-      await this.emitSkillTrigger("before_draw", drawPayload, logs);
-      const drawn = this.drawCards(player.id, drawPayload.drawCount ?? drawCountPerTurn);
-      logs.push(`${player.name} 摸了 ${drawn} 张牌`);
-    }
-    this.phase = TurnPhase.Play;
-    // 克己口径：官方是"出牌阶段内未使用/打出过杀"。杀只能在出牌阶段使用/打出，
-    // 在此重置后，这两个 flag 即精确等于"本出牌阶段"的使用记录。
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    if (this.skipPlayPhase === player.id) {
-      this.skipPlayPhase = null;
-      logs.push(`${player.name} 跳过出牌阶段`);
-      logs.push(...(await this.endPlayPhase(player.id)));
-      return logs;
-    }
-    logs.push(`进入${TurnPhase.Play}`);
-    return logs;
+    return startTurnImpl(this as unknown as TurnFlowContext);
   }
 
   private async endPlayPhase(playerId: string): Promise<string[]> {
-    const player = this.mustGetPlayer(playerId);
-    if (!player.alive || player.id !== this.currentPlayer.id || this.phase !== TurnPhase.Play) {
-      return [];
-    }
-    this.phase = TurnPhase.Discard;
-    const logs: string[] = [];
-    logs.push(`进入${TurnPhase.Discard}`);
-    if (!await this.shouldSkipDiscardPhase(player, logs)) {
-      // 手牌上限 = 体力值 + rules.handLimitDelta（绝境这类技能会把它抬高），统一走 getHandLimit。
-      const handLimit = getHandLimit(player);
-      if (!player.isAI && player.hand.length > handLimit) {
-        logs.push(`${player.name} 需要弃置 ${player.hand.length - handLimit} 张手牌`);
-        return logs;
-      }
-      while (player.hand.length > handLimit) {
-        const index = this.randomIndex(player.hand.length);
-        const removed = await this.removeHandCardAt(player, index);
-        if (removed) {
-          logs.push(`${player.name} 弃置了 ${removed.type}`);
-          await this.discardCards([removed], player, "弃置", logs);
-        }
-      }
-    }
-    if (this.staged) {
-      this.pendingTurnEndPlayer = player.id;
-    } else {
-      logs.push(...(await this.finishTurn(player)));
-    }
-    return logs;
+    return endPlayPhaseImpl(this as unknown as TurnFlowContext, playerId);
   }
 
-  /**
-   * 弃牌阶段入口的拦截点（Phase 6）：让外部武将包与声明式规则有机会跳过整个弃牌阶段。
-   *
-   * 两条路径，任一命中即跳过：
-   * 1. `discard_phase_start` 钩子把 `payload.skipDiscardPhase` 置 true（钩子自行处理"是否发动"询问）；
-   * 2. 声明式规则 `rules.skipDiscardPhaseIfNoSlash`：出牌阶段内未使用/打出过杀时，询问玩家是否发动（克己）。
-   */
   private async shouldSkipDiscardPhase(player: Player, logs: string[]): Promise<boolean> {
-    const payload: SkillEventPayload = { actor: player };
-    await this.emitSkillTrigger("discard_phase_start", payload, logs);
-    if (payload.skipDiscardPhase) {
-      logs.push(`${player.name} 跳过弃牌阶段`);
-      return true;
-    }
-    const skillId = findSkillWithBooleanRule(player, "skipDiscardPhaseIfNoSlash");
-    if (!skillId || this.slashUsedThisTurn || this.slashPlayedThisTurn) {
-      return false;
-    }
-    if (!await this.shouldActivateOptionalEffect(player, skillId)) {
-      return false;
-    }
-    const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-    logs.push(`${player.name} 发动${displayName}，跳过弃牌阶段`);
-    return true;
+    return shouldSkipDiscardPhaseImpl(this as unknown as TurnFlowContext, player, logs);
   }
 
   async finishTurn(player: Player): Promise<string[]> {
-    const logs: string[] = [];
-    this.phase = TurnPhase.End;
-    logs.push(`进入${TurnPhase.End}`);
-    // Phase 8：结束阶段触发点（弃牌阶段之后、回合结束之前；闭月/据守等内置结束阶段效果之前发出）。
-    await this.emitSkillTrigger("end_phase_start", { actor: player }, logs);
-    if (this.hasSkill(player, SkillName.BiYue) && await this.shouldActivateOptionalEffect(player, SkillName.BiYue)) {
-      const drawn = this.drawCards(player.id, 1);
-      logs.push(`${player.name} 的${SkillName.BiYue}生效，摸了 ${drawn} 张牌`);
-    }
-    if (this.hasSkill(player, SkillName.JuShou) && await this.shouldActivateOptionalEffect(player, SkillName.JuShou)) {
-      const drawn = this.drawCards(player.id, 3);
-      player.faceDown = true;
-      logs.push(`${player.name} 发动${SkillName.JuShou}，摸了 ${drawn} 张牌并将武将牌翻至背面`);
-    }
-    logs.push(`${player.name} 结束回合`);
-    this.moveToNextPlayer();
-    if (this.winner !== null) {
-      return logs;
-    }
-    if (this.staged) {
-      this.pendingNextTurn = true;
-      return logs;
-    }
-    logs.push(...(await this.startTurn()));
-    return logs;
+    return finishTurnImpl(this as unknown as TurnFlowContext, player);
   }
 
   private findTargetsByCard(playerId: string, cardType: CardType): string[] {
-    if (!this.cardNeedsTarget(cardType)) {
-      return [];
-    }
-    const targets = this.players
-      .filter((player) => player.id !== playerId && player.alive)
-      .map((player) => player.id);
-    if (this.isSlashCard(cardType)) {
-      const attacker = this.mustGetPlayer(playerId);
-      return targets.filter((id) => {
-        const target = this.mustGetPlayer(id);
-        return this.canReachForSlash(attacker, target) && !this.isKongChengProtected(target, cardType);
-      });
-    }
-    if (cardType === CardType.Duel) {
-      return targets.filter((id) => !this.isKongChengProtected(this.mustGetPlayer(id), cardType));
-    }
-    if (cardType === CardType.Dismantle) {
-      return targets.filter((id) => cardUtilsHasRemovableCard(this.mustGetPlayer(id)));
-    }
-    if (cardType === CardType.Snatch) {
-      const user = this.mustGetPlayer(playerId);
-      return targets.filter((id) => {
-        const holder = this.mustGetPlayer(id);
-        if (isImmuneTo(holder, "snatch")) {
-          return false;
-        }
-        // 顺手牵羊只能对距离 1 以内的角色使用（奇才无视该限制）
-        if (!this.canReachForDistanceOneTrick(user, holder)) {
-          return false;
-        }
-        return cardUtilsHasRemovableCard(holder);
-      });
-    }
-    if (cardType === CardType.Collateral) {
-      return targets.filter((id) => {
-        const holder = this.mustGetPlayer(id);
-        // 借刀杀人只能对装备武器的角色使用
-        if (holder.weapon === null) {
-          return false;
-        }
-        return true;
-      });
-    }
-    if (cardType === CardType.Indulgence || cardType === CardType.SuppliesCut) {
-      const user = this.mustGetPlayer(playerId);
-      return targets.filter((id) => {
-        const holder = this.mustGetPlayer(id);
-        if (cardType === CardType.Indulgence && isImmuneTo(holder, "indulgence")) {
-          return false;
-        }
-        // 兵粮寸断只能对距离 1 以内的角色使用（奇才无视该限制）；乐不思蜀无距离限制
-        if (cardType === CardType.SuppliesCut && !this.canReachForDistanceOneTrick(user, holder)) {
-          return false;
-        }
-        return !holder.delayedTricks.some((t) => t.cardType === cardType);
-      });
-    }
-    if (cardType === CardType.FireAttack) {
-      // 火攻：对一名其他角色使用，无距离限制
-      return targets;
-    }
-    if (cardType === CardType.IronChain) {
-      // 铁索连环：可对包括自己在内的存活角色使用
-      return this.players.filter((player) => player.alive).map((player) => player.id);
-    }
-    return targets;
+    return findTargetsByCardImpl(this as unknown as PlayEnumerateContext, playerId, cardType);
   }
 
   private drawCards(playerId: string, count: number): number {
-    const player = this.mustGetPlayer(playerId);
-    let drawn = 0;
-    for (let i = 0; i < count; i += 1) {
-      const card = this.drawCard();
-      if (!card) {
-        break;
-      }
-      player.hand.push(card);
-      drawn += 1;
-    }
-    return drawn;
+    return drawCardsImpl(this as unknown as CardZonesContext, playerId, count);
   }
 
-  /**
-   * Phase 10：牌因"弃置/判定"进入弃牌堆的中央入口——逐张置入并发出 `card_discarded`
-   * 触发点（`actor` 为牌的原主，`reason` 为"弃置"/"判定"），钩子可在此时把牌从弃牌堆取走
-   * （如落英）。调用方负责先把牌从原区域移出（`removeHandCardAt` 等）；本方法只负责入堆+发触发点。
-   * "使用/打出"的牌入堆不要走这里（直接 `discardPile.push`），否则落英会误触发；
-   * 装备重建牌、拼点牌、洛神红牌同样不走这里。
-   */
-  private async discardCards(
-    cards: Card[],
-    actor: Player,
-    reason: "弃置" | "判定",
-    logs: string[],
-  ): Promise<void> {
-    for (const card of cards) {
-      this.discardPile.push(card);
-      await this.emitSkillTrigger("card_discarded", { actor, card, reason }, logs);
-    }
+  private async discardCards(cards: Card[], actor: Player, reason: "弃置" | "判定", logs: string[]): Promise<void> {
+    return discardCardsImpl(this as unknown as CardZonesContext, cards, actor, reason, logs);
   }
 
   private drawCard(): Card | null {
-    if (this.deck.length === 0) {
-      if (this.discardPile.length === 0) {
-        return null;
-      }
-      this.deck = shuffle(this.discardPile, this.rng);
-      this.discardPile = [];
-    }
-    const card = this.deck.shift();
-    return card ?? null;
+    return drawCardImpl(this as unknown as CardZonesContext);
   }
 
   private async drawJudgmentCard(reason: string, logs: string[], owner?: Player): Promise<Card | null> {
-    let card = this.drawCard();
-    if (!card) {
-      logs.push(`${reason}无法判定：牌堆为空`);
-      return null;
-    }
-    const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无花色" } as const;
-    logs.push(`${reason}判定牌：${suitNames[card.suit]}${card.rank} ${card.type}`);
-    // Phase 10：判定牌入弃牌堆即发 card_discarded（actor 为判定归属者；落英等技能可此时获得之）。
-    // 注意：此时判定尚未结算（改判/天妒在后），落英先于天妒获得是既定顺序。
-    await this.discardCards([card], owner ?? this.currentPlayer, "判定", logs);
-    // 拦截点 judgment：外部包可替换判定牌实现"改判"。钩子自己负责把替换牌从原区域移除，
-    // 引擎负责把替换牌置入弃牌堆并接管后续（与内置鬼才的处理方式一致）。
-    const judgmentPayload: SkillEventPayload = { ...(owner ? { actor: owner } : {}), reason, card, judgmentCard: card };
-    await this.emitSkillTrigger("judgment", judgmentPayload, logs);
-    if (judgmentPayload.judgmentCard && judgmentPayload.judgmentCard.id !== card.id) {
-      const replacement = judgmentPayload.judgmentCard;
-      // 兜底：替换牌若还留在其他区域（外部钩子漏移除），先清掉再入弃牌堆，保证单区唯一
-      const cleaned = this.removeCardFromAllZones(replacement.id);
-      logs.push(`${reason}判定牌被替换：${describeCard(card)} → ${describeCard(replacement)}`);
-      // 替换牌成为新的判定牌（原主未知，按判定归属者计 actor）。
-      await this.discardCards([replacement], owner ?? this.currentPlayer, "判定", logs);
-      if (cleaned > 0) {
-        logs.push(`${reason}改判替换牌残留在其他区域，已清理 ${cleaned} 处`);
-      }
-      card = replacement;
-    }
-    const guiCaiPlayer = this.players.find((item) => item.alive && this.hasSkill(item, SkillName.GuiCai));
-    if (guiCaiPlayer) {
-      const sources = this.buildUsableSources(guiCaiPlayer);
-      if (sources.length > 0) {
-        const decision = await this.decide({
-          kind: "choose-discard",
-          requestId: this.nextInteractionId(),
-          playerId: guiCaiPlayer.id,
-          reason: `${reason}：${guiCaiPlayer.name} 是否发动${SkillName.GuiCai}，用手牌替换判定牌？`,
-          sources,
-          count: 1,
-          allowPass: true,
-          passLabel: `不发动${SkillName.GuiCai}`,
-        });
-        if (decision.choice === "card") {
-          const replacement = await this.removeUsableCardBySourceId(guiCaiPlayer, decision.sourceId);
-          if (replacement) {
-            logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${describeCard(replacement)} 替换判定牌 ${describeCard(card)}`);
-            // 替换牌出自鬼才持有者的手牌，actor 计其原主。
-            await this.discardCards([replacement], guiCaiPlayer, "判定", logs);
-            card = replacement;
-          }
-        }
-      }
-    }
-    if (owner && this.hasSkill(owner, SkillName.TianDu) && await this.shouldActivateOptionalEffect(owner, SkillName.TianDu)) {
-      const index = this.discardPile.findIndex((item) => item.id === card.id);
-      if (index >= 0) {
-        const [obtained] = this.discardPile.splice(index, 1);
-        if (obtained) {
-          owner.hand.push(obtained);
-          logs.push(`${owner.name} 的${SkillName.TianDu}生效，获得判定牌`);
-        }
-      }
-    }
-    return card;
+    return drawJudgmentCardImpl(this as unknown as CardZonesContext, reason, logs, owner);
   }
 
   private moveToNextPlayer(): void {
-    const livingPlayers = this.players.filter((player) => player.alive);
-    if (livingPlayers.length <= 1) {
-      this.resolveWinner();
-      return;
-    }
-    let moved = false;
-    // Phase 9：轮次推进——遍历经过本轮起始座位即一轮结束（起始玩家已阵亡时，
-    // 遍历会直接越过其座位，轮次照常推进，锚点顺延到落点座位）。
-    let wrapped = false;
-    for (let i = 0; i < this.players.length; i += 1) {
-      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
-      if (this.currentPlayerIndex === this.roundStartIndex) {
-        wrapped = true;
-      }
-      if (this.players[this.currentPlayerIndex]?.alive) {
-        moved = true;
-        break;
-      }
-    }
-    if (moved) {
-      this.turn += 1;
-      if (wrapped) {
-        this.round += 1;
-        this.roundStartIndex = this.currentPlayerIndex;
-        this.skillUsedThisRound = new Map();
-      }
-    }
+    return moveToNextPlayerImpl(this as unknown as TurnFlowContext);
   }
 
   private async advanceIfCurrentPlayerDead(logs: string[]): Promise<void> {
-    if (this.winner !== null) {
-      return;
-    }
-    const current = this.players[this.currentPlayerIndex];
-    if (current?.alive) {
-      return;
-    }
-    this.moveToNextPlayer();
-    if (this.winner !== null) {
-      return;
-    }
-    if (this.staged) {
-      this.pendingNextTurn = true;
-      return;
-    }
-    logs.push(...(await this.startTurn()));
+    return advanceIfCurrentPlayerDeadImpl(this as unknown as TurnFlowContext, logs);
   }
 
   private normalizeInitOptions(options: Partial<GameInitOptions>): GameInitOptions {
-    const playerCountSource = options.playerCount ?? ((options.aiCount ?? defaultInitOptions.aiCount) + 1);
-    const playerCount = Math.min(6, Math.max(2, Math.floor(playerCountSource)));
-    const aiCount = playerCount - 1;
-    const openingHandCount = options.openingHandCount ?? defaultInitOptions.openingHandCount;
-    const humanName = options.humanName ?? defaultInitOptions.humanName;
-    const humanRole = options.humanRole ?? defaultInitOptions.humanRole;
-    const humanGeneral = options.humanGeneral ?? defaultInitOptions.humanGeneral;
-    return {
-      playerCount,
-      aiCount,
-      openingHandCount: Math.min(6, Math.max(3, Math.floor(openingHandCount))),
-      humanName,
-      humanRole,
-      humanGeneral,
-    };
+    return normalizeInitOptionsImpl(this as unknown as GameSetupContext, options);
   }
 
   private createPlayer(
@@ -2664,28 +878,7 @@ export class SanGuoGame {
     general: GeneralDefinition,
     role: PlayerRole,
   ): Player {
-    return {
-      id,
-      name,
-      role,
-      gender: general.gender,
-      general: general.name,
-      skills: [...general.skills],
-      isAI,
-      hp: general.maxHp,
-      maxHp: general.maxHp,
-      hand: [],
-      weapon: null,
-      armor: null,
-      defenseHorse: null,
-      attackHorse: null,
-      treasure: null,
-      treasureCards: [],
-      delayedTricks: [],
-      alive: true,
-      faceDown: false,
-      chained: false,
-    };
+    return createPlayerImpl(this as unknown as GameSetupContext, id, name, isAI, general, role);
   }
 
   private mustGetPlayer(id: string): Player {
@@ -2701,95 +894,38 @@ export class SanGuoGame {
   }
 
   private async discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number> {
-    let discarded = 0;
-    const discardLogs: string[] = [];
-    for (let i = 0; i < count && player.hand.length > 0; i += 1) {
-      const index = this.randomIndex(player.hand.length);
-      const removed = await this.removeHandCardAt(player, index);
-      if (removed) {
-        await this.discardCards([removed], player, "弃置", discardLogs);
-        discarded += 1;
-      }
-    }
-    if (discarded > 0) {
-      logs.push(`${player.name} 弃置了 ${discarded} 张手牌`);
-      logs.push(...discardLogs);
-    }
-    return discarded;
+    return discardFromPlayerHandImpl(this as unknown as CardZonesContext, player, count, logs);
   }
 
   // 集中式手牌移除：所有“失去手牌”的路径统一走这里，便于触发连营。
   private async removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined> {
-    const removed = player.hand.splice(index, 1)[0];
-    if (removed) {
-      // 拦截点 hand_card_lost：只通知，不改变移除结果。
-      // 注意：调用方未传 logs 时，钩子产生的日志会被丢弃（不进入对局日志）。
-      await this.emitSkillTrigger("hand_card_lost", { actor: player, card: removed }, logs ?? []);
-      await this.checkLianYing(player, logs);
-    }
-    return removed;
+    return removeHandCardAtImpl(this as unknown as CardZonesContext, player, index, logs);
   }
 
   // 连营：失去最后一张手牌时可摸一张牌。
   private async checkLianYing(player: Player, logs?: string[]): Promise<void> {
-    if (this.winner !== null || !player.alive || player.hand.length > 0) {
-      return;
-    }
-    if (!this.hasSkill(player, SkillName.LianYing)) {
-      return;
-    }
-    if (!await this.shouldActivateOptionalEffect(player, SkillName.LianYing)) {
-      return;
-    }
-    const drawn = this.drawCards(player.id, 1);
-    if (drawn > 0 && logs) {
-      logs.push(`${player.name} 的${SkillName.LianYing}生效，失去最后手牌后摸了 ${drawn} 张牌`);
-    }
+    return checkLianYingImpl(this as unknown as CardZonesContext, player, logs);
   }
 
   // 突袭/其他技能用：从目标获得 1 张随机手牌（不取装备）。
   private async takeRandomHandCard(player: Player, receiver: Player): Promise<Card | undefined> {
-    if (player.hand.length === 0) {
-      return undefined;
-    }
-    const index = this.randomIndex(player.hand.length);
-    const removed = await this.removeHandCardAt(player, index);
-    if (removed) {
-      receiver.hand.push(removed);
-    }
-    return removed;
+    return takeRandomHandCardImpl(this as unknown as CardZonesContext, player, receiver);
   }
 
   private drawTopCards(count: number): Card[] {
-    const drawn: Card[] = [];
-    for (let i = 0; i < count; i += 1) {
-      const card = this.drawCard();
-      if (!card) {
-        break;
-      }
-      drawn.push(card);
-    }
-    return drawn;
+    return drawTopCardsImpl(this as unknown as CardZonesContext, count);
   }
 
   private placeCardsOnTop(cards: Card[]): void {
-    for (let i = cards.length - 1; i >= 0; i -= 1) {
-      const card = cards[i];
-      if (card) {
-        this.deck.unshift(card);
-      }
-    }
+    return placeCardsOnTopImpl(this as unknown as CardZonesContext, cards);
   }
 
   private placeCardsOnBottom(cards: Card[]): void {
-    this.deck.push(...cards);
+    return placeCardsOnBottomImpl(this as unknown as CardZonesContext, cards);
   }
 
   private async emitSkillTrigger(trigger: SkillTrigger, payload: SkillEventPayload, logs: string[]): Promise<void> {
-    const hooks = this.skillHooks[trigger];
-    for (const hook of hooks) {
-      await hook(payload, logs);
-    }
+    return emitSkillTriggerImpl(this as unknown as CardZonesContext, trigger, payload, logs);
   }
 
   private async applyDamage(
@@ -2802,56 +938,21 @@ export class SanGuoGame {
     damageKind?: DamageKind | null,
     isChainSpread = false,
   ): Promise<void> {
-    const payload: SkillEventPayload = {
+    return applyDamageImpl(
+      this as unknown as CardZonesContext,
       source,
       target,
-      damage: amount,
+      amount,
       reason,
-      ...(damageCard ? { card: damageCard } : {}),
-    };
-    await this.emitSkillTrigger("before_damage", payload, logs);
-    let finalDamage = Math.max(0, payload.damage ?? 0);
-    if (target.armor === CardType.SilverLion && finalDamage > 1) {
-      finalDamage = 1;
-      logs.push(`${target.name} 的白银狮子生效，本次伤害改为 1`);
-    }
-    if (finalDamage === 0) {
-      logs.push(`${target.name} 未受到伤害`);
-      return;
-    }
-    target.hp -= finalDamage;
-    // 记录击杀归属：伤害来源即"凶手"，无来源伤害（闪电、苦肉等 source === target）记 null。
-    this.noteDamageSource(source && source.id !== target.id ? source.id : null, target.id);
-    logs.push(`${target.name} 受到 ${finalDamage} 点伤害，当前体力 ${Math.max(target.hp, 0)}`);
-    // 铁索连环传导：处于连环状态的角色受到属性伤害时，其他连环角色受到等量同属性伤害（单波次，不递归）。
-    // 属性伤害结算完成后，受到影响的所有角色（含被传导者）立即重置武将牌、脱离连环状态。
-    if (!isChainSpread && target.chained) {
-      const kind = damageKind ?? attributeDamageKind(damageCard?.type);
-      if (kind) {
-        const kindLabel = kind === "fire" ? "火焰" : "雷电";
-        target.chained = false;
-        logs.push(`${target.name} 受到${kindLabel}属性伤害，铁索连环状态重置`);
-        const others = this.players.filter((p) => p.alive && p.chained && p.id !== target.id);
-        for (const other of others) {
-          other.chained = false;
-          logs.push(`铁索连环传导：${other.name} 受到 ${finalDamage} 点${kindLabel}伤害，铁索连环状态重置`);
-          await this.applyDamage(source, other, finalDamage, "铁索连环", logs, damageCard, kind, true);
-        }
-      }
-    }
-    // after_damage 钩子看到的是实际造成的伤害（白银狮子等压过之后的值），而非原始数值
-    payload.damage = finalDamage;
-    await this.emitSkillTrigger("after_damage", payload, logs);
+      logs,
+      damageCard,
+      damageKind,
+      isChainSpread,
+    );
   }
 
   private isKongChengProtected(target: Player, cardType: CardType): boolean {
-    if (this.isSlashCard(cardType)) {
-      return isImmuneTo(target, "slash");
-    }
-    if (cardType === CardType.Duel) {
-      return isImmuneTo(target, "duel");
-    }
-    return false;
+    return isKongChengProtectedImpl(this as unknown as CardZonesContext, target, cardType);
   }
 
   // ===== 以下为从本类拆出到独立模块的方法的薄封装（行为不变） =====
@@ -2892,17 +993,8 @@ export class SanGuoGame {
     return cardUtilsHasRemovableCard(player);
   }
 
-  /** 主公 +1 体力上限：总人数 ≥ 4 时生效（rules.md §3.4）。 */
   private applyLordBonus(): void {
-    if (this.players.length < 4) {
-      return;
-    }
-    const lord = this.players.find((player) => player.role === PlayerRole.Lord);
-    if (!lord) {
-      return;
-    }
-    lord.maxHp += 1;
-    lord.hp += 1;
+    return applyLordBonusImpl(this as unknown as GameSetupContext);
   }
 
   private shouldActivateOptionalEffect(player: Player, effect: SkillName | CardType): Promise<boolean> {
@@ -3125,102 +1217,43 @@ export class SanGuoGame {
   }
 
   private damageCreditMap(): Map<string, string | null> {
-    this.damageCredit ??= new Map<string, string | null>();
-    return this.damageCredit;
+    return damageCreditMapImpl(this as unknown as CardZonesContext);
   }
 
-  /**
-   * 把一张牌从所有已知区域移除（牌堆/弃牌堆/所有人手牌/木牛流马存牌），返回移除数量。
-   * 外部改判钩子漏移除时的兜底：保证同一张牌只存在于一个区域。
-   */
   private removeCardFromAllZones(cardId: string): number {
-    let removed = 0;
-    const sweep = (pool: Card[]): void => {
-      for (let index = pool.length - 1; index >= 0; index -= 1) {
-        if (pool[index]?.id === cardId) {
-          pool.splice(index, 1);
-          removed += 1;
-        }
-      }
-    };
-    sweep(this.deck);
-    sweep(this.discardPile);
-    for (const player of this.players) {
-      sweep(player.hand);
-      sweep(player.treasureCards);
-    }
-    return removed;
+    return removeCardFromAllZonesImpl(this as unknown as CardZonesContext, cardId);
   }
 
   private oxStoredTurnMap(): Map<string, number> {
-    this.woodenOxStoredTurn ??= new Map<string, number>();
-    return this.woodenOxStoredTurn;
+    return oxStoredTurnMapImpl(this as unknown as CardZonesContext);
   }
 
   private aiTurnSeenStatesSet(): Set<string> {
-    this.aiTurnSeenStates ??= new Set<string>();
-    return this.aiTurnSeenStates;
+    return aiTurnSeenStatesSetImpl(this as unknown as AiDriverContext);
   }
 
-  /** 木牛流马取出资格：本回合刚置入的牌本回合不能取出（防置入/取出空转）。 */
   private canTakeStoredCard(card: Card): boolean {
-    return (this.oxStoredTurnMap().get(card.id) ?? -1) < this.turn;
+    return canTakeStoredCardImpl(this as unknown as CardZonesContext, card);
   }
 
   private buildAiTurnProgressKey(): string {
-    const parts: string[] = [`t${this.turn}`, `p${this.phase}`, `d${this.deck.length}`, `x${this.discardPile.length}`];
-    for (const player of this.players) {
-      parts.push(
-        [
-          player.id,
-          player.alive ? 1 : 0,
-          player.hp,
-          player.hand.map((card) => card.id).join(","),
-          player.weapon ?? "",
-          player.armor ?? "",
-          player.defenseHorse ?? "",
-          player.attackHorse ?? "",
-          player.treasure ?? "",
-          player.treasureCards.map((card) => card.id).join(","),
-          player.chained ? 1 : 0,
-        ].join("|"),
-      );
-    }
-    return parts.join("#");
+    return buildAiTurnProgressKeyImpl(this as unknown as AiDriverContext);
   }
 
-  /**
-   * AI 驱动每执行一个动作后调用：当前局面若本回合已出现过则返回 true
-   *（决策器在零收益打转，调用方应强制结束出牌），否则记录并返回 false。
-   */
   public noteAiTurnProgress(): boolean {
-    const seen = this.aiTurnSeenStatesSet();
-    const key = this.buildAiTurnProgressKey();
-    if (seen.has(key)) {
-      return true;
-    }
-    if (seen.size > 1000) {
-      seen.clear();
-    }
-    seen.add(key);
-    return false;
+    return noteAiTurnProgressImpl(this as unknown as AiDriverContext);
   }
 
-  /** AI 驱动在回合开始时调用：清空局面记录并记下初始局面。 */
   public beginAiTurnProgress(): void {
-    this.aiTurnSeenStatesSet().clear();
-    this.noteAiTurnProgress();
+    return beginAiTurnProgressImpl(this as unknown as AiDriverContext);
   }
 
   private noteDamageSource(sourceId: string | null, targetId: string): void {
-    this.damageCreditMap().set(targetId, sourceId);
+    return noteDamageSourceImpl(this as unknown as CardZonesContext, sourceId, targetId);
   }
 
   private takeDamageSource(targetId: string): string | null {
-    const map = this.damageCreditMap();
-    const sourceId = map.get(targetId) ?? null;
-    map.delete(targetId);
-    return sourceId;
+    return takeDamageSourceImpl(this as unknown as CardZonesContext, targetId);
   }
 
   private resolveWinner(): string[] {

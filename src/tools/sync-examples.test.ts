@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -41,13 +41,14 @@ void test("gallery 与 generals/ 逐字节一致（改包只改 generals/，跑 
   assert.equal(report.drifted, 0);
 });
 
-void test("gallery 的包集合与 GALLERY_PACKS 完全一致（不多不少）", () => {
-  const report = syncExamples({ root: repoRoot });
-  assert.deepEqual(
-    report.packs.map((pack) => pack.pack).sort(),
-    [...GALLERY_PACKS].sort(),
-    "GALLERY_PACKS 应列出全部参考武将；新增参考武将时同步它",
-  );
+void test("gallery 目录里的包集合与 GALLERY_PACKS 完全一致（不多不少）", () => {
+  // 直接扫磁盘：gallery 里多出一个没登记的包、或登记了却没落地，都应该被发现。
+  const galleryDir = join(repoRoot, EXAMPLES_DIR);
+  const onDisk = readdirSync(galleryDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(onDisk, [...GALLERY_PACKS].sort(), "GALLERY_PACKS 应恰好等于 examples/generals 下的包目录；新增参考武将时同步它");
   // 每个 gallery 包都必须在 generals/ 里真实存在（单一数据源不能缺包）。
   for (const pack of GALLERY_PACKS) {
     const files = listFiles(join(repoRoot, GENERALS_DIR, pack));

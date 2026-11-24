@@ -332,12 +332,13 @@ export class SanGuoGame {
     return initDefaultGameImpl(this as unknown as GameSetupContext, options);
   }
 
-  async initNetworkGame(
-    playerConfigs: NetworkPlayerConfig[],
-    openingHandCount = 4,
-    startImmediately = true,
-  ): Promise<string[]> {
-    return initNetworkGameImpl(this as unknown as GameSetupContext, playerConfigs, openingHandCount, startImmediately);
+  async initNetworkGame(playerConfigs: NetworkPlayerConfig[], openingHandCount = 4, startImmediately = true): Promise<string[]> {
+    return initNetworkGameImpl(
+      this as unknown as GameSetupContext,
+      playerConfigs,
+      openingHandCount,
+      startImmediately,
+    );
   }
 
   getSnapshot(): GameSnapshot {
@@ -458,7 +459,14 @@ export class SanGuoGame {
     convertTo: CardType | undefined,
     targetId: string | undefined,
   ): Promise<string[]> {
-    return resolveConversionUseImpl(this as unknown as PlayEnumerateContext, player, source, viaSkillId, convertTo, targetId);
+    return resolveConversionUseImpl(
+      this as unknown as PlayEnumerateContext,
+      player,
+      source,
+      viaSkillId,
+      convertTo,
+      targetId,
+    );
   }
 
   getPendingDiscardCount(playerId: string): number {
@@ -569,12 +577,7 @@ export class SanGuoGame {
     return logs;
   }
 
-  async playAction(
-    playerId: string,
-    action: GameAction,
-    targetId?: string,
-    selectedCardId?: string,
-  ): Promise<string[]> {
+  async playAction(playerId: string, action: GameAction, targetId?: string, selectedCardId?: string): Promise<string[]> {
     return playActionImpl(this as unknown as PlayExecuteContext, playerId, action, targetId, selectedCardId);
   }
 
@@ -593,7 +596,14 @@ export class SanGuoGame {
     fromTreasure: boolean,
     selectedCardId?: string,
   ): Promise<string[]> {
-    return resolveUsedCardImpl(this as unknown as PlayExecuteContext, player, usedCard, targetId, fromTreasure, selectedCardId);
+    return resolveUsedCardImpl(
+      this as unknown as PlayExecuteContext,
+      player,
+      usedCard,
+      targetId,
+      fromTreasure,
+      selectedCardId,
+    );
   }
 
   async runAITurn(): Promise<string[]> {
@@ -928,7 +938,17 @@ export class SanGuoGame {
     damageKind?: DamageKind | null,
     isChainSpread = false,
   ): Promise<void> {
-    return applyDamageImpl(this as unknown as CardZonesContext, source, target, amount, reason, logs, damageCard, damageKind, isChainSpread);
+    return applyDamageImpl(
+      this as unknown as CardZonesContext,
+      source,
+      target,
+      amount,
+      reason,
+      logs,
+      damageCard,
+      damageKind,
+      isChainSpread,
+    );
   }
 
   private isKongChengProtected(target: Player, cardType: CardType): boolean {

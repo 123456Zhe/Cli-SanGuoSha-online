@@ -111,6 +111,15 @@ import {
   TurnPhase,
 } from "./types.js";
 
+import {
+  initDefaultGame as initDefaultGameImpl,
+  initNetworkGame as initNetworkGameImpl,
+  normalizeInitOptions as normalizeInitOptionsImpl,
+  createPlayer as createPlayerImpl,
+  applyLordBonus as applyLordBonusImpl,
+} from "./game-setup.js";
+import type { GameSetupContext } from "./game-setup.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -128,14 +137,6 @@ export type { CardSource, DecisionHandler, InteractionDecision, InteractionReque
 
 const drawCountPerTurn = 2;
 
-const defaultInitOptions: GameInitOptions = {
-  playerCount: 3,
-  aiCount: 2,
-  openingHandCount: 4,
-  humanName: "主公",
-  humanRole: PlayerRole.Lord,
-  humanGeneral: "孙策",
-};
 
 export class SanGuoGame {
   private players: Player[];
@@ -252,126 +253,11 @@ export class SanGuoGame {
   }
 
   async initDefaultGame(options: Partial<GameInitOptions> = {}): Promise<string[]> {
-    const initOptions = this.normalizeInitOptions(options);
-    const roleList = this.buildRoleList(initOptions.playerCount);
-    const distribution = this.getRoleDistribution(roleList);
-    const humanRole = roleList.includes(initOptions.humanRole) ? initOptions.humanRole : PlayerRole.Lord;
-    const humanGeneralDefinition = this.resolveGeneralByName(initOptions.humanGeneral);
-    const rolePool = [...roleList];
-    const humanRoleIndex = rolePool.indexOf(humanRole);
-    if (humanRoleIndex >= 0) {
-      rolePool.splice(humanRoleIndex, 1);
-    }
-
-    this.players = [this.createPlayer("human", initOptions.humanName, false, humanGeneralDefinition, humanRole)];
-    const usedGeneralNames = new Set<string>([humanGeneralDefinition.name]);
-    for (let i = 0; i < rolePool.length; i += 1) {
-      const role = rolePool[i] ?? PlayerRole.Rebel;
-      const general = this.pickRandomUnusedGeneral(usedGeneralNames);
-      usedGeneralNames.add(general.name);
-      this.players.push(this.createPlayer(`ai-${i + 1}`, `玩家${this.getAiName(i)}`, true, general, role));
-    }
-    this.applyLordBonus();
-    this.deck = shuffle(createDeck(), this.rng);
-    this.discardPile = [];
-    this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord && player.alive);
-    if (this.currentPlayerIndex < 0) {
-      this.currentPlayerIndex = 0;
-    }
-    this.turn = 1;
-    this.round = 1;
-    this.roundStartIndex = this.currentPlayerIndex;
-    this.phase = TurnPhase.Draw;
-    this.winner = null;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    this.skillUsedThisTurn = new Map();
-    this.skillUsedThisRound = new Map();
-    this.skillCountsThisTurn = new Map();
-    this.skillFlagsThisTurn = new Map();
-    this.responsePolicyByPlayer.clear();
-    this.responseSelectionByPlayer.clear();
-    this.optionalEffectDecisions.clear();
-
-    const logs = [
-      `对局开始：${initOptions.playerCount} 人局`,
-      `身份配比：反贼${distribution.rebel} 忠臣${distribution.loyalist} 内奸${distribution.traitor}`,
-      `你的身份：${humanRole}`,
-      `你的武将：${humanGeneralDefinition.name}`,
-      `初始手牌：每人 ${initOptions.openingHandCount} 张`,
-      "发牌中...",
-    ];
-    for (const player of this.players) {
-      const drawn = this.drawCards(player.id, initOptions.openingHandCount);
-      logs.push(`${player.name}[${player.general}] 获得 ${drawn} 张手牌`);
-    }
-    logs.push(...(await this.startTurn()));
-    return logs;
+    return initDefaultGameImpl(this as unknown as GameSetupContext, options);
   }
 
   async initNetworkGame(playerConfigs: NetworkPlayerConfig[], openingHandCount = 4, startImmediately = true): Promise<string[]> {
-    if (playerConfigs.length < 2 || playerConfigs.length > 6) {
-      throw new Error("联机人数必须在 2 到 6 人之间");
-    }
-    const ids = new Set(playerConfigs.map((player) => player.id));
-    if (ids.size !== playerConfigs.length) {
-      throw new Error("联机玩家 ID 不能重复");
-    }
-    const roles = this.buildRoleList(playerConfigs.length);
-    const shuffledRoles = shuffle(roles, this.rng);
-    const usedGeneralNames = new Set<string>();
-    // 调试指定武将：按座位顺序先到先得，随机分配永远优先让位于显式指定；
-    // 未知武将/被重复指定一律报错，绝不静默换人（否则玩家以为选上了实际没生效）。
-    const pickGeneralFor = (config: NetworkPlayerConfig, index: number): GeneralDefinition => {
-      if (config.general === undefined) {
-        return this.pickRandomUnusedGeneral(usedGeneralNames);
-      }
-      const general = this.resolveGeneralByName(config.general);
-      if (usedGeneralNames.has(general.name)) {
-        throw new Error(`联机建局失败：武将「${general.name}」被指定了多次（座位 ${index + 1}：${config.name}）`);
-      }
-      return general;
-    };
-    this.players = playerConfigs.map((config, index) => {
-      const general = pickGeneralFor(config, index);
-      usedGeneralNames.add(general.name);
-      return this.createPlayer(config.id, config.name, config.isAI ?? false, general, shuffledRoles[index] ?? PlayerRole.Rebel);
-    });
-    this.applyLordBonus();
-    this.deck = shuffle(createDeck(), this.rng);
-    this.discardPile = [];
-    this.currentPlayerIndex = this.players.findIndex((player) => player.role === PlayerRole.Lord);
-    this.currentPlayerIndex = Math.max(0, this.currentPlayerIndex);
-    this.turn = 1;
-    this.round = 1;
-    this.roundStartIndex = this.currentPlayerIndex;
-    this.phase = TurnPhase.Draw;
-    this.winner = null;
-    this.slashUsedThisTurn = false;
-    this.slashPlayedThisTurn = false;
-    this.wineBuffPlayerIds = new Set();
-    this.wineUsedPlayerIds = new Set();
-    this.skillUsedThisTurn = new Map();
-    this.skillUsedThisRound = new Map();
-    this.skillCountsThisTurn = new Map();
-    this.skillFlagsThisTurn = new Map();
-    this.responsePolicyByPlayer.clear();
-    this.responseSelectionByPlayer.clear();
-    this.optionalEffectDecisions.clear();
-
-    const handCount = Math.min(6, Math.max(3, Math.floor(openingHandCount)));
-    const logs = [`联机对局开始：${playerConfigs.length} 人局`, `初始手牌：每人 ${handCount} 张`];
-    this.staged = true;
-    this.pendingNextTurn = false;
-    this.pendingTurnEndPlayer = null;
-    for (const player of this.players) {
-      const drawn = this.drawCards(player.id, handCount);
-      logs.push(`${player.name}[${player.general}] 获得 ${drawn} 张手牌`);
-    }
-    if (startImmediately) logs.push(...(await this.startTurn()));
-    return logs;
+    return initNetworkGameImpl(this as unknown as GameSetupContext, playerConfigs, openingHandCount, startImmediately);
   }
 
   getSnapshot(): GameSnapshot {
@@ -2640,52 +2526,11 @@ export class SanGuoGame {
   }
 
   private normalizeInitOptions(options: Partial<GameInitOptions>): GameInitOptions {
-    const playerCountSource = options.playerCount ?? ((options.aiCount ?? defaultInitOptions.aiCount) + 1);
-    const playerCount = Math.min(6, Math.max(2, Math.floor(playerCountSource)));
-    const aiCount = playerCount - 1;
-    const openingHandCount = options.openingHandCount ?? defaultInitOptions.openingHandCount;
-    const humanName = options.humanName ?? defaultInitOptions.humanName;
-    const humanRole = options.humanRole ?? defaultInitOptions.humanRole;
-    const humanGeneral = options.humanGeneral ?? defaultInitOptions.humanGeneral;
-    return {
-      playerCount,
-      aiCount,
-      openingHandCount: Math.min(6, Math.max(3, Math.floor(openingHandCount))),
-      humanName,
-      humanRole,
-      humanGeneral,
-    };
+    return normalizeInitOptionsImpl(this as unknown as GameSetupContext, options);
   }
 
-  private createPlayer(
-    id: string,
-    name: string,
-    isAI: boolean,
-    general: GeneralDefinition,
-    role: PlayerRole,
-  ): Player {
-    return {
-      id,
-      name,
-      role,
-      gender: general.gender,
-      general: general.name,
-      skills: [...general.skills],
-      isAI,
-      hp: general.maxHp,
-      maxHp: general.maxHp,
-      hand: [],
-      weapon: null,
-      armor: null,
-      defenseHorse: null,
-      attackHorse: null,
-      treasure: null,
-      treasureCards: [],
-      delayedTricks: [],
-      alive: true,
-      faceDown: false,
-      chained: false,
-    };
+  private createPlayer(id: string, name: string, isAI: boolean, general: GeneralDefinition, role: PlayerRole,): Player {
+    return createPlayerImpl(this as unknown as GameSetupContext, id, name, isAI, general, role);
   }
 
   private mustGetPlayer(id: string): Player {
@@ -2892,17 +2737,8 @@ export class SanGuoGame {
     return cardUtilsHasRemovableCard(player);
   }
 
-  /** 主公 +1 体力上限：总人数 ≥ 4 时生效（rules.md §3.4）。 */
   private applyLordBonus(): void {
-    if (this.players.length < 4) {
-      return;
-    }
-    const lord = this.players.find((player) => player.role === PlayerRole.Lord);
-    if (!lord) {
-      return;
-    }
-    lord.maxHp += 1;
-    lord.hp += 1;
+    return applyLordBonusImpl(this as unknown as GameSetupContext);
   }
 
   private shouldActivateOptionalEffect(player: Player, effect: SkillName | CardType): Promise<boolean> {

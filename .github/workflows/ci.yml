@@ -1,0 +1,62 @@
+# 基础 CI：lint + 自对局冒烟测试。
+#
+# 两个检查都跑在 "干净 checkout" 上（npm ci），因此也能抓到 package-lock 与
+# package.json 不同步之类的环境问题。
+#
+# - Lint：`npm run lint:ci`。仓库里有一批历史遗留的 eslint 错误，用 ESLint 9 的
+#   bulk suppressions（仓库根的 `eslint-suppressions.json`）把「当前基线」冻结下来：
+#   基线内不报错，**新增**违规仍然让 job 失败。修掉历史错误后跑
+#   `npx eslint --prune-suppressions` 收缩基线；`--pass-on-unpruned-suppressions`
+#   保证在收缩之前不会因为「修好了反倒失败」。
+# - 自对局冒烟：`npm run generals:check -- --strict --selfplay=5`，对 `generals/`
+#   下每个武将强制上场跑 5 局不变量断言，并让 `--strict` 把 lint 警告也视为失败。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 只读权限：CI 不需要写仓库，最小化 token 能力。
+permissions:
+  contents: read
+
+# 同一个分支连续推多次时，取消上一次还在跑的检查。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint:ci
+
+  selfplay:
+    name: Self-play smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # 每个武将强制上场跑 5 局，断言不变量；--strict 让警告也失败。
+      - name: Self-play smoke test
+        run: npm run generals:check -- --strict --selfplay=5

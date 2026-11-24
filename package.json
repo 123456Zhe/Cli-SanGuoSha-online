@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
+    "lint:ci": "eslint src --ext .ts --pass-on-unpruned-suppressions",
     "test": "node --test --import tsx \"src/**/*.test.ts\"",
     "generals:check": "tsx src/tools/generals-check.ts",
     "rules:gen": "tsx src/tools/gen-rules.ts",

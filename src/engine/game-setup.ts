@@ -16,7 +16,6 @@ const defaultInitOptions: GameInitOptions = {
 };
 
 import { Card, createDeck, shuffle } from "./cards.js";
-import { buildRoleList, getAiName, getRoleDistribution, pickRandomUnusedGeneral, resolveGeneralByName } from "./generals.js";
 import {
   GameInitOptions,
   GeneralDefinition,

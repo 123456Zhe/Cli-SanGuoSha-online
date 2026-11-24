@@ -1,24 +1,14 @@
-import { Card, CardType, CARD_LIBRARY_SUMMARY, createDeck, shuffle } from "./cards.js";
+import { Card, CardType, CARD_LIBRARY_SUMMARY} from "./cards.js";
 import {
-  attributeDamageKind,
   cardNeedsTarget as cardNeedsTargetImpl,
   DamageKind,
-  describeCard,
   hasRemovableCard as cardUtilsHasRemovableCard,
   isDelayedTrickCard as isDelayedTrickCardImpl,
-  isDistanceOneTrickCard,
   isEquipCard as isEquipCardImpl,
   isNonDelayedTrickCard as isNonDelayedTrickCardImpl,
   isSlashCard as isSlashCardImpl,
-  matchesConversionFilter,
-  responseKindToCardType,
-  slashKindFromCardType,
-  slashKindOf,
 } from "./card-utils.js";
 import {
-  AiHeuristicsContext,
-  pickBestAiAction,
-  pickBestTarget,
 } from "./ai-heuristics.js";
 import {
   buildRoleList,
@@ -33,9 +23,7 @@ import {
   canReachForSlash as canReachForSlashImpl,
   createCard as createCardImpl,
   discardSelfCards as discardSelfCardsImpl,
-  discardWoodenOxStoredCards as discardWoodenOxStoredCardsImpl,
   expandSlashTargets as expandSlashTargetsImpl,
-  onLoseEquip as onLoseEquipImpl,
   removeRandomCardFromPlayer as removeRandomCardFromPlayerImpl,
   ResolveContext,
   resolveArrowRain as resolveArrowRainImpl,
@@ -58,12 +46,9 @@ import {
   tryNegateGlobal as tryNegateGlobalImpl,
 } from "./resolve.js";
 import { createSkillHooks, SkillHooksContext } from "./skill-hooks.js";
-import { getPackSkill, getPackSkills } from "./skill-module.js";
-import type { SkillModuleCtx } from "./skill-module.js";
-import { resolveSkillDescriptor } from "./skill-registry.js";
 import type { SkillConversion } from "./skill-registry.js";
 import type { SlashKind } from "./card-utils.js";
-import { findSkillWithBooleanRule, getHandLimit, getSkillRules, isImmuneTo } from "./skill-rules.js";
+import { getHandLimit} from "./skill-rules.js";
 import {
   canPlaySlashInTurn as canPlaySlashInTurnImpl,
   canUseAssault as canUseAssaultImpl,

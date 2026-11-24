@@ -22,7 +22,7 @@ const engineDir = dirname(fileURLToPath(import.meta.url));
  * 新增 `src/engine` 模块（尤其从 `game.ts` 拆出的模块）必须加进这张表，
  * 否则只改那个模块时指纹不变，"reload 到底有没有生效"就无从判断。
  */
-const ENGINE_SOURCES = [
+export const ENGINE_SOURCES = [
   "game.ts",
   "game-setup.ts",
   "turn-flow.ts",
@@ -41,6 +41,11 @@ const ENGINE_SOURCES = [
   "types.ts",
   "resolve.ts",
   "ai-heuristics.ts",
+  "general-pack.ts",
+  "skill-module.ts",
+  "skill-registry.ts",
+  "skill-rules.ts",
+  "hot-reload.ts",
 ] as const;
 
 const hashEngineSources = (): string => {

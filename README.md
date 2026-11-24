@@ -273,6 +273,18 @@ npm run webui
 - 处理交互类问题时，先区分 UI 模式（`setup/game/response/discard/command`）再排查事件分支。
 - 引擎改动后优先补 `game.test.ts` 场景，保证回归安全。
 
+### CI（GitHub Actions）
+
+`.github/workflows/ci.yml` 在 push 到 `main` 和 PR 上跑两个 job，本地等价命令就是这两条：
+
+```bash
+npm run lint:ci                                         # eslint（历史错误已冻结为基线）
+npm run generals:check -- --strict --selfplay=5          # 每个武将 5 局自对局不变量断言
+```
+
+- Lint 仓库里有一批历史遗留错误（见 `AGENTS.md`），用 ESLint 9 的 bulk suppressions 记在 `eslint-suppressions.json`：基线内不报错，**新增违规照样失败**。修掉历史错误后跑 `npx eslint src --ext .ts --prune-suppressions` 收缩基线。
+- 自对局冒烟用 `--strict`（警告也算失败）与 `--selfplay=5`（每个武将强制上场跑 5 局）。
+
 ## 11. 外部武将包
 
 放一个文件夹即可新增武将，无需改 `src/`、无需重新编译：

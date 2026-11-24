@@ -171,6 +171,23 @@ import {
 } from "./card-sources.js";
 import type { CardSourcesContext } from "./card-sources.js";
 
+import {
+  decide as decideImpl,
+  autoDecisionForDeadPlayer as autoDecisionForDeadPlayerImpl,
+  autoDecision as autoDecisionImpl,
+  consumeResponseCard as consumeResponseCardImpl,
+  requestCardResponse as requestCardResponseImpl,
+  canPlayerRespond as canPlayerRespondImpl,
+  consumeSelectedResponse as consumeSelectedResponseImpl,
+  consumePeachResponse as consumePeachResponseImpl,
+  takePlayerResponseSelection as takePlayerResponseSelectionImpl,
+  getPlayerResponseOptions as getPlayerResponseOptionsImpl,
+  setPlayerResponseSelection as setPlayerResponseSelectionImpl,
+  setPeachDecision as setPeachDecisionImpl,
+  clearPeachDecisions as clearPeachDecisionsImpl,
+} from "./response-pipeline.js";
+import type { ResponsePipelineContext } from "./response-pipeline.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -1508,73 +1525,15 @@ export class SanGuoGame {
   }
 
   private async decide(request: InteractionRequest): Promise<InteractionDecision> {
-    const playerId =
-      request.kind === "respond" ? request.responderId : request.kind === "collateral" ? request.targetId : request.playerId;
-    const target = this.players.find((player) => player.id === playerId);
-    if (target && !target.alive) {
-      return this.autoDecisionForDeadPlayer(request);
-    }
-    const handler = this.decisionHandlers.get(playerId);
-    if (handler) {
-      try {
-        const decision = await handler(request);
-        if (decision) {
-          return decision;
-        }
-      } catch {
-        // 处理器异常时回退自动决策，避免结算中断
-      }
-    }
-    return this.autoDecision(request);
+    return decideImpl(this as unknown as ResponsePipelineContext, request);
   }
 
   private autoDecisionForDeadPlayer(request: InteractionRequest): InteractionDecision {
-    if (
-      request.kind === "optional-effect" ||
-      request.kind === "respond" ||
-      request.kind === "collateral"
-    ) {
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-discard") {
-      return request.sources[0] ? { choice: "pass" } : { choice: "card", sourceId: "" };
-    }
-    if (request.kind === "choose-suit") {
-      return { choice: "suit", suit: request.suits[0] ?? "heart" };
-    }
-    return { choice: "pass" };
+    return autoDecisionForDeadPlayerImpl(this as unknown as ResponsePipelineContext, request);
   }
 
   private autoDecision(request: InteractionRequest): InteractionDecision {
-    if (request.kind === "optional-effect") {
-      return { choice: "effect", enabled: false };
-    }
-    if (request.kind === "collateral") {
-      const victim = request.victims[0];
-      if (victim) {
-        const firstSlash = request.sources[0];
-        return firstSlash
-          ? { choice: "target", targetId: victim, sourceId: firstSlash.sourceId }
-          : { choice: "target", targetId: victim };
-      }
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-discard") {
-      const first = request.sources[0];
-      if (first) {
-        return { choice: "card", sourceId: first.sourceId };
-      }
-      return { choice: "pass" };
-    }
-    if (request.kind === "choose-suit") {
-      const suit = request.suits[this.randomIndex(request.suits.length)] ?? "heart";
-      return { choice: "suit", suit };
-    }
-    const first = request.sources[0];
-    if (first) {
-      return { choice: "card", sourceId: first.sourceId };
-    }
-    return { choice: "pass" };
+    return autoDecisionImpl(this as unknown as ResponsePipelineContext, request);
   }
 
   private buildAnyDiscardSources(player: Player): Array<CardSource & { card: Card }> {
@@ -1626,128 +1585,11 @@ export class SanGuoGame {
   }
 
   private async consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
-    const source = this.peekUsableCard(player, sourceId);
-    if (!source) {
-      return false;
-    }
-    const card = source.card;
-    // 酒方法Ⅱ：濒死者本人可将酒当桃使用（仅自救，他人救援只能用桃）
-    const wineAsPeach = kind === "peach" && card.type === CardType.Wine && player.hp <= 0;
-    const direct =
-      kind === "dodge"
-        ? card.type === CardType.Dodge
-        : kind === "slash"
-          ? this.isSlashCard(card.type)
-          : kind === "negate"
-            ? card.type === CardType.Negate
-            : card.type === CardType.Peach || wineAsPeach;
-    // Phase 8：本次响应若走了当牌转换，成功后要通知技能扣费（限次/标记）。
-    let viaConversion: { skillId: SkillId; conversion: SkillConversion } | undefined;
-    if (!direct) {
-      // 声明式 conversions（`viaSkill` 凭据）与内置转换技各自的"当 X"判定。
-      // 凭据只在来源列表里（`peekUsableCard` 只回 {card}），所以这里按 sourceId 回查一次候选来源；
-      // 再以技能的真实声明复算 `from`，让伪造的 sourceId 无法蒙过去。
-      const candidate = this.buildResponseSources(player, kind, kind === "peach" && player.hp <= 0).find(
-        (entry) => entry.sourceId === sourceId && entry.viaSkill,
-      );
-      viaConversion = candidate
-        ? this.responseConversions(player, kind).find(
-            (entry) => entry.skillId === candidate.viaSkill && matchesConversionFilter(card, entry.conversion.from),
-          )
-        : undefined;
-      const convertedLabel = viaConversion
-        ? `${resolveSkillDescriptor(viaConversion.skillId).displayName ?? viaConversion.skillId}当${viaConversion.conversion.to}`
-        : kind === "dodge" && card.color === "black" && this.hasSkill(player, SkillName.QingGuo)
-          ? `${SkillName.QingGuo}当${CardType.Dodge}`
-          : kind === "dodge" && this.isSlashCard(card.type) && this.hasSkill(player, SkillName.LongDan)
-            ? `${SkillName.LongDan}当${CardType.Dodge}`
-            : kind === "slash" && card.color === "red" && this.hasSkill(player, SkillName.WuSheng)
-              ? `${SkillName.WuSheng}当${CardType.Slash}`
-              : kind === "slash" && card.type === CardType.Dodge && this.hasSkill(player, SkillName.LongDan)
-                ? `${SkillName.LongDan}当${CardType.Slash}`
-                : kind === "peach" && card.color === "red" && this.hasSkill(player, SkillName.JiJiu)
-                  ? `${SkillName.JiJiu}当${CardType.Peach}`
-                  : null;
-      if (!convertedLabel) {
-        return false;
-      }
-      logs.push(`${player.name} 发动${convertedLabel}（${card.type}）`);
-    }
-    const removed = await this.removeUsableCardBySourceId(player, sourceId);
-    if (!removed) {
-      return false;
-    }
-    this.discardPile.push(removed);
-    // 本回合"打出"过杀（与出牌阶段"使用"杀分开计数，供克己等技能判定）。
-    if (kind === "slash") {
-      this.slashPlayedThisTurn = true;
-    }
-    // 拦截点 card_used：打出一张响应牌（reason="打出"）。
-    await this.emitSkillTrigger("card_used", { actor: player, card: removed, reason: "打出" }, logs);
-    if (viaConversion) {
-      await this.notifyConversionUsed(player, viaConversion.skillId, viaConversion.conversion, logs);
-    }
-    if (wineAsPeach) {
-      logs.push(`${player.name} 使用酒自救（当${CardType.Peach}）`);
-    }
-    return true;
+    return consumeResponseCardImpl(this as unknown as ResponsePipelineContext, player, kind, sourceId, logs);
   }
 
-  private async requestCardResponse(
-    player: Player,
-    kind: ResponseKind,
-    trigger: { cardName: string; actorId: string },
-    logs: string[],
-  ): Promise<boolean> {
-    const policy = this.responsePolicyByPlayer.get(player.id);
-    if (policy && policy[kind] === false) {
-      this.setPlayerResponseSelection(player.id, kind, null);
-      return false;
-    }
-    const selection = this.takePlayerResponseSelection(player.id, kind);
-    if (selection) {
-      return await this.consumeSelectedResponse(player, kind, selection, logs);
-    }
-    // 酒方法Ⅱ：濒死者本人可将酒当桃自救
-    const selfRescue = kind === "peach" && trigger.actorId === player.id;
-    const sources = this.buildResponseSources(player, kind, selfRescue);
-    // 拦截点 provide_response（Phase 7）：在"没有任何来源 → 直接判为无法响应"**之前**发出，
-    // 钩子可往 payload.responseSources 里 push 额外来源（代码技能的当牌转换）。
-    const payload: SkillEventPayload = { actor: player, need: kind, responseSources: sources };
-    await this.emitSkillTrigger("provide_response", payload, logs);
-    const usable = payload.responseSources ?? sources;
-    if (usable.length === 0) {
-      return false;
-    }
-    const cardNames: Record<ResponseKind, string> = {
-      dodge: CardType.Dodge,
-      slash: CardType.Slash,
-      negate: CardType.Negate,
-      peach: CardType.Peach,
-    };
-    // 求桃时明确濒死者，救援者才知道要救谁
-    let reason = `${trigger.cardName}：是否打出${cardNames[kind]}？`;
-    if (kind === "peach") {
-      const dying = this.players.find((item) => item.id === trigger.actorId);
-      const dyingName = dying ? dying.name : "";
-      reason = trigger.actorId === player.id
-        ? `你濒死：是否打出${CardType.Peach}自救？`
-        : `${dyingName}濒死：是否打出${CardType.Peach}救援？`;
-    }
-    const decision = await this.decide({
-      kind: "respond",
-      requestId: this.nextInteractionId(),
-      responderId: player.id,
-      trigger,
-      responseKind: kind,
-      sources: usable,
-      allowPass: true,
-      reason,
-    });
-    if (decision.choice !== "card") {
-      return false;
-    }
-    return await this.consumeResponseCard(player, kind, decision.sourceId, logs);
+  private async requestCardResponse(player: Player, kind: ResponseKind, trigger: { cardName: string; actorId: string }, logs: string[]): Promise<boolean> {
+    return requestCardResponseImpl(this as unknown as ResponsePipelineContext, player, kind, trigger, logs);
   }
 
   private async requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
@@ -1755,54 +1597,19 @@ export class SanGuoGame {
   }
 
   private canPlayerRespond(playerId: string, kind: ResponseKind): boolean {
-    const policy = this.responsePolicyByPlayer.get(playerId);
-    if (!policy) {
-      return true;
-    }
-    const allowed = policy[kind];
-    return allowed !== false;
+    return canPlayerRespondImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
   private async consumeSelectedResponse(player: Player, kind: ResponseKind, optionId: string, logs: string[]): Promise<boolean> {
-    let cardId = optionId;
-    if (optionId.startsWith("qingguo:") || optionId.startsWith("wusheng:") || optionId.startsWith("longdan:")) {
-      cardId = optionId.slice(optionId.indexOf(":") + 1);
-    }
-    const handSourceId = `hand:${cardId}`;
-    if (this.peekUsableCard(player, handSourceId)) {
-      return await this.consumeResponseCard(player, kind, handSourceId, logs);
-    }
-    const treasureSourceId = `treasure:${cardId}`;
-    if (this.peekUsableCard(player, treasureSourceId)) {
-      return await this.consumeResponseCard(player, kind, treasureSourceId, logs);
-    }
-    return false;
+    return consumeSelectedResponseImpl(this as unknown as ResponsePipelineContext, player, kind, optionId, logs);
   }
 
   private async consumePeachResponse(player: Player, dyingPlayerId: string, logs: string[]): Promise<boolean> {
-    const targetedDecisions = this.peachDecisions.get(dyingPlayerId);
-    if (targetedDecisions?.has(player.id)) {
-      const optionId = targetedDecisions.get(player.id);
-      if (optionId === null || optionId === undefined) return false;
-      return await this.consumeSelectedResponse(player, "peach", optionId, logs);
-    }
-    if (!this.canPlayerRespond(player.id, "peach")) return false;
-    return this.requestCardResponse(player, "peach", { cardName: CardType.Peach, actorId: dyingPlayerId }, logs);
+    return consumePeachResponseImpl(this as unknown as ResponsePipelineContext, player, dyingPlayerId, logs);
   }
 
   private takePlayerResponseSelection(playerId: string, kind: ResponseKind): string | undefined {
-    const selected = this.responseSelectionByPlayer.get(playerId);
-    if (!selected) {
-      return undefined;
-    }
-    const optionId = selected[kind];
-    delete selected[kind];
-    if (Object.keys(selected).length === 0) {
-      this.responseSelectionByPlayer.delete(playerId);
-    } else {
-      this.responseSelectionByPlayer.set(playerId, selected);
-    }
-    return optionId;
+    return takePlayerResponseSelectionImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
   setOptionalEffectDecision(playerId: string, effect: SkillName | CardType, enabled: boolean | null): void {
@@ -1812,73 +1619,19 @@ export class SanGuoGame {
   }
 
   getPlayerResponseOptions(playerId: string, kind: ResponseKind): ResponseOption[] {
-    const player = this.players.find((item) => item.id === playerId);
-    if (!player || !player.alive) {
-      return [];
-    }
-    if (kind === "negate" || kind === "peach") {
-      const cardType = kind === "negate" ? CardType.Negate : CardType.Peach;
-      return player.hand
-        .filter((card) => card.type === cardType)
-        .map((card) => ({ id: card.id, kind, label: `打出${cardType}` }));
-    }
-    if (kind === "dodge") {
-      const direct = player.hand
-        .filter((card) => card.type === CardType.Dodge)
-        .map((card) => ({ id: card.id, kind, label: `打出${CardType.Dodge}` }));
-      const qingGuo = this.hasSkill(player, SkillName.QingGuo)
-        ? player.hand
-            .filter((card) => card.color === "black" && card.type !== CardType.Dodge)
-            .map((card) => ({ id: `qingguo:${card.id}`, kind, label: `${SkillName.QingGuo}当${CardType.Dodge}` }))
-        : [];
-      const longDan = this.hasSkill(player, SkillName.LongDan)
-        ? player.hand
-            .filter((card) => this.isSlashCard(card.type))
-            .map((card) => ({ id: `longdan:${card.id}`, kind, label: `${SkillName.LongDan}当${CardType.Dodge}` }))
-        : [];
-      return [...direct, ...qingGuo, ...longDan];
-    }
-    const direct = player.hand
-      .filter((card) => this.isSlashCard(card.type))
-      .map((card) => ({ id: card.id, kind, label: `打出${card.type}` }));
-    const wuSheng = this.hasSkill(player, SkillName.WuSheng)
-      ? player.hand
-          .filter((card) => card.color === "red" && !this.isSlashCard(card.type))
-          .map((card) => ({ id: `wusheng:${card.id}`, kind, label: `${SkillName.WuSheng}当${CardType.Slash}` }))
-      : [];
-    const longDan = this.hasSkill(player, SkillName.LongDan)
-      ? player.hand
-          .filter((card) => card.type === CardType.Dodge)
-          .map((card) => ({ id: `longdan:${card.id}`, kind, label: `${SkillName.LongDan}当${CardType.Slash}` }))
-      : [];
-    return [...direct, ...wuSheng, ...longDan];
+    return getPlayerResponseOptionsImpl(this as unknown as ResponsePipelineContext, playerId, kind);
   }
 
   setPlayerResponseSelection(playerId: string, kind: ResponseKind, optionId: string | null): void {
-    if (optionId === null) {
-      const existed = this.responseSelectionByPlayer.get(playerId);
-      if (!existed) {
-        return;
-      }
-      delete existed[kind];
-      if (Object.keys(existed).length === 0) {
-        this.responseSelectionByPlayer.delete(playerId);
-      }
-      return;
-    }
-    const existed = this.responseSelectionByPlayer.get(playerId) ?? {};
-    existed[kind] = optionId;
-    this.responseSelectionByPlayer.set(playerId, existed);
+    return setPlayerResponseSelectionImpl(this as unknown as ResponsePipelineContext, playerId, kind, optionId);
   }
 
   setPeachDecision(dyingPlayerId: string, rescuerId: string, optionId: string | null): void {
-    const decisions = this.peachDecisions.get(dyingPlayerId) ?? new Map<string, string | null>();
-    decisions.set(rescuerId, optionId);
-    this.peachDecisions.set(dyingPlayerId, decisions);
+    return setPeachDecisionImpl(this as unknown as ResponsePipelineContext, dyingPlayerId, rescuerId, optionId);
   }
 
   clearPeachDecisions(): void {
-    this.peachDecisions.clear();
+    return clearPeachDecisionsImpl(this as unknown as ResponsePipelineContext);
   }
 
   setDeferDyingResolution(enabled: boolean): void {

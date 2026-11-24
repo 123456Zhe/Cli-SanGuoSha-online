@@ -154,6 +154,23 @@ import {
 } from "./card-zones.js";
 import type { CardZonesContext } from "./card-zones.js";
 
+import {
+  buildAnyDiscardSources as buildAnyDiscardSourcesImpl,
+  takeEquipSlot as takeEquipSlotImpl,
+  requestFlexibleDiscard as requestFlexibleDiscardImpl,
+  buildUsableSources as buildUsableSourcesImpl,
+  peekUsableCard as peekUsableCardImpl,
+  removeUsableCardBySourceId as removeUsableCardBySourceIdImpl,
+  buildDodgeSources as buildDodgeSourcesImpl,
+  buildSlashSources as buildSlashSourcesImpl,
+  appendConversionSources as appendConversionSourcesImpl,
+  buildNegateSources as buildNegateSourcesImpl,
+  buildPeachSources as buildPeachSourcesImpl,
+  buildResponseSources as buildResponseSourcesImpl,
+  requestDiscardSelection as requestDiscardSelectionImpl,
+} from "./card-sources.js";
+import type { CardSourcesContext } from "./card-sources.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -1560,286 +1577,52 @@ export class SanGuoGame {
     return { choice: "pass" };
   }
 
-  /**
-   * "弃置任意张牌"（制衡等）的可选范围：手牌 + 木牛流马内存牌 + 装备区。
-   * 装备区用 `equip:<槽位>` 作为 sourceId，客户端只回传 sourceId，因此不需要协议变更。
-   */
   private buildAnyDiscardSources(player: Player): Array<CardSource & { card: Card }> {
-    const sources = [...this.buildUsableSources(player)];
-    const equipSource = (slot: string, label: string, type: CardType | null): void => {
-      if (type === null) {
-        return;
-      }
-      sources.push({
-        sourceId: `equip:${slot}`,
-        origin: "equip",
-        card: createCardImpl(this as unknown as ResolveContext, type, `equip-${slot}-${this.turn}`),
-        label: `${label} ${type}`,
-      });
-    };
-    equipSource("weapon", "武器", player.weapon);
-    equipSource("armor", "防具", player.armor);
-    equipSource("defenseHorse", "+1马", player.defenseHorse);
-    equipSource("attackHorse", "-1马", player.attackHorse);
-    equipSource("treasure", "宝物", player.treasure);
-    return sources;
+    return buildAnyDiscardSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private takeEquipSlot(player: Player, slot: string): EquipCardType | null {
-    if (slot === "weapon" && player.weapon !== null) {
-      const type = player.weapon;
-      player.weapon = null;
-      return type;
-    }
-    if (slot === "armor" && player.armor !== null) {
-      const type = player.armor;
-      player.armor = null;
-      return type;
-    }
-    if (slot === "defenseHorse" && player.defenseHorse !== null) {
-      const type = player.defenseHorse;
-      player.defenseHorse = null;
-      return type;
-    }
-    if (slot === "attackHorse" && player.attackHorse !== null) {
-      const type = player.attackHorse;
-      player.attackHorse = null;
-      return type;
-    }
-    if (slot === "treasure" && player.treasure !== null) {
-      const type = player.treasure;
-      player.treasure = null;
-      return type;
-    }
-    return null;
+    return takeEquipSlotImpl(this as unknown as CardSourcesContext, player, slot);
   }
 
-  /**
-   * 逐张询问"要弃哪张"，直到玩家放弃或已无牌可弃；返回实际弃置张数。
-   * 复用现有 choose-discard 请求（allowPass=true），CLI / WebUI / Go 客户端均已支持放弃选项。
-   */
   private async requestFlexibleDiscard(player: Player, reason: string, logs: string[]): Promise<number> {
-    const maxCount = this.buildAnyDiscardSources(player).length;
-    let discarded = 0;
-    while (discarded < maxCount) {
-      const sources = this.buildAnyDiscardSources(player);
-      if (sources.length === 0) {
-        break;
-      }
-      const decision = await this.decide({
-        kind: "choose-discard",
-        requestId: this.nextInteractionId(),
-        playerId: player.id,
-        reason: `${reason}（已选 ${discarded} 张，可放弃）`,
-        sources,
-        count: 1,
-        allowPass: true,
-      });
-      if (decision.choice !== "card") {
-        break;
-      }
-      const sourceId = decision.sourceId;
-      if (sourceId.startsWith("equip:")) {
-        const removed = this.takeEquipSlot(player, sourceId.slice("equip:".length));
-        if (removed === null) {
-          break;
-        }
-        this.discardPile.push(createCardImpl(this as unknown as ResolveContext, removed, `discard-${this.turn}`));
-        if (removed === CardType.WoodenOx) {
-          await discardWoodenOxStoredCardsImpl(this as unknown as ResolveContext, player, logs);
-        }
-        logs.push(`${player.name} 弃置装备 ${removed}`);
-        // 弃置装备同样属于"失去装备"，枭姬/白银狮子等技能应正常触发。
-        logs.push(...(await onLoseEquipImpl(this as unknown as ResolveContext, player, removed)));
-        discarded += 1;
-        continue;
-      }
-      const card = await this.removeUsableCardBySourceId(player, sourceId);
-      if (!card) {
-        break;
-      }
-      logs.push(`${player.name} 弃置 ${card.type}`);
-      await this.discardCards([card], player, "弃置", logs);
-      discarded += 1;
-    }
-    return discarded;
+    return requestFlexibleDiscardImpl(this as unknown as CardSourcesContext, player, reason, logs);
   }
 
   private buildUsableSources(player: Player): Array<CardSource & { card: Card }> {
-    const sources: Array<CardSource & { card: Card }> = [];
-    for (const card of player.hand) {
-      sources.push({ sourceId: `hand:${card.id}`, origin: "hand", card, label: describeCard(card) });
-    }
-    for (const card of player.treasureCards) {
-      sources.push({ sourceId: `treasure:${card.id}`, origin: "treasure", card, label: `${describeCard(card)}（木牛流马）` });
-    }
-    return sources;
+    return buildUsableSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
-  private peekUsableCard(player: Player, sourceId: string): (CardSource & { card: Card }) | undefined {
-    const separator = sourceId.indexOf(":");
-    if (separator < 0) {
-      return undefined;
-    }
-    const origin = sourceId.slice(0, separator);
-    const cardId = sourceId.slice(separator + 1);
-    const pool = origin === "treasure" ? player.treasureCards : origin === "hand" ? player.hand : null;
-    if (!pool) {
-      return undefined;
-    }
-    const card = pool.find((item) => item.id === cardId);
-    if (!card) {
-      return undefined;
-    }
-    return { sourceId, origin: origin as CardSource["origin"], card, label: card.type };
+  private peekUsableCard(player: Player, sourceId: string): (CardSource & { card: Card })| undefined {
+    return peekUsableCardImpl(this as unknown as CardSourcesContext, player, sourceId);
   }
 
   private async removeUsableCardBySourceId(player: Player, sourceId: string): Promise<Card | undefined> {
-    const separator = sourceId.indexOf(":");
-    if (separator < 0) {
-      return undefined;
-    }
-    const origin = sourceId.slice(0, separator);
-    const cardId = sourceId.slice(separator + 1);
-    if (origin === "treasure") {
-      const index = player.treasureCards.findIndex((item) => item.id === cardId);
-      if (index < 0) {
-        return undefined;
-      }
-      return player.treasureCards.splice(index, 1)[0];
-    }
-    if (origin === "hand") {
-      const index = player.hand.findIndex((item) => item.id === cardId);
-      if (index < 0) {
-        return undefined;
-      }
-      return this.removeHandCardAt(player, index);
-    }
-    return undefined;
+    return removeUsableCardBySourceIdImpl(this as unknown as CardSourcesContext, player, sourceId);
   }
 
   private buildDodgeSources(player: Player): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (source.card.type === CardType.Dodge) {
-        sources.push({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (this.hasSkill(player, SkillName.QingGuo)) {
-      for (const source of all) {
-        if (source.card.color === "black" && source.card.type !== CardType.Dodge) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.QingGuo}当${CardType.Dodge}` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.LongDan)) {
-      for (const source of all) {
-        if (this.isSlashCard(source.card.type)) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.LongDan}当${CardType.Dodge}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "dodge", sources);
-    return sources;
+    return buildDodgeSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private buildSlashSources(player: Player): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (this.isSlashCard(source.card.type)) {
-        sources.push({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (this.hasSkill(player, SkillName.WuSheng)) {
-      for (const source of all) {
-        if (source.card.color === "red" && !this.isSlashCard(source.card.type)) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.WuSheng}当${CardType.Slash}` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.LongDan)) {
-      for (const source of all) {
-        if (source.card.type === CardType.Dodge) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.LongDan}当${CardType.Slash}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "slash", sources);
-    return sources;
+    return buildSlashSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
-  /**
-   * 外部武将包 `conversion.asResponse`（Phase 7）的响应来源：把满足 `from` 的牌标成"可当 `kind` 打出"。
-   * `viaSkill`/`asType` 是给 `consumeResponseCard` 的凭据——只有带标记的来源才允许"非直接牌类"响应。
-   */
   private appendConversionSources(player: Player, kind: ResponseKind, sources: CardSource[]): void {
-    const conversions = this.responseConversions(player, kind);
-    if (conversions.length === 0) {
-      return;
-    }
-    const direct = responseKindToCardType(kind);
-    const all = this.buildUsableSources(player);
-    for (const { skillId, conversion } of conversions) {
-      const displayName = resolveSkillDescriptor(skillId).displayName ?? skillId;
-      for (const source of all) {
-        if (source.card.type === direct) {
-          continue;
-        }
-        if (!matchesConversionFilter(source.card, conversion.from)) {
-          continue;
-        }
-        sources.push({
-          ...source,
-          label: `${describeCard(source.card)}${displayName}当${conversion.to}`,
-          viaSkill: skillId,
-          asType: conversion.to,
-        });
-      }
-    }
+    return appendConversionSourcesImpl(this as unknown as CardSourcesContext, player, kind, sources);
   }
 
   private buildNegateSources(player: Player): CardSource[] {
-    const sources = this.buildUsableSources(player)
-      .filter((source) => source.card.type === CardType.Negate)
-      .map((source) => ({ ...source, label: `打出${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` }));
-    this.appendConversionSources(player, "negate", sources);
-    return sources;
+    return buildNegateSourcesImpl(this as unknown as CardSourcesContext, player);
   }
 
   private buildPeachSources(player: Player, selfRescue = false): CardSource[] {
-    const all = this.buildUsableSources(player);
-    const sources: CardSource[] = [];
-    for (const source of all) {
-      if (source.card.type === CardType.Peach) {
-        sources.push({ ...source, label: `使用${describeCard(source.card)}${source.origin === "treasure" ? "（木牛流马）" : ""}` });
-      }
-    }
-    if (selfRescue) {
-      // 酒方法Ⅱ：濒死时可将酒当桃对自己使用（仅自救）
-      for (const source of all) {
-        if (source.card.type === CardType.Wine) {
-          sources.push({ ...source, label: `使用${describeCard(source.card)}自救（当${CardType.Peach}）` });
-        }
-      }
-    }
-    if (this.hasSkill(player, SkillName.JiJiu) && player.id !== this.currentPlayer.id) {
-      for (const source of all) {
-        if (source.card.color === "red" && source.card.type !== CardType.Peach) {
-          sources.push({ ...source, label: `${describeCard(source.card)}${SkillName.JiJiu}当${CardType.Peach}` });
-        }
-      }
-    }
-    this.appendConversionSources(player, "peach", sources);
-    return sources;
+    return buildPeachSourcesImpl(this as unknown as CardSourcesContext, player, selfRescue);
   }
 
   private buildResponseSources(player: Player, kind: ResponseKind, selfRescue = false): CardSource[] {
-    if (kind === "dodge") return this.buildDodgeSources(player);
-    if (kind === "slash") return this.buildSlashSources(player);
-    if (kind === "negate") return this.buildNegateSources(player);
-    return this.buildPeachSources(player, selfRescue);
+    return buildResponseSourcesImpl(this as unknown as CardSourcesContext, player, kind, selfRescue);
   }
 
   private async consumeResponseCard(player: Player, kind: ResponseKind, sourceId: string, logs: string[]): Promise<boolean> {
@@ -1968,31 +1751,7 @@ export class SanGuoGame {
   }
 
   private async requestDiscardSelection(player: Player, count: number, reason: string, providedSources?: CardSource[]): Promise<Card[]> {
-    const picked: Card[] = [];
-    for (let i = 0; i < count; i += 1) {
-      const sources = providedSources ?? this.buildUsableSources(player);
-      if (sources.length === 0) {
-        break;
-      }
-      const decision = await this.decide({
-        kind: "choose-discard",
-        requestId: this.nextInteractionId(),
-        playerId: player.id,
-        reason: count > 1 ? `${reason}（第 ${i + 1}/${count} 张）` : reason,
-        sources,
-        count: 1,
-        allowPass: false,
-      });
-      if (decision.choice !== "card") {
-        break;
-      }
-      const card = await this.removeUsableCardBySourceId(player, decision.sourceId);
-      if (!card) {
-        break;
-      }
-      picked.push(card);
-    }
-    return picked;
+    return requestDiscardSelectionImpl(this as unknown as CardSourcesContext, player, count, reason, providedSources);
   }
 
   private canPlayerRespond(playerId: string, kind: ResponseKind): boolean {

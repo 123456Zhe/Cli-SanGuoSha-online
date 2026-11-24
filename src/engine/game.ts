@@ -130,6 +130,30 @@ import {
 } from "./turn-flow.js";
 import type { TurnFlowContext } from "./turn-flow.js";
 
+import {
+  drawCards as drawCardsImpl,
+  discardCards as discardCardsImpl,
+  drawCard as drawCardImpl,
+  drawJudgmentCard as drawJudgmentCardImpl,
+  discardFromPlayerHand as discardFromPlayerHandImpl,
+  removeHandCardAt as removeHandCardAtImpl,
+  checkLianYing as checkLianYingImpl,
+  takeRandomHandCard as takeRandomHandCardImpl,
+  drawTopCards as drawTopCardsImpl,
+  placeCardsOnTop as placeCardsOnTopImpl,
+  placeCardsOnBottom as placeCardsOnBottomImpl,
+  emitSkillTrigger as emitSkillTriggerImpl,
+  applyDamage as applyDamageImpl,
+  isKongChengProtected as isKongChengProtectedImpl,
+  damageCreditMap as damageCreditMapImpl,
+  removeCardFromAllZones as removeCardFromAllZonesImpl,
+  oxStoredTurnMap as oxStoredTurnMapImpl,
+  canTakeStoredCard as canTakeStoredCardImpl,
+  noteDamageSource as noteDamageSourceImpl,
+  takeDamageSource as takeDamageSourceImpl,
+} from "./card-zones.js";
+import type { CardZonesContext } from "./card-zones.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -2238,113 +2262,19 @@ export class SanGuoGame {
   }
 
   private drawCards(playerId: string, count: number): number {
-    const player = this.mustGetPlayer(playerId);
-    let drawn = 0;
-    for (let i = 0; i < count; i += 1) {
-      const card = this.drawCard();
-      if (!card) {
-        break;
-      }
-      player.hand.push(card);
-      drawn += 1;
-    }
-    return drawn;
+    return drawCardsImpl(this as unknown as CardZonesContext, playerId, count);
   }
 
-  /**
-   * Phase 10：牌因"弃置/判定"进入弃牌堆的中央入口——逐张置入并发出 `card_discarded`
-   * 触发点（`actor` 为牌的原主，`reason` 为"弃置"/"判定"），钩子可在此时把牌从弃牌堆取走
-   * （如落英）。调用方负责先把牌从原区域移出（`removeHandCardAt` 等）；本方法只负责入堆+发触发点。
-   * "使用/打出"的牌入堆不要走这里（直接 `discardPile.push`），否则落英会误触发；
-   * 装备重建牌、拼点牌、洛神红牌同样不走这里。
-   */
-  private async discardCards(
-    cards: Card[],
-    actor: Player,
-    reason: "弃置" | "判定",
-    logs: string[],
-  ): Promise<void> {
-    for (const card of cards) {
-      this.discardPile.push(card);
-      await this.emitSkillTrigger("card_discarded", { actor, card, reason }, logs);
-    }
+  private async discardCards(cards: Card[], actor: Player, reason: "弃置" | "判定", logs: string[]): Promise<void> {
+    return discardCardsImpl(this as unknown as CardZonesContext, cards, actor, reason, logs);
   }
 
   private drawCard(): Card | null {
-    if (this.deck.length === 0) {
-      if (this.discardPile.length === 0) {
-        return null;
-      }
-      this.deck = shuffle(this.discardPile, this.rng);
-      this.discardPile = [];
-    }
-    const card = this.deck.shift();
-    return card ?? null;
+    return drawCardImpl(this as unknown as CardZonesContext);
   }
 
   private async drawJudgmentCard(reason: string, logs: string[], owner?: Player): Promise<Card | null> {
-    let card = this.drawCard();
-    if (!card) {
-      logs.push(`${reason}无法判定：牌堆为空`);
-      return null;
-    }
-    const suitNames = { heart: "红桃", diamond: "方片", club: "梅花", spade: "黑桃", none: "无花色" } as const;
-    logs.push(`${reason}判定牌：${suitNames[card.suit]}${card.rank} ${card.type}`);
-    // Phase 10：判定牌入弃牌堆即发 card_discarded（actor 为判定归属者；落英等技能可此时获得之）。
-    // 注意：此时判定尚未结算（改判/天妒在后），落英先于天妒获得是既定顺序。
-    await this.discardCards([card], owner ?? this.currentPlayer, "判定", logs);
-    // 拦截点 judgment：外部包可替换判定牌实现"改判"。钩子自己负责把替换牌从原区域移除，
-    // 引擎负责把替换牌置入弃牌堆并接管后续（与内置鬼才的处理方式一致）。
-    const judgmentPayload: SkillEventPayload = { ...(owner ? { actor: owner } : {}), reason, card, judgmentCard: card };
-    await this.emitSkillTrigger("judgment", judgmentPayload, logs);
-    if (judgmentPayload.judgmentCard && judgmentPayload.judgmentCard.id !== card.id) {
-      const replacement = judgmentPayload.judgmentCard;
-      // 兜底：替换牌若还留在其他区域（外部钩子漏移除），先清掉再入弃牌堆，保证单区唯一
-      const cleaned = this.removeCardFromAllZones(replacement.id);
-      logs.push(`${reason}判定牌被替换：${describeCard(card)} → ${describeCard(replacement)}`);
-      // 替换牌成为新的判定牌（原主未知，按判定归属者计 actor）。
-      await this.discardCards([replacement], owner ?? this.currentPlayer, "判定", logs);
-      if (cleaned > 0) {
-        logs.push(`${reason}改判替换牌残留在其他区域，已清理 ${cleaned} 处`);
-      }
-      card = replacement;
-    }
-    const guiCaiPlayer = this.players.find((item) => item.alive && this.hasSkill(item, SkillName.GuiCai));
-    if (guiCaiPlayer) {
-      const sources = this.buildUsableSources(guiCaiPlayer);
-      if (sources.length > 0) {
-        const decision = await this.decide({
-          kind: "choose-discard",
-          requestId: this.nextInteractionId(),
-          playerId: guiCaiPlayer.id,
-          reason: `${reason}：${guiCaiPlayer.name} 是否发动${SkillName.GuiCai}，用手牌替换判定牌？`,
-          sources,
-          count: 1,
-          allowPass: true,
-          passLabel: `不发动${SkillName.GuiCai}`,
-        });
-        if (decision.choice === "card") {
-          const replacement = await this.removeUsableCardBySourceId(guiCaiPlayer, decision.sourceId);
-          if (replacement) {
-            logs.push(`${guiCaiPlayer.name} 发动${SkillName.GuiCai}，以 ${describeCard(replacement)} 替换判定牌 ${describeCard(card)}`);
-            // 替换牌出自鬼才持有者的手牌，actor 计其原主。
-            await this.discardCards([replacement], guiCaiPlayer, "判定", logs);
-            card = replacement;
-          }
-        }
-      }
-    }
-    if (owner && this.hasSkill(owner, SkillName.TianDu) && await this.shouldActivateOptionalEffect(owner, SkillName.TianDu)) {
-      const index = this.discardPile.findIndex((item) => item.id === card.id);
-      if (index >= 0) {
-        const [obtained] = this.discardPile.splice(index, 1);
-        if (obtained) {
-          owner.hand.push(obtained);
-          logs.push(`${owner.name} 的${SkillName.TianDu}生效，获得判定牌`);
-        }
-      }
-    }
-    return card;
+    return drawJudgmentCardImpl(this as unknown as CardZonesContext, reason, logs, owner);
   }
 
   private moveToNextPlayer(): void {
@@ -2376,157 +2306,46 @@ export class SanGuoGame {
   }
 
   private async discardFromPlayerHand(player: Player, count: number, logs: string[]): Promise<number> {
-    let discarded = 0;
-    const discardLogs: string[] = [];
-    for (let i = 0; i < count && player.hand.length > 0; i += 1) {
-      const index = this.randomIndex(player.hand.length);
-      const removed = await this.removeHandCardAt(player, index);
-      if (removed) {
-        await this.discardCards([removed], player, "弃置", discardLogs);
-        discarded += 1;
-      }
-    }
-    if (discarded > 0) {
-      logs.push(`${player.name} 弃置了 ${discarded} 张手牌`);
-      logs.push(...discardLogs);
-    }
-    return discarded;
+    return discardFromPlayerHandImpl(this as unknown as CardZonesContext, player, count, logs);
   }
 
   // 集中式手牌移除：所有“失去手牌”的路径统一走这里，便于触发连营。
   private async removeHandCardAt(player: Player, index: number, logs?: string[]): Promise<Card | undefined> {
-    const removed = player.hand.splice(index, 1)[0];
-    if (removed) {
-      // 拦截点 hand_card_lost：只通知，不改变移除结果。
-      // 注意：调用方未传 logs 时，钩子产生的日志会被丢弃（不进入对局日志）。
-      await this.emitSkillTrigger("hand_card_lost", { actor: player, card: removed }, logs ?? []);
-      await this.checkLianYing(player, logs);
-    }
-    return removed;
+    return removeHandCardAtImpl(this as unknown as CardZonesContext, player, index, logs);
   }
 
   // 连营：失去最后一张手牌时可摸一张牌。
   private async checkLianYing(player: Player, logs?: string[]): Promise<void> {
-    if (this.winner !== null || !player.alive || player.hand.length > 0) {
-      return;
-    }
-    if (!this.hasSkill(player, SkillName.LianYing)) {
-      return;
-    }
-    if (!await this.shouldActivateOptionalEffect(player, SkillName.LianYing)) {
-      return;
-    }
-    const drawn = this.drawCards(player.id, 1);
-    if (drawn > 0 && logs) {
-      logs.push(`${player.name} 的${SkillName.LianYing}生效，失去最后手牌后摸了 ${drawn} 张牌`);
-    }
+    return checkLianYingImpl(this as unknown as CardZonesContext, player, logs);
   }
 
   // 突袭/其他技能用：从目标获得 1 张随机手牌（不取装备）。
   private async takeRandomHandCard(player: Player, receiver: Player): Promise<Card | undefined> {
-    if (player.hand.length === 0) {
-      return undefined;
-    }
-    const index = this.randomIndex(player.hand.length);
-    const removed = await this.removeHandCardAt(player, index);
-    if (removed) {
-      receiver.hand.push(removed);
-    }
-    return removed;
+    return takeRandomHandCardImpl(this as unknown as CardZonesContext, player, receiver);
   }
 
   private drawTopCards(count: number): Card[] {
-    const drawn: Card[] = [];
-    for (let i = 0; i < count; i += 1) {
-      const card = this.drawCard();
-      if (!card) {
-        break;
-      }
-      drawn.push(card);
-    }
-    return drawn;
+    return drawTopCardsImpl(this as unknown as CardZonesContext, count);
   }
 
   private placeCardsOnTop(cards: Card[]): void {
-    for (let i = cards.length - 1; i >= 0; i -= 1) {
-      const card = cards[i];
-      if (card) {
-        this.deck.unshift(card);
-      }
-    }
+    return placeCardsOnTopImpl(this as unknown as CardZonesContext, cards);
   }
 
   private placeCardsOnBottom(cards: Card[]): void {
-    this.deck.push(...cards);
+    return placeCardsOnBottomImpl(this as unknown as CardZonesContext, cards);
   }
 
   private async emitSkillTrigger(trigger: SkillTrigger, payload: SkillEventPayload, logs: string[]): Promise<void> {
-    const hooks = this.skillHooks[trigger];
-    for (const hook of hooks) {
-      await hook(payload, logs);
-    }
+    return emitSkillTriggerImpl(this as unknown as CardZonesContext, trigger, payload, logs);
   }
 
-  private async applyDamage(
-    source: Player | null,
-    target: Player,
-    amount: number,
-    reason: string,
-    logs: string[],
-    damageCard?: Card,
-    damageKind?: DamageKind | null,
-    isChainSpread = false,
-  ): Promise<void> {
-    const payload: SkillEventPayload = {
-      source,
-      target,
-      damage: amount,
-      reason,
-      ...(damageCard ? { card: damageCard } : {}),
-    };
-    await this.emitSkillTrigger("before_damage", payload, logs);
-    let finalDamage = Math.max(0, payload.damage ?? 0);
-    if (target.armor === CardType.SilverLion && finalDamage > 1) {
-      finalDamage = 1;
-      logs.push(`${target.name} 的白银狮子生效，本次伤害改为 1`);
-    }
-    if (finalDamage === 0) {
-      logs.push(`${target.name} 未受到伤害`);
-      return;
-    }
-    target.hp -= finalDamage;
-    // 记录击杀归属：伤害来源即"凶手"，无来源伤害（闪电、苦肉等 source === target）记 null。
-    this.noteDamageSource(source && source.id !== target.id ? source.id : null, target.id);
-    logs.push(`${target.name} 受到 ${finalDamage} 点伤害，当前体力 ${Math.max(target.hp, 0)}`);
-    // 铁索连环传导：处于连环状态的角色受到属性伤害时，其他连环角色受到等量同属性伤害（单波次，不递归）。
-    // 属性伤害结算完成后，受到影响的所有角色（含被传导者）立即重置武将牌、脱离连环状态。
-    if (!isChainSpread && target.chained) {
-      const kind = damageKind ?? attributeDamageKind(damageCard?.type);
-      if (kind) {
-        const kindLabel = kind === "fire" ? "火焰" : "雷电";
-        target.chained = false;
-        logs.push(`${target.name} 受到${kindLabel}属性伤害，铁索连环状态重置`);
-        const others = this.players.filter((p) => p.alive && p.chained && p.id !== target.id);
-        for (const other of others) {
-          other.chained = false;
-          logs.push(`铁索连环传导：${other.name} 受到 ${finalDamage} 点${kindLabel}伤害，铁索连环状态重置`);
-          await this.applyDamage(source, other, finalDamage, "铁索连环", logs, damageCard, kind, true);
-        }
-      }
-    }
-    // after_damage 钩子看到的是实际造成的伤害（白银狮子等压过之后的值），而非原始数值
-    payload.damage = finalDamage;
-    await this.emitSkillTrigger("after_damage", payload, logs);
+  private async applyDamage(source: Player | null, target: Player, amount: number, reason: string, logs: string[], damageCard?: Card, damageKind?: DamageKind | null, isChainSpread = false): Promise<void> {
+    return applyDamageImpl(this as unknown as CardZonesContext, source, target, amount, reason, logs, damageCard, damageKind, isChainSpread);
   }
 
   private isKongChengProtected(target: Player, cardType: CardType): boolean {
-    if (this.isSlashCard(cardType)) {
-      return isImmuneTo(target, "slash");
-    }
-    if (cardType === CardType.Duel) {
-      return isImmuneTo(target, "duel");
-    }
-    return false;
+    return isKongChengProtectedImpl(this as unknown as CardZonesContext, target, cardType);
   }
 
   // ===== 以下为从本类拆出到独立模块的方法的薄封装（行为不变） =====
@@ -2791,36 +2610,15 @@ export class SanGuoGame {
   }
 
   private damageCreditMap(): Map<string, string | null> {
-    this.damageCredit ??= new Map<string, string | null>();
-    return this.damageCredit;
+    return damageCreditMapImpl(this as unknown as CardZonesContext);
   }
 
-  /**
-   * 把一张牌从所有已知区域移除（牌堆/弃牌堆/所有人手牌/木牛流马存牌），返回移除数量。
-   * 外部改判钩子漏移除时的兜底：保证同一张牌只存在于一个区域。
-   */
   private removeCardFromAllZones(cardId: string): number {
-    let removed = 0;
-    const sweep = (pool: Card[]): void => {
-      for (let index = pool.length - 1; index >= 0; index -= 1) {
-        if (pool[index]?.id === cardId) {
-          pool.splice(index, 1);
-          removed += 1;
-        }
-      }
-    };
-    sweep(this.deck);
-    sweep(this.discardPile);
-    for (const player of this.players) {
-      sweep(player.hand);
-      sweep(player.treasureCards);
-    }
-    return removed;
+    return removeCardFromAllZonesImpl(this as unknown as CardZonesContext, cardId);
   }
 
   private oxStoredTurnMap(): Map<string, number> {
-    this.woodenOxStoredTurn ??= new Map<string, number>();
-    return this.woodenOxStoredTurn;
+    return oxStoredTurnMapImpl(this as unknown as CardZonesContext);
   }
 
   private aiTurnSeenStatesSet(): Set<string> {
@@ -2828,9 +2626,8 @@ export class SanGuoGame {
     return this.aiTurnSeenStates;
   }
 
-  /** 木牛流马取出资格：本回合刚置入的牌本回合不能取出（防置入/取出空转）。 */
   private canTakeStoredCard(card: Card): boolean {
-    return (this.oxStoredTurnMap().get(card.id) ?? -1) < this.turn;
+    return canTakeStoredCardImpl(this as unknown as CardZonesContext, card);
   }
 
   private buildAiTurnProgressKey(): string {
@@ -2879,14 +2676,11 @@ export class SanGuoGame {
   }
 
   private noteDamageSource(sourceId: string | null, targetId: string): void {
-    this.damageCreditMap().set(targetId, sourceId);
+    return noteDamageSourceImpl(this as unknown as CardZonesContext, sourceId, targetId);
   }
 
   private takeDamageSource(targetId: string): string | null {
-    const map = this.damageCreditMap();
-    const sourceId = map.get(targetId) ?? null;
-    map.delete(targetId);
-    return sourceId;
+    return takeDamageSourceImpl(this as unknown as CardZonesContext, targetId);
   }
 
   private resolveWinner(): string[] {

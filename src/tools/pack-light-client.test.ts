@@ -63,11 +63,24 @@ void test("resolveTargets 支持 all、单个平台与逗号分隔列表，并�
   assert.throws(() => resolveTargets(","), /--targets 为空/);
 });
 
-void test("crc32 与 node:zlib 的实现一致", () => {
+void test("crc32 命中标准测试向量，且与 node:zlib 的实现一致", () => {
+  // 经典 CRC-32 校验值（IEEE 802.3），防止实现漂移后自测仍然"自洽"。
+  assert.equal(crc32(Buffer.from("123456789")), 0xcbf43926);
+  assert.equal(crc32(Buffer.alloc(0)), 0);
   const samples = [Buffer.alloc(0), Buffer.from("hello"), Buffer.from("三国杀"), Buffer.from([0, 255, 128, 7])];
   for (const sample of samples) {
     assert.equal(crc32(sample), zlibCrc32(sample), `CRC32 不一致：${sample.toString("hex")}`);
   }
+});
+
+void test("createZip 对同一输入字节一致（发布包可重复构建）", () => {
+  const entries = [
+    { name: "a.exe", data: Buffer.from("MZ binary"), mode: 0o755 },
+    { name: "start-client.bat", data: Buffer.from("pause\r\n"), mode: 0o644 },
+  ];
+  assert.deepEqual(createZip(entries), createZip(entries));
+  assert.throws(() => createZip([...entries, entries[0]!]), /ZIP 条目重复/);
+  assert.throws(() => createZip([{ name: "a\\b.exe", data: Buffer.alloc(0) }]), /ZIP 条目名非法/);
 });
 
 /** 直接从 zlib 取 CRC-32（Node 20.15+ / 22.2+ 自带 `zlib.crc32`）。 */

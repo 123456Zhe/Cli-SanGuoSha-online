@@ -32,7 +32,7 @@
 | `ctx.hasSkill(me, "刘禅/享乐")` | 归属判断，外部技能 id 已命名空间化为 `刘禅/享乐` |
 | `ctx.buildUsableSources(user)` | 取使用者的可选来源（手牌 + 木牛流马内存牌，与引擎弃牌/响应交互同一套编号） |
 | `ctx.requestDiscardSelection(user, 1, reason, sources)` | 要求使用者弃 1 张（候选已过滤成基本牌）；返回**实际弃置的牌** |
-| `ctx.discardPile.push(card)` | **隐式约定**：`requestDiscardSelection` 只把牌移出原区域，**不会自动进弃牌堆**，必须自己 push |
+| `ctx.discardCards([card], user, "弃置", logs)` | **隐式约定**：`requestDiscardSelection` 只把牌移出原区域，**不会自动进弃牌堆**，必须自己走 `discardCards`（逐张发 `card_discarded` 触发点，供落英等技能监听；**不要直接 `ctx.discardPile.push`**） |
 
 ### 触发条件与分支（实现口径）
 
@@ -40,7 +40,7 @@
 2. **自己对自己不生效**：`me.id === user.id` 时直接返回（不询问、不取消）；
 3. 使用者没有**基本牌**可弃（`杀/火杀/雷杀/闪/桃/酒`，且必须是手牌或木牛流马内有实体牌的来源）→ 直接 `payload.canceled = true`，日志「没有可弃置的基本牌，本次杀无效」；
 4. 有可弃基本牌 → `ctx.requestDiscardSelection` 询问使用者：
-   - 弃了牌 → 自己 push 进弃牌堆，本次杀**继续正常结算**（刘禅仍需出【闪】/结算伤害）；
+   - 弃了牌 → 走 `ctx.discardCards` 置入弃牌堆，本次杀**继续正常结算**（刘禅仍需出【闪】/结算伤害）；
    - 返回空数组（未弃成，例如响应方放弃）→ `payload.canceled = true`，本次杀无效。
 
 ### 锁定技的写法
@@ -57,12 +57,12 @@
 - **候选由使用者选择**：真实对局里是人类/AI 决策（AI 走 `choose-discard` 交互）；无 `DecisionHandler` 的座位由引擎 `autoDecision` 兜底弃第一张。
 - **无 `Math.random`**：本技能不含随机数；若将来加随机，必须用 `ctx.randomIndex(n)` / `ctx.rng()`。
 - **类型导入**：文件顶部 `import type … from "../../../types/generals-pack.js"` 指向仓库根的 `types/generals-pack.d.ts`
-  （本文件位于 `examples/generals/刘禅/`，`../../../` 即仓库根）。`import type` 运行时被完全擦除、`generals:check` 也不做类型检查，
+  （本包位于武将包根目录下一层 `<武将包目录>/刘禅/`，`../../../` 即仓库根）。`import type` 运行时被完全擦除、`generals:check` 也不做类型检查，
   所以它只影响编辑器补全与 `tsc`。
 
 ## 自检
 
 ```bash
-npm run generals:check -- --dir=examples/generals --strict
-npm run generals:check -- --dir=examples/generals --selfplay=3
+npm run generals:check -- --dir=generals --strict
+npm run generals:check -- --dir=generals --selfplay=3
 ```

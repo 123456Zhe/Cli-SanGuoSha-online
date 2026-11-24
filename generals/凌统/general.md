@@ -61,8 +61,8 @@
 ## 自检与"真的会触发"的证据
 
 ```bash
-npm run generals:check -- --dir=examples/generals --strict      # 0 个错误 / 0 个警告
-npm run generals:check -- --dir=examples/generals --selfplay=3  # 违规 0 条
+npm run generals:check -- --dir=generals --strict      # 0 个错误 / 0 个警告
+npm run generals:check -- --dir=generals --selfplay=3  # 违规 0 条
 ```
 
 在 `forceGeneral=凌统`（4 人局、`--selfplay=3`）的无头自对弈里包装 `equip_lost` 钩子统计，
@@ -80,13 +80,17 @@ npm run generals:check -- --dir=examples/generals --selfplay=3  # 违规 0 条
 
 ## 使用
 
-把本目录移到武将包根目录即可（`name` 必须与文件夹名一致，技能 id 的命名空间前缀取文件夹名）：
+把本目录放进任意武将包根目录即可（`name` 必须与文件夹名一致，技能 id 的命名空间前缀取文件夹名）。
+本包在仓库里有两份**逐字节相同**的拷贝：默认目录 `generals/凌统/` 与参考 gallery `examples/generals/凌统/`
+（后者由 `npm run examples:sync` 从前者镜像，改包只改 `generals/`）：
 
 ```bash
-# 直接以 gallery 目录为武将包目录（本包在其中，会与其它示例一起进池）
+# 默认目录就有本包（npm run dev 默认加载 generals/）
+npm run dev
+# 或者把 gallery 副本当作武将包目录（只含参考武将）
 npm run dev -- --generals-dir=examples/generals
-# 或复制到默认目录
-cp -r examples/generals/凌统 generals/凌统 && npm run dev
+# 复制到你自己的武将包目录
+cp -r generals/凌统 <你的武将包目录>/凌统
 ```
 
 联机主机默认**不**加载外部包（外部包等同任意代码执行），需显式开启 `--generals-pool=all`。
@@ -94,6 +98,6 @@ cp -r examples/generals/凌统 generals/凌统 && npm run dev
 ## 说明
 
 - `旋风.skill.ts` 只用 `import type`，类型在运行时被完全擦除，故该相对路径不影响加载；
-  移到最终位置 `examples/generals/凌统/` 后 `../../../types/generals-pack.js` 正好指向仓库根。
+  本包位于武将包根目录下一层（`<武将包目录>/凌统/`），`../../../types/generals-pack.js` 正好指向仓库根。
 - 代码技能只能用 `ctx` 暴露的能力；只读遍历 `ctx.players` / `player.hand` 是允许的，
   禁止直接改引擎数组。

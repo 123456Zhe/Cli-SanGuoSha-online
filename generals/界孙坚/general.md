@@ -21,7 +21,7 @@
 | 归属判定 | `ctx.hasSkill(actor, "界孙坚/英魂")` |
 | 可选询问 | `ctx.shouldActivateOptionalEffect(actor, "界孙坚/英魂")` |
 | 摸牌 | `ctx.drawCards(playerId, n)` |
-| 弃牌 | `ctx.requestDiscardSelection(player, 1, reason)`（返回的牌**不会**自动进弃牌堆，调用方手动 `ctx.discardPile.push`） |
+| 弃牌 | `ctx.requestDiscardSelection(player, 1, reason)`（返回的牌**不会**自动进弃牌堆，调用方手动 `ctx.discardCards` 置入弃牌堆） |
 
 ## 已知限制（引擎无交互式选角/二选一，均已文档化自动口径）
 

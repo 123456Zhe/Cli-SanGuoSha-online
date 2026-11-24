@@ -20,7 +20,7 @@
 | 对每名角色各限一次 | 按目标分别计数，key 为 `强袭:<targetId>`，存在 `ctx.skillCountsThisTurn.get(player.id)` 里（引擎每回合自动重置）；`canUse` 只判断是否还有可指定的目标，`getTargets` 过滤掉本回合已指定过的 |
 | 代价二选一 | 有武器牌时 `ctx.decide({kind: "optional-effect"})` 询问"弃置武器牌 / 失去 1 点体力"；无武器牌时直接失去体力 |
 | 失去体力 | 直接 `player.hp -= 1`（是"失去"非"受到伤害"，不走 `applyDamage`，不触发 before/after_damage 钩子）；1 体力也可发动，发动后先结算自己的濒死/死亡 |
-| 弃置武器牌 | 手牌中的武器牌走 `choose-discard` 选牌（调用方手动 `discardPile.push`）；已装备的武器无 Card 实体，直接置空并向 `discardPile` 补一张合成牌（`{type: 武器名, suit: "none", rank: 0, color: "colorless"}`） |
+| 弃置武器牌 | 手牌中的武器牌走 `choose-discard` 选牌（调用方手动 `ctx.discardCards` 置入弃牌堆）；已装备的武器无 Card 实体，直接置空并向 `discardPile` 补一张合成牌（`{type: 武器名, suit: "none", rank: 0, color: "colorless"}`） |
 | 伤害结算 | `ctx.applyDamage(player, target, 1, "强袭", logs)` → `resolveDeaths()` → `resolveWinner()` → `advanceIfCurrentPlayerDead(logs)` |
 | 对局结束判断 | `resolveWinner()` 返回非空数组即已分出胜负，此时不再对目标造成伤害 |
 

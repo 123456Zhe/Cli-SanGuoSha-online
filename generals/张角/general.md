@@ -103,26 +103,29 @@
 ## 验收
 
 ```bash
-npm run generals:check -- --dir=examples/generals --strict
-# [generals-check] 目录：…/examples/generals
+npm run generals:check -- --dir=generals --strict
+# [generals-check] 目录：…/generals
 # ✔ 张角：群雄 / 技能 2
 #     鬼道[triggered]、雷击[triggered]
 # [generals-check] 1 个包：0 个错误 / 0 个警告（--strict：警告也视为失败）
 
-npm run generals:check -- --dir=examples/generals --selfplay=3
+npm run generals:check -- --dir=generals --selfplay=3
 # [selfplay] 张角：3 局，分出胜负 3 局，违规 0 条
 # [generals-check] 1 个包：0 个错误 / 0 个警告
 ```
 
 ## 使用
 
-```bash
-# 放到最终位置后（examples/generals/张角）：
-npm run dev -- --generals-dir=examples/generals
-npm run generals:check -- --dir=examples/generals --selfplay=3
+本包在仓库里有两份**逐字节相同**的拷贝：默认目录 `generals/张角/` 与参考 gallery `examples/generals/张角/`
+（后者由 `npm run examples:sync` 从前者镜像，改包只改 `generals/`）：
 
-# 或复制进项目根的 generals/ 后 npm run dev 随机抽到张角
-cp -r examples/generals/张角 generals/张角 && npm run dev
+```bash
+# 默认目录就有本包（npm run dev 默认加载 generals/，随机抽将可能抽到张角）
+npm run dev
+npm run generals:check -- --dir=generals --selfplay=3
+
+# 或者把 gallery 副本当作武将包目录（只含参考武将）
+npm run dev -- --generals-dir=examples/generals
 ```
 
 联机主机默认不加载外部包（外部包等同任意代码执行），需显式 `--generals-pool=all`。
@@ -130,7 +133,7 @@ cp -r examples/generals/张角 generals/张角 && npm run dev
 ## 说明
 
 - 两个技能文件都只用 `import type`，类型在运行时被完全擦除；`../../../types/generals-pack.js` 指向仓库根的
-  `types/generals-pack.d.ts`（本文件位于 `examples/generals/张角/`，`../../../` 即仓库根），只影响编辑器补全与 `tsc`。
+  `types/generals-pack.d.ts`（本包位于武将包根目录下一层 `<武将包目录>/张角/`，`../../../` 即仓库根），只影响编辑器补全与 `tsc`。
 - 禁止 `Math.random`：本包没有随机决策（鬼道用交互询问、雷击用确定性排序），因此不涉及 `ctx.randomIndex`。
 - 顺序：`drawJudgmentCard` 里 `judgment` 钩子先发出，**内置「鬼才」的询问在那之后**才执行
   （包先改、内置最后拍板，见 `skill-hooks.ts` 的注释）。所以同一张判定牌上，内置鬼才若发动，会覆盖鬼道的改判结果。

@@ -20,7 +20,7 @@
 |---|---|
 | 技能类型 | 飞军 `kind: "active"` + `requiresTarget: true` + `targetIntent: "enemy"`；兵略 `kind: "passive"`（标记技能，无独立钩子） |
 | 飞军限一次 | `canUse` 查 `ctx.skillUsedThisTurn`，`play` 里 `ctx.markSkillUsed(player.id, "飞军")` |
-| 飞军代价 | `ctx.requestDiscardSelection(player, 1, reason, 手牌来源限定)` 弃一张手牌（内部已移出手牌），调用方手动 `discardPile.push` |
+| 飞军代价 | `ctx.requestDiscardSelection(player, 1, reason, 手牌来源限定)` 弃一张手牌（内部已移出手牌），调用方手动 `ctx.discardCards` 置入弃牌堆 |
 | 飞军目标条件 | 手牌数大于你，或装备区牌数大于你（武器/防具/防御马/进攻马/宝物，非空计 1）；弃置代价只减自己手牌数，故 getTargets 时成立的条件在 play 时依然成立 |
 | 两项都满足 | `ctx.decide({kind: "optional-effect"})` 让玩家二选一（给牌 / 弃装备） |
 | 给牌 | 目标用 `requestDiscardSelection` 选一张手牌（内部已移出），调用方不进弃牌堆、改为 `player.hand.push`（与好施给牌同路） |

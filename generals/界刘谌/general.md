@@ -17,7 +17,7 @@
 | 项 | 用法 |
 |---|---|
 | 技能类型 | `kind: "active"` + `requiresTarget: true` + `targetIntent: "enemy"` |
-| 代价 | 全部手牌（至少一张）：逐张 `ctx.removeUsableCardBySourceId(player, "hand:<id>")`（手牌来源，内部走 `removeHandCardAt`，触发连营等"失去手牌"钩子），调用方手动 `discardPile.push` |
+| 代价 | 全部手牌（至少一张）：逐张 `ctx.removeUsableCardBySourceId(player, "hand:<id>")`（手牌来源，内部走 `removeHandCardAt`，触发连营等"失去手牌"钩子），调用方手动 `ctx.discardCards` 置入弃牌堆 |
 | 决斗结算 | `ctx.resolveDuel(player, target)`（内部已处理空城、无懈可击、轮流出杀、伤害结算；无实体决斗牌，传 undefined） |
 | 伤害结算 | 决斗后自行 `resolveDeaths()` → `resolveWinner()` → `advanceIfCurrentPlayerDead(logs)` |
 | "受伤的角色"判定 | 决斗前后体力对比（`resolveDuel` 只返回日志不返回胜负） |

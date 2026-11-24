@@ -2,7 +2,7 @@
 
 神势力，男，2 体力。技能：**绝境**、**龙魂**。标准版技能文本。
 
-本包在 `examples/generals/` 里演示两种"声明式字段不够用"时该怎么办，**两个技能都真正生效**：
+本包演示两种"声明式字段不够用"时该怎么办，**两个技能都真正生效**：
 
 1. **`绝境.skill.ts`（代码技能）**：两个数值都是**运行时变量**（X = 已损失体力值），静态 `rules` 声明不了。
    走两条运行时通道：`before_draw` 钩子改写 `payload.drawCount`（额外摸牌）+ 模块级纯函数 `handLimit(player)`（手牌上限 +X）。
@@ -29,7 +29,7 @@
 校验器报告：**0 错误 / 0 警告**。
 
 ```bash
-npm run generals:check -- --dir=examples/generals
+npm run generals:check -- --dir=generals
 ```
 
 ## 声明的关键片段
@@ -62,16 +62,22 @@ onTrigger: { before_draw: (ctx, payload, logs) => { payload.drawCount += lost; }
 
 ## 使用
 
-```bash
-# 复制到项目根 generals/（npm run dev 默认加载该目录）
-cp -r examples/generals/神赵云 generals/神赵云 && npm run dev
+本包在仓库里有两份**逐字节相同**的拷贝：默认目录 `generals/神赵云/` 与参考 gallery `examples/generals/神赵云/`
+（后者由 `npm run examples:sync` 从前者镜像，改包只改 `generals/`）：
 
-# 或者直接把示例目录当武将包目录（吕蒙 + 神赵云一起进池）
+```bash
+# 默认目录就有本包（npm run dev 默认加载 generals/）
+npm run dev
+
+# 或者把 gallery 副本当武将包目录（只含参考武将）
 npm run dev -- --generals-dir=examples/generals
 
+# 复制到你自己的武将包目录
+cp -r generals/神赵云 <你的武将包目录>/神赵云
+
 # 自检
-npm run generals:check -- --dir=examples/generals
-npm run generals:check -- --dir=examples/generals --selfplay=3
+npm run generals:check -- --dir=generals
+npm run generals:check -- --dir=generals --selfplay=3
 ```
 
 联机主机默认**不**加载外部包（外部包等同任意代码执行），需显式开启：

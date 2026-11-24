@@ -204,6 +204,16 @@ import type { PlayEnumerateContext } from "./play-enumerate.js";
 import { playAction as playActionImpl, resolveUsedCard as resolveUsedCardImpl } from "./play-execute.js";
 import type { PlayExecuteContext } from "./play-execute.js";
 
+import {
+  runAITurn as runAITurnImpl,
+  getBestAiDecision as getBestAiDecisionImpl,
+  aiTurnSeenStatesSet as aiTurnSeenStatesSetImpl,
+  buildAiTurnProgressKey as buildAiTurnProgressKeyImpl,
+  noteAiTurnProgress as noteAiTurnProgressImpl,
+  beginAiTurnProgress as beginAiTurnProgressImpl,
+} from "./ai-driver.js";
+import type { AiDriverContext } from "./ai-driver.js";
+
 export { TurnPhase, SkillName, PlayerRole } from "./types.js";
 export type {
   Player,
@@ -578,48 +588,11 @@ export class SanGuoGame {
   }
 
   async runAITurn(): Promise<string[]> {
-    if (this.winner !== null || !this.currentPlayer.isAI || !this.currentPlayer.alive) {
-      return [];
-    }
-    const logs: string[] = [];
-    this.beginAiTurnProgress();
-    while (true) {
-      const ai = this.currentPlayer;
-      const actions = this.getPlayableActions(ai.id);
-      const best = pickBestAiAction(this as unknown as AiHeuristicsContext, actions, ai.id);
-      if (!best || best.type === "end") {
-        logs.push(...(await this.endPlayPhase(ai.id)));
-        return logs;
-      }
-      const targetId = best.requiresTarget ? pickBestTarget(this as unknown as AiHeuristicsContext, best.targets) : undefined;
-      logs.push(...(await this.playAction(ai.id, best, targetId)));
-      if (this.winner !== null) {
-        return logs;
-      }
-      // 兜底：决策器零收益打转（局面重复出现）时强制结束，不再无限出牌
-      if (this.noteAiTurnProgress()) {
-        logs.push(`${ai.name} 的出牌陷入重复局面，强制结束出牌阶段`);
-        logs.push(...(await this.endPlayPhase(ai.id)));
-        return logs;
-      }
-    }
+    return runAITurnImpl(this as unknown as AiDriverContext);
   }
 
   getBestAiDecision(playerId: string): { action: GameAction; targetId?: string } | null {
-    const player = this.players.find((item) => item.id === playerId);
-    if (!player || !player.alive || !player.isAI) {
-      return null;
-    }
-    const actions = this.getPlayableActions(player.id);
-    const best = pickBestAiAction(this as unknown as AiHeuristicsContext, actions, player.id);
-    if (!best) {
-      return null;
-    }
-    if (best.type === "end" || !best.requiresTarget) {
-      return { action: best };
-    }
-    const targetId = pickBestTarget(this as unknown as AiHeuristicsContext, best.targets);
-    return targetId ? { action: best, targetId } : { action: best };
+    return getBestAiDecisionImpl(this as unknown as AiDriverContext, playerId);
   }
 
   setPlayerResponsePolicy(playerId: string, policy: Partial<Record<ResponseKind, boolean>> | null): void {
@@ -1192,8 +1165,7 @@ export class SanGuoGame {
   }
 
   private aiTurnSeenStatesSet(): Set<string> {
-    this.aiTurnSeenStates ??= new Set<string>();
-    return this.aiTurnSeenStates;
+    return aiTurnSeenStatesSetImpl(this as unknown as AiDriverContext);
   }
 
   private canTakeStoredCard(card: Card): boolean {
@@ -1201,48 +1173,15 @@ export class SanGuoGame {
   }
 
   private buildAiTurnProgressKey(): string {
-    const parts: string[] = [`t${this.turn}`, `p${this.phase}`, `d${this.deck.length}`, `x${this.discardPile.length}`];
-    for (const player of this.players) {
-      parts.push(
-        [
-          player.id,
-          player.alive ? 1 : 0,
-          player.hp,
-          player.hand.map((card) => card.id).join(","),
-          player.weapon ?? "",
-          player.armor ?? "",
-          player.defenseHorse ?? "",
-          player.attackHorse ?? "",
-          player.treasure ?? "",
-          player.treasureCards.map((card) => card.id).join(","),
-          player.chained ? 1 : 0,
-        ].join("|"),
-      );
-    }
-    return parts.join("#");
+    return buildAiTurnProgressKeyImpl(this as unknown as AiDriverContext);
   }
 
-  /**
-   * AI 驱动每执行一个动作后调用：当前局面若本回合已出现过则返回 true
-   *（决策器在零收益打转，调用方应强制结束出牌），否则记录并返回 false。
-   */
   public noteAiTurnProgress(): boolean {
-    const seen = this.aiTurnSeenStatesSet();
-    const key = this.buildAiTurnProgressKey();
-    if (seen.has(key)) {
-      return true;
-    }
-    if (seen.size > 1000) {
-      seen.clear();
-    }
-    seen.add(key);
-    return false;
+    return noteAiTurnProgressImpl(this as unknown as AiDriverContext);
   }
 
-  /** AI 驱动在回合开始时调用：清空局面记录并记下初始局面。 */
   public beginAiTurnProgress(): void {
-    this.aiTurnSeenStatesSet().clear();
-    this.noteAiTurnProgress();
+    return beginAiTurnProgressImpl(this as unknown as AiDriverContext);
   }
 
   private noteDamageSource(sourceId: string | null, targetId: string): void {

@@ -214,8 +214,6 @@ export type {
 export { GENERAL_LIBRARY } from "./generals.js";
 export type { CardSource, DecisionHandler, InteractionDecision, InteractionRequest, ResponseKind } from "./interaction.js";
 
-
-
 export class SanGuoGame {
   private players: Player[];
 

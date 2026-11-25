@@ -13,7 +13,8 @@ CLI 三国杀 (SanGuoSha) — a TypeScript CLI card game with a host-authoritati
 - `npm run generals:check -- --dir=<dir>` — 独立武将包校验器（`src/tools/generals-check.ts`）：真实 loader + 静态 lint（抓"loader 静默忽略"的写法：未知触发点/未知字段/空技能/`active` 无 `play`/合法但永不生效的 `conversions`）。`--json` 机器可读、`--strict` 警告即失败、`--selfplay=N` 每个武将强制上场跑 N 局不变量断言。`examples/generals` 目前 **0 错误 / 0 警告**。
 - `npm run rules:gen` / `npm run rules:check` — 从武将库 + 技能注册表生成/校验 `rules.md` §14 与 §16.3（`src/tools/gen-rules.ts`，只替换 `<!-- GENERATED:… -->` 标记之间的内容，标记缺失即报错）。改技能 `description` 后必须 `rules:gen`，`src/tools/gen-rules.test.ts` 会在测试期卡住漂移。
 - `npm run build` — `tsc` emit to `dist/`.
-- `npm run lint` — eslint. ⚠️ **Not a clean gate**: **30 pre-existing errors**（unused vars in `*.test.ts`, `no-explicit-any`, floating promises in `network/*`）。Don't add new ones; don't fix the old ones en masse.
+- `npm run lint` — eslint. ⚠️ **不是干净的 gate**: **30 pre-existing errors**（unused vars in `*.test.ts`, `no-explicit-any`, floating promises in `network/*`）。Don't add new ones; don't fix the old ones en masse。这批历史错误由仓库根的 `eslint-suppressions.json`（ESLint 9 bulk suppressions）冻结成基线，CI 跑的是 `npm run lint:ci`（= `lint` + `--pass-on-unpruned-suppressions`）：基线内放行、**新增**违规照样失败。修掉历史错误后跑 `npx eslint src --ext .ts --prune-suppressions` 收缩基线。
+- **CI**（`.github/workflows/ci.yml`）：push 到 `main` 与 PR 跑两个 job —— Lint（`npm run lint:ci`）与自对局冒烟（`npm run generals:check -- --strict --selfplay=5`，每个武将 5 局不变量断言）。本地等价命令就是这两条，干净 checkout 上都能过。
 
 ## Architecture
 

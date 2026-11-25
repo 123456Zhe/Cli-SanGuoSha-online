@@ -15,6 +15,7 @@
     "lint:ci": "eslint src --ext .ts --pass-on-unpruned-suppressions",
     "test": "node --test --import tsx \"src/**/*.test.ts\"",
     "generals:check": "tsx src/tools/generals-check.ts",
+    "light-client:pack": "tsx src/tools/pack-light-client.ts",
     "rules:gen": "tsx src/tools/gen-rules.ts",
     "rules:check": "tsx src/tools/gen-rules.ts --check"
   },

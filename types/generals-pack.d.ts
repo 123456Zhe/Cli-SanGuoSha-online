@@ -365,7 +365,9 @@ export type InteractionDecision =
  * 代码技能能用的引擎能力集合（运行时就是存活的对局实例）。
  *
  * 隐式约定（漏做会**静默**坏掉，详见 `docs/generals-pack-api.md`）：
- * - `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方要自己 `ctx.discardPile.push`；
+ * - `requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方要走 `ctx.discardCards(...)` 置入
+ *   （逐张发 `card_discarded` 触发点）；**不要直接 `ctx.discardPile.push`**，否则落英等监听弃牌的技能收不到
+ *   （例外：「使用/打出」的牌入堆、展示后置入弃牌堆如涯角/称象未获得的牌、装备重建牌——这些不是「弃置」）；
  * - 造成伤害后必须走 `resolveDeaths()` → `resolveWinner()` → `advanceIfCurrentPlayerDead(logs)`；
  * - 失去手牌必须走 `removeHandCardAt`，否则连营等"失去手牌"技能不触发；
  * - `judgment` 改判时替换牌要从原区域移除，引擎只负责把它置入弃牌堆；

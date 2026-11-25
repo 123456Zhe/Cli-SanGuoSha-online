@@ -318,12 +318,15 @@ generals/<武将名>/
 - 技能身份 = `<文件夹名>/<技能名>`（命名空间 id），展示用 `displayName`。
 - 完整文件格式、`SkillModule` 契约、Context 能力清单与隐式约定见 `docs/generals-pack-api.md`。
 - 可运行示例：`examples/generals/吕蒙/`（`克己` 声明式 + `涉猎` 代码主动技能）、`examples/generals/神赵云/`（`绝境` 代码技能：`before_draw` 钩子 + `handLimit(player)` 纯函数 + `龙魂` 声明式 `conversions` 4 条花色映射，出牌阶段与响应时机都生效）。更多覆盖各机制的参考武将见 `examples/generals/`（默认不加载）。
+- **`examples/generals/` 是 `generals/` 的镜像**：gallery 里那 7 个参考武将同时存在于默认目录 `generals/<武将>/`，两份**逐字节相同**，`generals/` 才是单一数据源。改包只改 `generals/`，然后 `npm run examples:sync` 镜像到 gallery；`npm run examples:check`（以及 `npm test`）会卡住任何失步。
 
 ```bash
-# 复制示例到项目根 generals/ 后，npm run dev 选将出现吕蒙
-cp -r examples/generals/吕蒙 generals/吕蒙 && npm run dev
-# 或直接把示例目录当武将包目录
+# 默认目录就有参考武将，npm run dev 随机抽将可能抽到吕蒙
+npm run dev
+# 或只把 gallery 当武将包目录（默认不加载，显式指定才进池）
 npm run dev -- --generals-dir=examples/generals
+# 改完 generals/ 里的包后镜像到 gallery（examples:check 校验是否已同步）
+npm run examples:sync
 
 # 联机主机默认只内置（外部包等价任意代码执行），需显式开启：
 npm run host -- --players=3 --generals-pool=all
@@ -341,7 +344,7 @@ npm run host -- --players=3 --generals-pool=all --generals-json-only --strict-ge
   不用写代码；`to` 只放行任意基本牌与普通锦囊共 18 类（`杀/火杀/雷杀/桃/酒/闪/无懈可击/过河拆桥/顺手牵羊/决斗/无中生有/南蛮入侵/万箭齐发/借刀杀人/火攻/铁索连环/桃园结义/五谷丰登`），延时锦囊与装备 loader 会明确拒绝。响应时机的接入点是 `provide_response`（5 个拦截点之一）。
 - **手牌上限**可以改：静态用 `rules.handLimitDelta`，运行时变量用代码技能的纯函数 `handLimit(player)`（绝境：上限 + 已损失体力值）。
 - AI 只注入本局出场武将的技能说明（数据源是快照 `player.skills`，觉醒临时获得的技能自动生效）；LLM、Jev、本地策略三个消费点同源。
-- **作者资源（不读 `src/` 也能写对）**：`schema/general.schema.json` + `schema/skill.schema.json`（机器可读结构约束，编辑器/agent 可直接消费）、`types/generals-pack.d.ts`（`SkillModule` / `SkillModuleCtx` 的完整作者签名）、`examples/generals/` 参考武将 gallery（默认不加载，`examples/generals/README.md` 有机制覆盖矩阵）。
+- **作者资源（不读 `src/` 也能写对）**：`schema/general.schema.json` + `schema/skill.schema.json`（机器可读结构约束，编辑器/agent 可直接消费）、`types/generals-pack.d.ts`（`SkillModule` / `SkillModuleCtx` 的完整作者签名）、`examples/generals/` 参考武将 gallery（默认不加载，是 `generals/` 的逐字节镜像、由 `npm run examples:sync` 同步，`examples/generals/README.md` 有机制覆盖矩阵）。
 - **触发性技能没有"交互式选目标"**：`InteractionRequest` 里没有"选一名玩家"，内置技能都是自动挑（「英魂」取体力最少者）或用固定目标（「反馈」= 伤害来源）；需要玩家点人的效果请做成 `kind: "active"`（`getTargets` + `play(targetId)`）。
 
 **写完就自检（M4）**——不读 `src/` 也能拿到反馈：

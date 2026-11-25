@@ -28,7 +28,7 @@
 2. `README.md` — 启动流程、§8 规则→代码映射、§11 外部武将包与作者资源。
 3. `docs/generals-pack-plan.md` — **总计划**：M1–M5 分阶段 + 决策表 + §12–§20 各阶段复盘。
    M1 §12、M2 §13、M3 §14、Phase 6 §15、M4 §16、下一步缺口 §17、神赵云实测 §18、Phase 7 §19、§17 ②③④ 落点 §20。
-4. `docs/generals-pack-api.md` — 外部武将包唯一契约：`SkillModule`/Context 能力清单、12 个触发点与拦截点、当牌转换、规则词汇表**与隐式约定**。
+4. `docs/generals-pack-api.md` — 外部武将包唯一契约：`SkillModule`/Context 能力清单、16 个触发点与拦截点、当牌转换、规则词汇表**与隐式约定**。
 5. `types/generals-pack.d.ts` — 作者视角的独立类型签名；`schema/*.json` — 机器可读结构约束。
 6. `rules.md` — 规则参考（help 文本与 AI prompt 用；§14/§16.3 是**生成物**）。
 7. `docs/interaction-refactor-plan.md` — 联机交互协议设计背景。
@@ -40,7 +40,7 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 
 - 纯引擎逻辑在 `src/engine/`（无 I/O，context-interface 模式）。
 - `src/agent/` = LLM/Jev/本地策略；`src/network/` = 主机权威 TCP；`src/ui/app.ts` = OpenTUI CLI；`src/webui/` + `webui/` = WebUI。
-- `schema/` + `types/` + `examples/generals/` = 给武将包作者的资源（都不进 `tsc`/lint/build）。
+- `schema/` + `types/` + `examples/generals/` = 给武将包作者的资源（都不进 `tsc`/lint/build）。`examples/generals/` 是 `generals/` 同名包的逐字节镜像（`generals/` 为单一数据源），由 `npm run examples:sync` 同步、`npm run examples:check` 校验。
 
 ## 3. 已完成（要点）
 
@@ -137,6 +137,7 @@ CLI 三国杀（TypeScript，NodeNext ESM），主机权威的**在线多人** +
 npm run typecheck   # 必须干净（当前 0 error）
 npm test            # 当前 252 全绿（node --test --import tsx）
 npm run lint        # 基线 25 存量错误，不得新增（不改存量）
+npm run examples:check                                       # gallery 与 generals/ 逐字节一致
 npm run generals:check -- --dir=examples/generals            # 0 错误 / 0 警告
 npm run generals:check -- --dir=examples/generals --selfplay=3
 npm run rules:check                                          # rules.md 与注册表同步

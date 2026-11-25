@@ -40,6 +40,7 @@ generals/                      # 项目根目录（在 src 之外，不进 typec
 - `吕蒙/`：`克己`（声明式 `rules`）+ `涉猎`（代码主动技能）。
 - `神赵云/`：`绝境`（代码技能：`before_draw` 钩子 + `handLimit(player)` 纯函数）+ `龙魂`（声明式 `conversions`：红桃当桃/方块当火杀/梅花当闪/黑桃当无懈可击；校验器 **0 错误 / 0 警告**）。
 - 其余参考武将（覆盖改判/取消杀/支援型主动技/失去装备/使用锦囊等机制）见 `examples/generals/`，**默认不加载**。
+- **gallery 是 `generals/` 的逐字节镜像**：这 7 个包同时存在于 `generals/`（默认加载，单一数据源）与 `examples/generals/`（gallery），两份必须一致。改包只改 `generals/<武将>/`，然后 `npm run examples:sync`；`npm run examples:check`（与 `npm test`）会卡住失步。
 
 ## 技能身份与命名空间
 
@@ -259,7 +260,7 @@ handLimit: (player) => Math.max(0, player.maxHp - player.hp),
   > `.ts` 技能只有 bun/tsx（`npm run dev`/`host`/`generals:check`）会做语法转译；纯 node 环境请用 `.mjs` 或 `--generals-json-only`。
 - **结构约束**：`schema/general.schema.json` / `schema/skill.schema.json`（JSON Schema draft-07）供编辑器与 agent 机器读取。
   两份 schema 与代码的枚举/字段一一对应，由 `src/tools/pack-schema.test.ts` 卡住漂移；`.skill.json` 里写代码技能专有字段（`play`/`onTrigger`/`handLimit`…）会被 schema 判为未知字段。
-- **可抄的参考实现**：`examples/generals/`（默认不加载），机制覆盖矩阵见 `examples/generals/README.md`。
+- **可抄的参考实现**：`examples/generals/`（默认不加载；是 `generals/` 的逐字节镜像，由 `npm run examples:sync` 同步），机制覆盖矩阵见 `examples/generals/README.md`。
   注意外部包**不能与内置武将同名**（loader 会以"武将名重复"整包拒绝）。
 
 ## AI 如何认识本局武将（4 个消费点）
@@ -323,11 +324,14 @@ npm run generals:check -- --dir=generals --selfplay=3  # 每个武将强制上�
 ## 手动验收
 
 ```bash
-# 方式一：复制示例到项目根 generals/ 后 npm run dev 选将出现吕蒙/神赵云
-cp -r examples/generals/吕蒙 generals/吕蒙 && npm run dev
+# 默认目录 generals/ 里就有参考武将（吕蒙/神赵云…），npm run dev 随机抽将可能抽到
+npm run dev
 
-# 方式二：直接把示例目录当武将包目录（吕蒙 + 神赵云一起进池）
+# 或者直接把 gallery 当武将包目录（只含参考武将，默认不加载）
 npm run dev -- --generals-dir=examples/generals
+
+# 改了 generals/ 里的参考武将后镜像到 gallery（examples:check 校验是否已同步）
+npm run examples:sync
 
 # 自检：0 错误 / 0 警告（示例包是干净基线）
 npm run generals:check -- --dir=examples/generals

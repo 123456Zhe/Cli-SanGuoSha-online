@@ -63,13 +63,14 @@
 - **木牛流马内的黑色牌也算来源**：响应候选走 `buildUsableSources`（手牌 + 木牛流马内存牌），与引擎其它弃牌/响应交互同口径。
 - **真正的【无懈可击】不会被重复列出**：`appendConversionSources` 跳过牌类已等于目标牌类的牌，真牌走普通来源。
 - **`id` 字段只是元数据**：技能 id 由 `<文件夹名>/<技能名>` 决定，本包为 `卧龙诸葛亮/看破`；`general.json` 的 `name` 必须与文件夹名一致（否则校验器警告）。
-- **外部包默认不加载**：只有 `--generals-dir=examples/generals`（或 `--generals-pool=all` + 相应目录）时才进池；详见 `docs/generals-pack-api.md`。
+- **外部包默认不加载**：只有 `--generals-dir=<武将包目录>`（或 `--generals-pool=all` + 相应目录）时才进池；详见 `docs/generals-pack-api.md`。
 
 ## 自检
 
 ```bash
-npm run generals:check -- --dir=examples/generals --strict
-npm run generals:check -- --dir=examples/generals --selfplay=3
+npm run generals:check -- --dir=generals --strict
+npm run generals:check -- --dir=generals --selfplay=3
 ```
 
-> 本包是**纯数据包**（只有 `general.json` + `看破.skill.json`），没有任何相对导入，复制到任何目录都一样。
+> 本包是**纯数据包**（只有 `general.json` + `看破.skill.json`），没有任何相对导入，放在任何目录都一样；
+> 仓库里的两份拷贝 `generals/卧龙诸葛亮/` 与 `examples/generals/卧龙诸葛亮/` 由 `npm run examples:sync` 保持一致。

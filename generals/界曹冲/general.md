@@ -18,7 +18,7 @@
 | 受伤确认 | `payload.target` 为受伤者，`ctx.hasSkill(target, "界曹冲/称象")` 确认是曹冲受伤（镇卫同一约定） |
 | 可选发动 | `ctx.shouldActivateOptionalEffect` 询问 |
 | 亮牌堆顶 | `ctx.drawTopCards(4)`（取走牌堆顶；称象的获得/弃置与取走等价） |
-| 获得/弃置 | 获得直接 push 到手牌；其余 `discardPile.push` |
+| 获得/弃置 | 获得直接 push 到手牌；其余「展示后置入弃牌堆」直接 `discardPile.push`（这是**展示**不是「弃置」，所以不发 `card_discarded` 触发点，落英不会获得——与涯角同一口径） |
 
 ## 已知限制
 

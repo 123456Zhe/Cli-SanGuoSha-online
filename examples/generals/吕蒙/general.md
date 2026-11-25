@@ -19,17 +19,17 @@
 
 ## 使用
 
-方式一：复制本目录到项目根的 `generals/` 下（`npm run dev` 默认加载该目录）：
+把本目录放进任意武将包根目录即可（`name` 必须与文件夹名一致，技能 id 的命名空间前缀取文件夹名）。
+本包在仓库里有两份**逐字节相同**的拷贝：默认目录 `generals/吕蒙/` 与参考 gallery `examples/generals/吕蒙/`
+（后者由 `npm run examples:sync` 从前者镜像，改包只改 `generals/`）：
 
 ```bash
-cp -r examples/generals/吕蒙 generals/吕蒙
+# 默认目录就有本包（npm run dev 默认加载 generals/）
 npm run dev
-```
-
-方式二：不复制，直接把示例目录当作武将包目录：
-
-```bash
+# 或者把 gallery 副本当作武将包目录（只含参考武将）
 npm run dev -- --generals-dir=examples/generals
+# 复制到你自己的武将包目录
+cp -r generals/吕蒙 <你的武将包目录>/吕蒙
 ```
 
 联机主机默认**不**加载外部包（外部包等同任意代码执行），需要显式开启：

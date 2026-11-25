@@ -129,7 +129,7 @@ type SkillModule = {
 | `handLimitDelta` | 手牌上限 +N | 无内置（Phase 7；运行时变量用代码技能 `handLimit(player)`） |
 
 **能力清单（Context API）必须写进 API 文档**，尤其"调用方还需要自己做什么"这类隐式约定，例如：
-`requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己 `discardPile.push`（见 `skills.ts` 现有写法）；伤害后必须走 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead`；失去手牌必须走 `removeHandCardAt`，否则连营不触发。
+`requestDiscardSelection` 返回的牌**不会自动进弃牌堆**，调用方必须自己走 `ctx.discardCards(...)` 置入（Phase 10 起这是中央入口，逐张发 `card_discarded`；直接 `discardPile.push` 会让落英等技能收不到触发点）；伤害后必须走 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead`；失去手牌必须走 `removeHandCardAt`，否则连营不触发。
 
 ## 四、引擎侧改动清单
 
@@ -479,10 +479,12 @@ M4 明确未做（属下一步"独立武将系统"的关键缺口，见 §十七
 | 凌统 | 旋风 | `equip_lost` + `ctx.hasRemovableCard` + `removeRandomCardFromPlayer` |
 | 荀彧 | 节命 | `after_damage` + `drawCards`/`discardFromPlayerHand`（补至体力上限、封顶 5） |
 | 卧龙诸葛亮 | 看破 | 纯声明式当牌转换（黑色手牌当【无懈可击】，`asResponse:["negate"]`） |
-| 刘禅 | 享乐 | `slash_targeted` 取消杀 + `buildUsableSources` + `requestDiscardSelection` + 自己 `discardPile.push` |
+| 刘禅 | 享乐 | `slash_targeted` 取消杀 + `buildUsableSources` + `requestDiscardSelection` + `ctx.discardCards`（Phase 10 起弃牌走中央入口） |
 
-- `examples/generals/README.md` 是**机制覆盖矩阵**：12 个触发点里 8 个有样例（`discard_phase_start`/`provide_response` 为声明式路径），
-  `turn_start` 只有内置样例，`hand_card_lost`/`peach_save`/`before_damage` **仍无样例**（原因写在矩阵里：贴切的真实技能与内置重叠，或需要引擎新能力）。
+- `examples/generals/README.md` 是**机制覆盖矩阵**：16 个触发点/拦截点里 8 个在 gallery 有样例（`discard_phase_start`/`provide_response` 为声明式路径），
+  `turn_start` 与 `hand_card_lost`/`peach_save`/`before_damage` 在 gallery 里**仍无样例**（原因写在矩阵里：贴切的真实技能与内置重叠，或需要引擎新能力）；
+  这 16 个触发点在 `generals/` 里除 `peach_save` 外都有真实包用例（矩阵的"其它 generals/ 包里"一列）。
+- **gallery 是 `generals/` 的逐字节镜像**：这 7 个参考包同时存在于两处，`generals/` 是单一数据源，`npm run examples:sync` 镜像、`npm run examples:check`（与 `npm test`）卡住漂移。
 - **实测暴露的两处引擎能力不对称**（已写进 `docs/generals-pack-api.md` 与 gallery README，属 §17 row 7 的具体证据）：
   ① **触发性技能无法交互式选目标**（`InteractionRequest` 没有"选玩家"），gallery 里的选人都照内置「英魂」自动挑选；
   ② **`judgment` 钩子只分发给"判定牌归属者"**（`drawJudgmentCard` 的 payload 只有 `actor = owner`），

@@ -17,7 +17,7 @@
 // - 别在钩子里再发起杀：那会再次触发 `slash_targeted`（引擎不设保护）。
 //
 // 注意：只 `import type`，类型信息在运行时被完全擦除，因此这个相对路径不影响实际加载。
-// 本文件位于 `examples/generals/刘禅/`，`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
+// 本包位于武将包根目录下一层（`<武将包目录>/刘禅/`），`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
 import type { SkillModule, SkillModuleCtx } from "../../../types/generals-pack.js";
 import type { Card, CardSource, Player, SkillEventPayload } from "../../../types/generals-pack.js";
 
@@ -74,10 +74,10 @@ export default {
         logs.push(`${me.name} 的【享乐】生效：${user.name} 未弃置基本牌，本次【杀】无效`);
         return;
       }
-      // 隐式约定：requestDiscardSelection 只把牌移出原区域，不会自动进弃牌堆。
+      // 隐式约定：requestDiscardSelection 只把牌移出原区域，不会自动进弃牌堆；
       // 弃牌须走 ctx.discardCards（发 card_discarded 触发点，供落英等技能监听）。
-      await ctx.discardCards([card], user, "弃置", logs);
       logs.push(`${me.name} 的【享乐】结算：${user.name} 弃置【${card.type}】，本次【杀】继续结算`);
+      await ctx.discardCards([card], user, "弃置", logs);
     },
   },
 } satisfies SkillModule;

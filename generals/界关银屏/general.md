@@ -16,7 +16,7 @@
 |---|---|
 | 技能类型 | `kind: "active"` + `canUse` / `getTargets` / `play` |
 | 限一次 | `canUse` 查 `skillUsedThisTurn`（plain "雪恨"，与飞军同一约定），`play` 里 `markSkillUsed` |
-| 代价 | 红色手牌：`buildUsableSources` 过滤 origin=hand 且 color=red，`requestDiscardSelection` 选 1 张，调用方手动 `discardPile.push` |
+| 代价 | 红色手牌：`buildUsableSources` 过滤 origin=hand 且 color=red，`requestDiscardSelection` 选 1 张，调用方手动 `ctx.discardCards` 置入弃牌堆 |
 | X | `max(1, maxHp - hp)`，满血时 X=1（FAQ 确认满血可发动） |
 | 横置 | `chained` 字段直接赋值 |
 | 火焰伤害 | `ctx.applyDamage(..., "fire")`，随后 `resolveDeaths` → `resolveWinner` → `advanceIfCurrentPlayerDead` |

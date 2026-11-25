@@ -20,7 +20,7 @@
 | 可用判断 | `canUse`：手牌或木牛流马中有黑色牌（`card.color === "black"`，含黑桃/梅花），且本回合未发动过奇袭（`skillUsedThisTurn`） |
 | 选牌 | `ctx.decide({ kind: "choose-discard",...})`，来源限定黑色牌（`buildUsableSources` 过滤 `origin === "hand" \|\| origin === "treasure"`） |
 | 限一次 | 发动成功后 `ctx.markSkillUsed(player.id, "奇袭")`（同涉猎约定） |
-| 弃置自己所选的牌 | `ctx.removeUsableCardBySourceId(player, sourceId)`，返回的牌**不会**自动进弃牌堆，调用方手动 `ctx.discardPile.push` |
+| 弃置自己所选的牌 | `ctx.removeUsableCardBySourceId(player, sourceId)`，返回的牌**不会**自动进弃牌堆，调用方手动 `ctx.discardCards` 置入弃牌堆 |
 | 弃置目标的牌 | `ctx.removeRandomCardFromPlayer(target, "弃置", undefined)`（无牌可弃时返回空数组，天然安全） |
 
 ## 已知限制

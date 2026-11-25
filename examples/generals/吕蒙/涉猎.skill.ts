@@ -1,8 +1,8 @@
 // 代码技能示例：一个可在出牌阶段主动发动的技能（官方规则复刻）。
 //
 // 注意：这里只 `import type`，类型信息在运行时被完全擦除，
-// 因此这个相对路径不会影响实际加载；复制到 `generals/吕蒙/` 后仍能正常执行。
-// 也可不复制，直接用 `npm run dev -- --generals-dir=examples/generals` 加载本目录。
+// 因此这个相对路径不会影响实际加载；放在任意 `<武将包目录>/吕蒙/` 下都能正常执行
+// （本包在仓库里的两份拷贝 generals/吕蒙/ 与 examples/generals/吕蒙/ 由 npm run examples:sync 保持一致）。
 import type { SkillModule, SkillModuleCtx } from "../../../src/engine/skill-module.js";
 import type { Player } from "../../../src/engine/types.js";
 import type { Card } from "../../../src/engine/cards.js";

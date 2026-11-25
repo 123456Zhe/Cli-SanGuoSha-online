@@ -20,7 +20,7 @@
 | 触发判定 | `payload.actor` 存活且 `ctx.hasSkill(actor, \"界吴懿/奔袭\")`；`payload.card?.type ∈ {杀, 火杀, 雷杀, 闪}` |
 | \"使用\"口径 | `payload.reason ∈ {\"使用\", \"打出\"}` 均触发（见下文规则依据） |
 | 发动询问 | `ctx.shouldActivateOptionalEffect(actor, \"界吴懿/奔袭\")`（AI 固定策略自动决策） |
-| 弃置手牌 | `ctx.buildUsableSources` 取 `origin === \"hand\"` 来源 → `choose-discard` 选 1 张 → `ctx.removeUsableCardBySourceId` + 手动 `discardPile.push`（与强袭一致） |
+| 弃置手牌 | `ctx.buildUsableSources` 取 `origin === \"hand\"` 来源 → `choose-discard` 选 1 张 → `ctx.removeUsableCardBySourceId` + 手动 `ctx.discardCards` 置入弃牌堆（与强袭一致） |
 | 摸牌 | `ctx.drawCards(actor.id, 1)` |
 | 无手牌时 | 直接跳过（无法支付代价，不询问） |
 

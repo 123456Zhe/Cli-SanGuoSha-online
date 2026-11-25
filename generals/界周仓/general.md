@@ -20,7 +20,7 @@
 | 时机 | `slash_targeted` 在指定目标时触发，payload 里 `source` 为出杀者、`target` 为被杀目标——正好对应"使用指定目标后"（闪响应之前） |
 | 出牌阶段内 | `ctx.currentPlayer.id === source.id && ctx.phase === "出牌阶段"` 精确判断，其他阶段出杀不触发 |
 | 可选发动 | `ctx.shouldActivateOptionalEffect(source, "界周仓/忠勇")` 询问出杀者，AI 按策略回答 |
-| 弃牌 | 目标自己选一张手牌弃置（`requestDiscardSelection(target, …)`，返回的牌调用方手动 `discardPile.push`，与飞军代价同一约定） |
+| 弃牌 | 目标自己选一张手牌弃置（`requestDiscardSelection(target, …)`，返回的牌调用方手动 `ctx.discardCards` 置入弃牌堆，与飞军代价同一约定） |
 | 不取消杀 | 不改写 `payload.canceled`，忠勇只令目标弃牌、不取消本次杀 |
 
 ## 已知限制

@@ -9,7 +9,7 @@
 // 手牌相同则按 id 升序，保证 `--seed` 复现与联机一致（随机数只用 ctx.randomIndex，不用 Math.random）。
 //
 // 注意：只 `import type`，类型信息运行时被完全擦除，因此这个相对路径不影响实际加载。
-// 本文件位于 `examples/generals/凌统/`，`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
+// 本包位于武将包根目录下一层（`<武将包目录>/凌统/`），`../../../` 正好指向仓库根，即 `types/generals-pack.d.ts`。
 import type { SkillModule, SkillModuleCtx, SkillEventPayload } from "../../../types/generals-pack.js";
 import type { Player } from "../../../types/generals-pack.js";
 

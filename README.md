@@ -110,7 +110,26 @@ CLI 与**轻量 Go 客户端共用同一个 `~/.clisanguo/machine-id` 配置文�
 
 主动出牌、目标选择、指定目标牌、弃牌以及"闪""杀""无懈可击"等被动响应均通过统一的交互协议联机结算，不再由引擎策略自动代答。
 
-朋友电脑没有 Node.js/npm 时，可从 `tools/light-client/main.go` 交叉编译零依赖客户端。Windows 用户解压发布包后双击 `start-client.bat`，按提示输入房主 IP、端口和玩家名即可。Linux 用户解压后直接运行：
+朋友电脑没有 Node.js/npm 时，可以用零依赖的 Go 轻客户端（源码 `tools/light-client/`，Go 1.21+）。发布包由仓库内的打包脚本产出，不需要手工敲 `go build`：
+
+```bash
+# 在仓库根目录；需要 Go 1.21+（打包机装一次即可）
+npm run light-client:pack
+```
+
+产物在 `dist/light-client/`（已 gitignore，不入库）：
+
+| 文件 | 内容 |
+|---|---|
+| `clisanguo-lite-linux-x64.gz` | Linux x64 静态二进制（`go build` 交叉编译，`gzip -d` 解开即用） |
+| `clisanguo-lite-windows-x64.zip` | Windows x64 二进制 + `start-client.bat` 启动脚本 |
+
+- 打包脚本是 `src/tools/pack-light-client.ts`：用与客户端相同的 Go 源码交叉编译，归档时间戳固定，同一份源码重复打包得到**字节一致**的产物（便于核对 `sha256`）。它只用 Node 内置模块打包，打包机除 Go 外不需要 `zip`/`gzip` 等工具。
+- `--targets=linux-x64` / `--targets=windows-x64` 只打一个平台；`--out=<目录>` 改输出目录。
+- **发布包里不含源码**，源码始终是本仓库的 `tools/light-client/`（`go.mod` + `main.go`，零第三方依赖）；产物被 `.gitignore` 忽略，因此仓库里不提交二进制，需要时按上面的命令现场打包。
+- 网络协议变更后必须重新打包（见 `AGENTS.md`）。
+
+玩家拿到包之后：Windows 解压后双击 `start-client.bat`，按提示输入房主 IP、端口和玩家名；Linux 解压后直接运行：
 
 ```bash
 gzip -d clisanguo-lite-linux-x64.gz
@@ -272,6 +291,18 @@ npm run webui
 - 观察 AI 行为先看 `devlog/ai-log.md`：可快速定位是提示词问题、模型输出问题还是解析问题。
 - 处理交互类问题时，先区分 UI 模式（`setup/game/response/discard/command`）再排查事件分支。
 - 引擎改动后优先补 `game.test.ts` 场景，保证回归安全。
+
+### CI（GitHub Actions）
+
+`.github/workflows/ci.yml` 在 push 到 `main` 和 PR 上跑两个 job，本地等价命令就是这两条：
+
+```bash
+npm run lint:ci                                         # eslint（历史错误已冻结为基线）
+npm run generals:check -- --strict --selfplay=5          # 每个武将 5 局自对局不变量断言
+```
+
+- Lint 仓库里有一批历史遗留错误（见 `AGENTS.md`），用 ESLint 9 的 bulk suppressions 记在 `eslint-suppressions.json`：基线内不报错，**新增违规照样失败**。修掉历史错误后跑 `npx eslint src --ext .ts --prune-suppressions` 收缩基线。
+- 自对局冒烟用 `--strict`（警告也算失败）与 `--selfplay=5`（每个武将强制上场跑 5 局）。
 
 ## 11. 外部武将包
 
